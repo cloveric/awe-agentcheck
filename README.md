@@ -3,79 +3,95 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cloveric/awe-agentcheck"><img alt="repo" src="https://img.shields.io/badge/repo-awe--agentcheck-0f172a?style=for-the-badge"></a>
-  <a href="#"><img alt="python" src="https://img.shields.io/badge/python-3.11+-2563eb?style=for-the-badge&logo=python&logoColor=white"></a>
-  <a href="#"><img alt="fastapi" src="https://img.shields.io/badge/FastAPI-control--plane-0ea5a4?style=for-the-badge&logo=fastapi&logoColor=white"></a>
-  <a href="#"><img alt="mode" src="https://img.shields.io/badge/default-sandbox--first-1d4ed8?style=for-the-badge"></a>
-  <a href="#"><img alt="mode" src="https://img.shields.io/badge/default-author--approval-f97316?style=for-the-badge"></a>
-  <a href="#"><img alt="obs" src="https://img.shields.io/badge/observability-otel%20%7C%20prom%20%7C%20loki%20%7C%20tempo-16a34a?style=for-the-badge"></a>
+  <a href="https://github.com/cloveric/awe-agentcheck"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-awe--agentcheck-0f172a?style=for-the-badge&logo=github"></a>
+  <a href="#"><img alt="Python" src="https://img.shields.io/badge/Python-3.11+-2563eb?style=for-the-badge&logo=python&logoColor=white"></a>
+  <a href="#"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-Control%20Plane-0891b2?style=for-the-badge&logo=fastapi&logoColor=white"></a>
+  <a href="#"><img alt="Sandbox First" src="https://img.shields.io/badge/Default-Sandbox%20First-1d4ed8?style=for-the-badge"></a>
+  <a href="#"><img alt="Author Gate" src="https://img.shields.io/badge/Default-Author%20Approval-f97316?style=for-the-badge"></a>
+  <a href="#"><img alt="Observability" src="https://img.shields.io/badge/Observability-OTel%20%7C%20Prom%20%7C%20Loki%20%7C%20Tempo-16a34a?style=for-the-badge"></a>
 </p>
 
 <p align="center">
-  Professional multi-CLI orchestration platform for author/reviewer agent collaboration.<br/>
-  面向多 CLI 代理协作（作者/审阅者）的专业级编排平台。
+  <b>Professional multi-CLI orchestration for author/reviewer agent engineering.</b><br/>
+  Multi-provider, sandbox-first, observable, and production-oriented.
 </p>
 
 <p align="center">
-  <a href="#english">English</a> | <a href="#中文">中文</a>
+  <a href="README.zh-CN.md"><b>中文文档 / Chinese README</b></a>
 </p>
 
 ---
 
-## English
+## Table of Contents
 
-### What It Is
+- [What is awe-agentcheck](#what-is-awe-agentcheck)
+- [Visual Overview](#visual-overview)
+- [Feature Matrix](#feature-matrix)
+- [Task Strategy Modes](#task-strategy-modes)
+- [Quick Start](#quick-start)
+- [CLI](#cli)
+- [API](#api)
+- [Roadmap](#roadmap)
+- [Documentation](#documentation)
 
-`awe-agentcheck` is a control plane for running structured multi-agent engineering loops:
+## What is awe-agentcheck
 
-`discussion -> implementation -> review -> verification -> gate`.
+`awe-agentcheck` is an orchestration control plane for structured AI engineering loops:
 
-It is built for scenarios like:
+`discussion -> implementation -> review -> verification -> gate`
 
-- Codex reviews Claude output
-- Claude reviews Codex output
-- same CLI, different sessions cross-check each other
-- unattended overnight evolution with observability and fail-safe controls
+Designed for:
 
-### Why It Feels Production-Grade
+- Claude reviewing Codex outputs
+- Codex reviewing Claude outputs
+- same CLI, different sessions cross-checking
+- overnight autonomous improvement with strict safety controls
 
-- Sandbox-first by default: tasks run in `*-lab` workspace (`sandbox_mode=1`)
-- Author-confirmed by default: proposal/review first, then wait approval (`self_loop_mode=0`)
-- Optional autonomous mode: full unattended execution (`self_loop_mode=1`)
-- Auto-fusion pipeline (optional, default on):
-  - merge changed files to target
-  - generate `CHANGELOG.auto.md`
-  - generate snapshot archive
-- Web operator console with:
-  - project tree
-  - role/session panel
-  - dialogue stream
-  - manual controls (start/cancel/force-fail/approve/reject)
-  - themes (`Neon Grid`, `Terminal Pixel`, `Executive Glass`)
-- End-to-end observability stack: OTel + Prometheus + Loki + Tempo + Grafana
+## Visual Overview
 
-### Architecture
+### 1) Dashboard Preview
 
-```mermaid
-flowchart TD
-    A[Task Create Request] --> B[FastAPI Control Plane]
-    B --> C[OrchestratorService]
-    C --> D[WorkflowEngine]
-    D --> E[Author CLI]
-    D --> F[Reviewer CLI(s)]
-    D --> G[Test + Lint Verification]
-    G --> H[Medium Gate]
-    H -->|passed + auto_merge=1| I[Auto Fusion]
-    I --> J[CHANGELOG.auto.md + Snapshot]
-    H -->|self_loop_mode=0| K[WAITING_MANUAL]
-    K --> L[Author Decision]
-    L -->|approve| D
-    L -->|reject| M[Canceled]
-    C --> N[Artifacts + Events]
-    C --> O[Stats API]
-```
+<p align="center">
+  <img src="docs/assets/dashboard-preview.svg" alt="dashboard preview" width="100%" />
+</p>
 
-### Quick Start (Windows / PowerShell)
+### 2) Runtime Flow
+
+<p align="center">
+  <img src="docs/assets/workflow-flow.svg" alt="workflow flow" width="100%" />
+</p>
+
+## Feature Matrix
+
+| Capability | Description | Status |
+|---|---|---|
+| Sandbox-first execution | Default `sandbox_mode=1` runs in `*-lab` workspace | `GA` |
+| Author-approval gate | Default `self_loop_mode=0`, waits `waiting_manual` before implementation | `GA` |
+| Autonomous self-loop | `self_loop_mode=1` for unattended operation | `GA` |
+| Auto fusion | On pass, optional merge + `CHANGELOG.auto.md` + snapshot | `GA` |
+| Multi-provider role model | `provider#alias` participants (cross-provider or same-provider multi-session) | `GA` |
+| Operator web console | Project tree, roles/sessions, dialogue stream, control panel | `GA` |
+| Theme system | Neon, Terminal Pixel, Executive Glass | `GA` |
+| Observability stack | OTel, Prometheus, Loki, Tempo, Grafana | `GA` |
+| Overnight supervisor | Timeout watchdog, provider fallback, cooldown control | `GA` |
+
+## Task Strategy Modes
+
+| Control | Values | Default | Effect |
+|---|---|---|---|
+| `sandbox_mode` | `0` / `1` | `1` | run in main workspace or lab workspace |
+| `self_loop_mode` | `0` / `1` | `0` | manual author approval or autonomous loop |
+| `auto_merge` | `0` / `1` | `1` | auto-fusion artifacts on passed tasks |
+
+Manual policy flow (`self_loop_mode=0`):
+
+1. Start task
+2. Generate discussion/proposal review
+3. Move to `waiting_manual`
+4. Author approves or rejects
+5. Approve => queue/start implementation; Reject => canceled
+
+## Quick Start
 
 ```powershell
 cd C:/Users/hangw/awe-agentcheck
@@ -97,23 +113,11 @@ $env:PYTHONPATH="C:/Users/hangw/awe-agentcheck/src"
 py -m uvicorn awe_agentcheck.main:app --reload --port 8000
 ```
 
-Open monitor:
+Open web monitor:
 
 - `http://localhost:8000/`
 
-### Core Task Modes
-
-1. `sandbox_mode`
-   - `1` default, run in lab workspace
-   - `0` run directly in project workspace
-2. `self_loop_mode`
-   - `0` default, wait author decision before implementation
-   - `1` autonomous loop
-3. `auto_merge`
-   - `1` default, auto fusion + changelog + snapshot on pass
-   - `0` keep outputs isolated
-
-### CLI Examples
+## CLI
 
 Default policy (sandbox + author approval):
 
@@ -129,7 +133,7 @@ py -m awe_agentcheck.cli run `
   --auto-start
 ```
 
-Author approves and starts:
+Approve and start:
 
 ```powershell
 py -m awe_agentcheck.cli decide task-1 --approve --auto-start
@@ -139,7 +143,7 @@ Autonomous direct-main run:
 
 ```powershell
 py -m awe_agentcheck.cli run `
-  --task "Autonomous pass" `
+  --task "Autonomous run" `
   --author "codex#author-A" `
   --reviewer "claude#review-B" `
   --sandbox-mode 0 `
@@ -148,7 +152,7 @@ py -m awe_agentcheck.cli run `
   --auto-start
 ```
 
-### API Surface
+## API
 
 - `POST /api/tasks`
 - `GET /api/tasks`
@@ -161,92 +165,38 @@ py -m awe_agentcheck.cli run `
 - `GET /api/workspace-tree`
 - `GET /api/stats`
 
-### Project Docs
+## Roadmap
 
+### 2026 Q1
+
+- [x] sandbox-first default policy
+- [x] author-approval gate
+- [x] auto-fusion + changelog + snapshot
+- [x] role/session monitor with multi-theme UI
+
+### 2026 Q2
+
+- [ ] richer GitHub/PR integration (change summary linking to task artifacts)
+- [ ] policy templates by repo size/risk profile
+- [ ] pluggable participant adapters beyond Codex/Claude
+
+### 2026 Q3
+
+- [ ] branch-aware auto promotion pipeline (sandbox -> main with policy guard)
+- [ ] advanced visual analytics (failure taxonomy trends, reviewer drift signals)
+
+## Documentation
+
+- `README.zh-CN.md`
 - `docs/RUNBOOK.md`
 - `docs/ARCHITECTURE_FLOW.md`
 - `docs/TESTING_TARGET_POLICY.md`
 - `docs/SESSION_HANDOFF.md`
 - `docs/plans/2026-02-13-sandbox-and-author-gate.md`
 
----
-
-## 中文
-
-### 项目定位
-
-`awe-agentcheck` 是一个多 CLI 代理协作的编排控制台，核心工作流为：
-
-`讨论 -> 实现 -> 审阅 -> 验证 -> 门禁`
-
-典型场景：
-
-- Claude 写，Codex 审
-- Codex 写，Claude 审
-- 同一 CLI 的不同 session 互相交叉检查
-- 夜间无人值守连续进化（带可观测性与故障保护）
-
-### 为什么它更“专业”
-
-- 默认沙盒优先：`sandbox_mode=1`，任务默认跑在 `*-lab`
-- 默认作者确认：`self_loop_mode=0`，先产出方案，再由作者决定是否执行
-- 可切全自动：`self_loop_mode=1`，适合夜间连续运行
-- 自动融合机制（可选，默认开）：
-  - 自动合并变更
-  - 自动写 `CHANGELOG.auto.md`
-  - 自动打快照
-- Web 端具备运维视角：
-  - 项目树 / 角色会话 / 对话流 / 手动控制 / 主题切换
-- 本地可观测性链路完整：OTel + Prometheus + Loki + Tempo + Grafana
-
-### 快速开始
-
-```powershell
-cd C:/Users/hangw/awe-agentcheck
-py -m pip install -e .[dev]
-```
-
-启动 API 后打开：
-
-- `http://localhost:8000/`
-
-### 常用模式建议
-
-1. 日常开发（推荐）
-   - `sandbox_mode=1`
-   - `self_loop_mode=0`
-   - `auto_merge=1`
-2. 夜间无人值守
-   - `sandbox_mode=1`
-   - `self_loop_mode=1`
-3. 直接改主仓（谨慎）
-   - `sandbox_mode=0`
-
-### 常用命令
-
-创建任务（默认安全策略）：
-
-```powershell
-py -m awe_agentcheck.cli run `
-  --task "修复监控信号噪声" `
-  --author "claude#author-A" `
-  --reviewer "codex#review-B" `
-  --sandbox-mode 1 `
-  --self-loop-mode 0 `
-  --workspace-path "C:/Users/hangw/awe-agentcheck" `
-  --auto-start
-```
-
-作者同意并启动：
-
-```powershell
-py -m awe_agentcheck.cli decide task-1 --approve --auto-start
-```
-
-### 质量验证
+## Verification
 
 ```powershell
 py -m ruff check .
 py -m pytest -q
 ```
-

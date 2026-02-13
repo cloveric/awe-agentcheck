@@ -1,0 +1,84 @@
+<svg width="1600" height="760" viewBox="0 0 1600 760" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="workflow flow">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#050816"/>
+      <stop offset="100%" stop-color="#0b1a2f"/>
+    </linearGradient>
+    <linearGradient id="node" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#10213d"/>
+      <stop offset="100%" stop-color="#0f2a35"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#67e8f9"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="760" fill="url(#bg)"/>
+
+  <text x="56" y="68" fill="#dbeafe" font-size="36" font-family="Segoe UI, Arial, sans-serif" font-weight="700">Runtime Flow: Sandbox + Author Gate + Auto Fusion</text>
+
+  <g font-family="Consolas, monospace" font-size="18" fill="#dbeafe">
+    <rect x="60" y="120" width="220" height="72" rx="12" fill="url(#node)" stroke="#60a5fa" stroke-opacity="0.5"/>
+    <text x="86" y="165">Create Task</text>
+
+    <rect x="340" y="120" width="260" height="72" rx="12" fill="url(#node)" stroke="#60a5fa" stroke-opacity="0.5"/>
+    <text x="370" y="165">Select Workspace</text>
+
+    <rect x="660" y="120" width="300" height="72" rx="12" fill="url(#node)" stroke="#60a5fa" stroke-opacity="0.5"/>
+    <text x="688" y="165">Start Task (request)</text>
+
+    <rect x="1020" y="120" width="350" height="72" rx="12" fill="url(#node)" stroke="#22d3ee" stroke-opacity="0.5"/>
+    <text x="1050" y="165">Mode Check: self_loop_mode</text>
+
+    <rect x="1080" y="250" width="300" height="72" rx="12" fill="url(#node)" stroke="#f97316" stroke-opacity="0.56"/>
+    <text x="1110" y="295">WAITING_MANUAL</text>
+
+    <rect x="1080" y="360" width="300" height="72" rx="12" fill="url(#node)" stroke="#f97316" stroke-opacity="0.56"/>
+    <text x="1110" y="405">Author Decision</text>
+
+    <rect x="760" y="250" width="260" height="72" rx="12" fill="url(#node)" stroke="#34d399" stroke-opacity="0.6"/>
+    <text x="786" y="295">Discussion</text>
+
+    <rect x="760" y="360" width="260" height="72" rx="12" fill="url(#node)" stroke="#34d399" stroke-opacity="0.6"/>
+    <text x="786" y="405">Implementation</text>
+
+    <rect x="760" y="470" width="260" height="72" rx="12" fill="url(#node)" stroke="#34d399" stroke-opacity="0.6"/>
+    <text x="786" y="515">Reviewer Loop</text>
+
+    <rect x="760" y="580" width="260" height="72" rx="12" fill="url(#node)" stroke="#34d399" stroke-opacity="0.6"/>
+    <text x="786" y="625">Verify + Gate</text>
+
+    <rect x="1080" y="580" width="300" height="72" rx="12" fill="url(#node)" stroke="#22c55e" stroke-opacity="0.7"/>
+    <text x="1110" y="625">Passed</text>
+
+    <rect x="1410" y="580" width="150" height="72" rx="12" fill="url(#node)" stroke="#22c55e" stroke-opacity="0.7"/>
+    <text x="1436" y="625">Fusion</text>
+
+    <rect x="1080" y="680" width="300" height="56" rx="12" fill="url(#node)" stroke="#ef4444" stroke-opacity="0.65"/>
+    <text x="1108" y="716">Failed/Canceled</text>
+  </g>
+
+  <g stroke="#67e8f9" stroke-width="3" fill="none" marker-end="url(#arrow)">
+    <path d="M280 156 L340 156"/>
+    <path d="M600 156 L660 156"/>
+    <path d="M960 156 L1020 156"/>
+    <path d="M1020 156 L890 156 L890 250"/>
+    <path d="M1020 156 L1230 156 L1230 250"/>
+    <path d="M890 322 L890 360"/>
+    <path d="M890 432 L890 470"/>
+    <path d="M890 542 L890 580"/>
+    <path d="M1020 616 L1080 616"/>
+    <path d="M1380 616 L1410 616"/>
+    <path d="M1230 322 L1230 360"/>
+    <path d="M1230 432 L1230 616 L1020 616"/>
+    <path d="M1230 432 L1230 708 L1080 708"/>
+  </g>
+
+  <g font-family="Consolas, monospace" font-size="16" fill="#cbd5e1">
+    <text x="1268" y="210">self_loop_mode=0</text>
+    <text x="910" y="210">self_loop_mode=1</text>
+    <text x="1260" y="468">approve</text>
+    <text x="1140" y="698">reject</text>
+    <text x="1428" y="570">auto_merge=1</text>
+  </g>
+</svg>
