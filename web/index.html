@@ -1,0 +1,2323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>awe-agentcheck monitor</title>
+  <style>
+    :root {
+      --bg-0: #05090c;
+      --bg-1: #081116;
+      --bg-2: #0d1820;
+      --card: rgba(10, 18, 24, 0.84);
+      --ink: #d6ffe9;
+      --muted: #7ba796;
+      --line: rgba(31, 232, 137, 0.28);
+      --line-strong: rgba(31, 232, 137, 0.56);
+      --accent: #1fe889;
+      --accent-2: #10c5c9;
+      --warn: #ff7e5f;
+      --ok: #9aff00;
+      --system: #88e5ff;
+      --mono: "Cascadia Code", "JetBrains Mono", "IBM Plex Mono", "Consolas", monospace;
+      --sans: "Sora", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --shadow: 0 20px 50px rgba(0, 0, 0, 0.52);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: var(--sans);
+      background:
+        radial-gradient(circle at 0% -6%, rgba(31, 232, 137, 0.26), transparent 36%),
+        radial-gradient(circle at 100% 0%, rgba(16, 197, 201, 0.24), transparent 38%),
+        linear-gradient(140deg, var(--bg-0), var(--bg-1) 48%, var(--bg-2));
+      min-height: 100vh;
+      padding: 20px;
+      position: relative;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        to bottom,
+        rgba(194, 255, 225, 0.04) 0,
+        rgba(194, 255, 225, 0.04) 1px,
+        rgba(0, 0, 0, 0) 2px,
+        rgba(0, 0, 0, 0) 4px
+      );
+      mix-blend-mode: soft-light;
+      opacity: 0.4;
+    }
+
+    .shell {
+      max-width: 1440px;
+      margin: 0 auto;
+      display: grid;
+      gap: 14px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .header {
+      background: linear-gradient(120deg, rgba(8, 20, 23, 0.95), rgba(12, 30, 27, 0.94));
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow), inset 0 0 0 1px rgba(31, 232, 137, 0.12);
+      padding: 14px 16px;
+      display: grid;
+      gap: 10px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .header::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(100deg, transparent, rgba(31, 232, 137, 0.08), transparent);
+      transform: translateX(-100%);
+      animation: sweep 6s linear infinite;
+      pointer-events: none;
+    }
+
+    .header-main {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .heading {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: #bbffe0;
+      text-shadow: 0 0 10px rgba(31, 232, 137, 0.4);
+    }
+
+    .hint {
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .theme-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .theme-label {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-family: var(--mono);
+      white-space: nowrap;
+    }
+
+    .theme-select {
+      min-height: 32px;
+      padding: 5px 8px;
+      width: 168px;
+    }
+
+    .toolbar > button,
+    .toolbar .theme-select {
+      min-height: 32px;
+    }
+
+    .layout {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: 330px minmax(0, 1fr);
+      align-items: start;
+    }
+
+    .left-col {
+      display: grid;
+      gap: 14px;
+      grid-template-rows: minmax(300px, 1fr) auto;
+      position: sticky;
+      top: 16px;
+    }
+
+    #roleList {
+      max-height: 34vh;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow), inset 0 0 0 1px rgba(31, 232, 137, 0.08);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      min-height: 0;
+      backdrop-filter: blur(2px);
+    }
+
+    .card-title {
+      margin: 0;
+      font-size: 12px;
+      color: #86dbaf;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      font-weight: 700;
+      font-family: var(--mono);
+    }
+
+    .list {
+      display: grid;
+      gap: 8px;
+      overflow: auto;
+      max-height: 48vh;
+      padding-right: 2px;
+    }
+
+    .tree-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .tree-tools {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tree-tool-btn {
+      min-height: 28px;
+      padding: 4px 8px;
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    .tree-list {
+      display: block;
+      border: 1px solid rgba(31, 232, 137, 0.2);
+      border-radius: 10px;
+      background: rgba(5, 13, 18, 0.72);
+      padding: 6px;
+      overflow: auto;
+      max-height: 48vh;
+    }
+
+    .tree-branch {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .tree-branch.nested {
+      margin-left: 9px;
+      padding-left: 10px;
+      border-left: 1px dashed rgba(136, 229, 255, 0.22);
+    }
+
+    .tree-item {
+      margin: 2px 0;
+      min-width: 0;
+    }
+
+    .tree-folder {
+      min-width: 0;
+    }
+
+    .tree-folder > summary {
+      list-style: none;
+    }
+
+    .tree-folder > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .tree-entry {
+      min-height: 24px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: #cbffe6;
+      padding: 2px 6px;
+      font-size: 12px;
+      line-height: 1.2;
+      white-space: nowrap;
+      transition: background-color 0.12s ease, border-color 0.12s ease;
+      min-width: 0;
+      cursor: default;
+    }
+
+    .tree-entry:hover {
+      background: rgba(136, 229, 255, 0.1);
+      border-color: rgba(136, 229, 255, 0.22);
+    }
+
+    .tree-item.dir > .tree-folder > .tree-entry {
+      cursor: pointer;
+      color: #b8f8ff;
+    }
+
+    .tree-item.file > .tree-entry {
+      color: #ceffd9;
+    }
+
+    .tree-caret,
+    .tree-pad {
+      width: 12px;
+      flex: 0 0 12px;
+      text-align: center;
+      color: #79b8a2;
+      font-family: var(--mono);
+      user-select: none;
+    }
+
+    .tree-caret {
+      transition: transform 0.1s ease;
+      transform: rotate(-90deg);
+      transform-origin: center;
+    }
+
+    .tree-folder[open] > .tree-entry .tree-caret {
+      transform: rotate(0deg);
+    }
+
+    .tree-icon {
+      width: 16px;
+      flex: 0 0 16px;
+      color: #8fdbc0;
+      text-align: center;
+      font-size: 11px;
+      user-select: none;
+    }
+
+    .tree-item.dir > .tree-folder > .tree-entry .tree-icon {
+      color: #72dfff;
+    }
+
+    .tree-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tree-item.dir > .tree-folder > .tree-entry .tree-name {
+      font-weight: 600;
+    }
+
+    .tree-leaf-empty {
+      color: #88b9a3;
+      font-size: 11px;
+      margin-left: 30px;
+      margin-top: 3px;
+      margin-bottom: 4px;
+    }
+
+    .tree-empty {
+      border: 1px dashed rgba(31, 232, 137, 0.26);
+      border-radius: 9px;
+      padding: 10px;
+      color: #88b9a3;
+      font-family: var(--mono);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .list button {
+      border: 1px solid rgba(31, 232, 137, 0.26);
+      background: linear-gradient(160deg, rgba(10, 22, 24, 0.9), rgba(10, 18, 27, 0.9));
+      border-radius: 10px;
+      padding: 9px 10px;
+      color: var(--ink);
+      text-align: left;
+      cursor: pointer;
+      transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+      font: inherit;
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .list button:hover {
+      transform: translateY(-1px);
+      border-color: var(--line-strong);
+      box-shadow: 0 0 0 1px rgba(31, 232, 137, 0.2), 0 0 22px rgba(31, 232, 137, 0.12);
+    }
+
+    .list button.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(31, 232, 137, 0.3), 0 0 26px rgba(31, 232, 137, 0.18);
+      background: linear-gradient(150deg, rgba(13, 30, 24, 0.92), rgba(10, 20, 30, 0.95));
+    }
+
+    .item-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .item-name {
+      font-weight: 600;
+      color: #c8ffe3;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+    }
+
+    .role-main {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    .role-avatar {
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      border: 1px solid rgba(31, 232, 137, 0.35);
+      background: rgba(6, 14, 18, 0.9);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.28);
+      flex: 0 0 auto;
+    }
+
+    .role-avatar svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      shape-rendering: crispEdges;
+      image-rendering: pixelated;
+    }
+
+    .item-meta {
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-family: var(--mono);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid rgba(136, 229, 255, 0.45);
+      padding: 2px 8px;
+      font-size: 11px;
+      white-space: nowrap;
+      background: rgba(7, 24, 32, 0.84);
+      color: #a2e9ff;
+      font-family: var(--mono);
+    }
+
+    .pill.ok {
+      border-color: rgba(154, 255, 0, 0.45);
+      color: #bcff4a;
+    }
+
+    .pill.warn {
+      border-color: rgba(255, 126, 95, 0.55);
+      color: #ffb09a;
+    }
+
+    .right-col {
+      display: grid;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .controls {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr;
+    }
+
+    .controls-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    label {
+      display: block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      color: #80cfaa;
+      margin-bottom: 4px;
+      font-weight: 700;
+      font-family: var(--mono);
+    }
+
+    input,
+    textarea,
+    select,
+    button {
+      border: 1px solid rgba(31, 232, 137, 0.3);
+      border-radius: 10px;
+      padding: 8px 10px;
+      color: #d6ffe9;
+      font-family: var(--mono);
+      font-size: 12px;
+      background: rgba(8, 18, 24, 0.92);
+    }
+
+    input,
+    textarea,
+    select {
+      width: 100%;
+    }
+
+    textarea {
+      min-height: 70px;
+      resize: vertical;
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus,
+    button:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(31, 232, 137, 0.36), 0 0 16px rgba(31, 232, 137, 0.18);
+    }
+
+    button {
+      cursor: pointer;
+      transition: transform 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
+      background: linear-gradient(145deg, rgba(13, 31, 27, 0.94), rgba(7, 20, 26, 0.95));
+      color: #cbffe0;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 0 0 1px rgba(31, 232, 137, 0.2), 0 0 20px rgba(31, 232, 137, 0.1);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .btn-main {
+      background: linear-gradient(120deg, rgba(23, 196, 106, 0.9), rgba(15, 148, 146, 0.9));
+      color: #02130b;
+      border-color: rgba(52, 255, 158, 0.5);
+      font-weight: 700;
+    }
+
+    .btn-warn {
+      background: linear-gradient(120deg, rgba(205, 77, 55, 0.92), rgba(255, 126, 95, 0.9));
+      color: #200703;
+      border-color: rgba(255, 169, 145, 0.5);
+      font-weight: 700;
+    }
+
+    .mini-status {
+      font-size: 12px;
+      color: #8ec3ad;
+      min-height: 18px;
+      font-family: var(--mono);
+    }
+
+    .kpi-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+    }
+
+    .kpi-card {
+      border: 1px solid rgba(31, 232, 137, 0.26);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: linear-gradient(150deg, rgba(7, 17, 23, 0.9), rgba(11, 21, 30, 0.9));
+      box-shadow: inset 0 0 0 1px rgba(31, 232, 137, 0.09);
+      display: grid;
+      gap: 3px;
+    }
+
+    .kpi-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #8fbca9;
+    }
+
+    .kpi-value {
+      font-family: var(--mono);
+      font-size: 16px;
+      letter-spacing: 0.02em;
+      color: #d9ffef;
+      font-weight: 700;
+    }
+
+    .dialogue {
+      display: grid;
+      gap: 10px;
+      min-height: 540px;
+      max-height: 72vh;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .message {
+      border: 1px solid rgba(136, 229, 255, 0.3);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(8, 18, 28, 0.9);
+      display: grid;
+      gap: 8px;
+      animation: fadeIn 0.18s ease both;
+    }
+
+    .message.agent {
+      border-left: 4px solid var(--accent);
+      background: linear-gradient(145deg, rgba(8, 26, 22, 0.94), rgba(8, 17, 28, 0.92));
+      box-shadow: inset 0 0 0 1px rgba(31, 232, 137, 0.12);
+    }
+
+    .message.review {
+      border-left: 4px solid var(--accent-2);
+      background: linear-gradient(145deg, rgba(8, 19, 28, 0.95), rgba(6, 23, 33, 0.92));
+      box-shadow: inset 0 0 0 1px rgba(16, 197, 201, 0.14);
+    }
+
+    .message.system {
+      border-left: 4px solid #84bbd2;
+      background: linear-gradient(145deg, rgba(10, 18, 24, 0.95), rgba(8, 22, 27, 0.92));
+    }
+
+    .message.system.bad {
+      border-left-color: #ff7e5f;
+      background: linear-gradient(145deg, rgba(32, 11, 13, 0.92), rgba(22, 12, 17, 0.95));
+      box-shadow: inset 0 0 0 1px rgba(255, 126, 95, 0.18);
+    }
+
+    .msg-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .msg-actor {
+      font-weight: 700;
+      font-size: 12px;
+      color: #d2fff3;
+      font-family: var(--mono);
+      letter-spacing: 0.03em;
+    }
+
+    .msg-kind {
+      font-size: 11px;
+      color: #95c7b2;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      font-family: var(--mono);
+    }
+
+    .msg-text {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.45;
+      color: #c7f8df;
+    }
+
+    .empty {
+      border: 1px dashed rgba(31, 232, 137, 0.33);
+      border-radius: 12px;
+      padding: 20px;
+      color: #91c4ae;
+      font-size: 13px;
+      text-align: center;
+      background: rgba(8, 19, 24, 0.84);
+      font-family: var(--mono);
+    }
+
+    .status-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+
+    .status-box {
+      border: 1px solid rgba(31, 232, 137, 0.26);
+      border-radius: 10px;
+      padding: 8px;
+      background: rgba(8, 20, 22, 0.88);
+      font-size: 12px;
+      color: #b3f2d2;
+      font-family: var(--mono);
+    }
+
+    .status-box strong {
+      display: block;
+      color: #9df6cb;
+      font-size: 12px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    code {
+      color: #a9f9d1;
+      font-family: var(--mono);
+    }
+
+    ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: rgba(7, 16, 21, 0.9);
+      border-radius: 999px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, rgba(31, 232, 137, 0.65), rgba(16, 197, 201, 0.65));
+      border-radius: 999px;
+      border: 2px solid rgba(7, 16, 21, 0.9);
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(3px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes sweep {
+      from { transform: translateX(-100%); }
+      to { transform: translateX(100%); }
+    }
+
+    body[data-theme="pixel"] {
+      --bg-0: #020202;
+      --bg-1: #080808;
+      --bg-2: #111111;
+      --card: rgba(8, 8, 8, 0.96);
+      --ink: #f0f0f0;
+      --muted: #9b9b9b;
+      --line: rgba(255, 255, 255, 0.2);
+      --line-strong: rgba(255, 255, 255, 0.42);
+      --accent: #f8f8f8;
+      --accent-2: #a8cbff;
+      --warn: #ff9a8c;
+      --ok: #b8ff7d;
+      --mono: "VT323", "Press Start 2P", "PxPlus IBM VGA8", "Cascadia Mono", monospace;
+      --sans: "VT323", "Press Start 2P", "PxPlus IBM VGA8", "Cascadia Mono", monospace;
+      --shadow: none;
+      background:
+        linear-gradient(180deg, #020202 0%, #070707 60%, #0f0f0f 100%),
+        radial-gradient(circle at 50% -30%, rgba(255, 255, 255, 0.08), transparent 56%);
+      text-shadow: none;
+    }
+
+    body[data-theme="pixel"]::before {
+      opacity: 0.1;
+      mix-blend-mode: normal;
+      background: repeating-linear-gradient(
+        to bottom,
+        rgba(255, 255, 255, 0.1) 0,
+        rgba(255, 255, 255, 0.1) 1px,
+        rgba(0, 0, 0, 0) 2px,
+        rgba(0, 0, 0, 0) 4px
+      );
+    }
+
+    body[data-theme="pixel"] .header,
+    body[data-theme="pixel"] .card,
+    body[data-theme="pixel"] .tree-list,
+    body[data-theme="pixel"] .tree-empty,
+    body[data-theme="pixel"] .status-box,
+    body[data-theme="pixel"] .empty,
+    body[data-theme="pixel"] .message,
+    body[data-theme="pixel"] .list button {
+      border-radius: 2px;
+      box-shadow: none;
+      backdrop-filter: none;
+      background: rgba(8, 8, 8, 0.95);
+    }
+
+    body[data-theme="pixel"] .header::after {
+      display: none;
+    }
+
+    body[data-theme="pixel"] .heading {
+      font-size: 18px;
+      letter-spacing: 0.12em;
+      color: #f6f6f6;
+      text-shadow: none;
+    }
+
+    body[data-theme="pixel"] .hint,
+    body[data-theme="pixel"] .mini-status,
+    body[data-theme="pixel"] .msg-kind,
+    body[data-theme="pixel"] .item-meta,
+    body[data-theme="pixel"] .theme-label {
+      color: #9e9e9e;
+    }
+
+    body[data-theme="pixel"] input,
+    body[data-theme="pixel"] textarea,
+    body[data-theme="pixel"] select,
+    body[data-theme="pixel"] button {
+      border-radius: 2px;
+      background: #0c0c0c;
+      box-shadow: none;
+    }
+
+    body[data-theme="pixel"] button:hover {
+      transform: none;
+      box-shadow: none;
+      border-color: var(--line-strong);
+    }
+
+    body[data-theme="pixel"] .btn-main {
+      background: #14231b;
+      color: #b8ff7d;
+      border-color: #4a7f36;
+    }
+
+    body[data-theme="pixel"] .btn-warn {
+      background: #2b1816;
+      color: #ffb8a8;
+      border-color: #9c5f52;
+    }
+
+    body[data-theme="pixel"] #forceFailBtn {
+      color: #aed1ff;
+      border-color: rgba(168, 203, 255, 0.4);
+    }
+
+    body[data-theme="pixel"] .pill {
+      border-radius: 2px;
+      background: #090909;
+      color: #e9e9e9;
+    }
+
+    body[data-theme="pixel"] .pill.ok {
+      color: #b8ff7d;
+    }
+
+    body[data-theme="pixel"] .pill.warn {
+      color: #ffb8a8;
+    }
+
+    body[data-theme="pixel"] .tree-entry {
+      border-radius: 1px;
+      min-height: 22px;
+    }
+
+    body[data-theme="pixel"] .tree-caret,
+    body[data-theme="pixel"] .tree-pad,
+    body[data-theme="pixel"] .tree-icon {
+      color: #cfcfcf;
+    }
+
+    body[data-theme="pixel"] .tree-branch.nested {
+      border-left-color: rgba(255, 255, 255, 0.18);
+    }
+
+    body[data-theme="pixel"] .dialogue {
+      border: 1px solid var(--line);
+      border-radius: 2px;
+      padding: 6px;
+      background: rgba(7, 7, 7, 0.86);
+    }
+
+    body[data-theme="pixel"] .message.agent,
+    body[data-theme="pixel"] .message.review,
+    body[data-theme="pixel"] .message.system,
+    body[data-theme="pixel"] .message.system.bad {
+      box-shadow: none;
+      background: rgba(7, 7, 7, 0.92);
+    }
+
+    body[data-theme="pixel"] .message.agent .msg-actor {
+      color: #bbff95;
+    }
+
+    body[data-theme="pixel"] .message.review .msg-actor {
+      color: #b6d4ff;
+    }
+
+    body[data-theme="pixel"] .message.system.bad .msg-actor {
+      color: #ffb7a6;
+    }
+
+    body[data-theme="pixel"] .role-avatar {
+      width: 20px;
+      height: 20px;
+      border-radius: 1px;
+      border-color: rgba(255, 255, 255, 0.42);
+      background: #0b0b0b;
+      box-shadow: none;
+    }
+
+    body[data-theme="pixel"] .kpi-card {
+      border-color: rgba(255, 255, 255, 0.35);
+      background: rgba(7, 7, 7, 0.94);
+      box-shadow: none;
+    }
+
+    body[data-theme="pixel"] .kpi-label {
+      color: #bcbcbc;
+    }
+
+    body[data-theme="pixel"] .kpi-value {
+      color: #ffffff;
+    }
+
+    body[data-theme="executive"] {
+      --bg-0: #071018;
+      --bg-1: #0d1a26;
+      --bg-2: #131f2f;
+      --card: rgba(12, 19, 31, 0.8);
+      --ink: #eaf3ff;
+      --muted: #9fb6d1;
+      --line: rgba(122, 180, 255, 0.22);
+      --line-strong: rgba(122, 180, 255, 0.45);
+      --accent: #6cc4ff;
+      --accent-2: #66e0c7;
+      --warn: #ff8577;
+      --ok: #84f0ac;
+      --mono: "IBM Plex Mono", "JetBrains Mono", "Cascadia Code", monospace;
+      --sans: "Sora", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --shadow: 0 20px 45px rgba(0, 0, 0, 0.48);
+      background:
+        radial-gradient(circle at 15% -10%, rgba(108, 196, 255, 0.28), transparent 42%),
+        radial-gradient(circle at 96% 0%, rgba(102, 224, 199, 0.22), transparent 38%),
+        linear-gradient(132deg, #06101a 0%, #0b1723 47%, #101d2b 100%);
+    }
+
+    body[data-theme="executive"]::before {
+      opacity: 0.2;
+      mix-blend-mode: normal;
+    }
+
+    body[data-theme="executive"] .header {
+      background: linear-gradient(120deg, rgba(10, 24, 36, 0.93), rgba(16, 30, 43, 0.93));
+      border-color: rgba(122, 180, 255, 0.32);
+      box-shadow: var(--shadow), inset 0 0 0 1px rgba(122, 180, 255, 0.18);
+    }
+
+    body[data-theme="executive"] .heading {
+      color: #e8f4ff;
+      text-shadow: 0 0 16px rgba(108, 196, 255, 0.3);
+      letter-spacing: 0.06em;
+    }
+
+    body[data-theme="executive"] .card,
+    body[data-theme="executive"] .tree-list,
+    body[data-theme="executive"] .status-box,
+    body[data-theme="executive"] .message,
+    body[data-theme="executive"] .empty {
+      border-color: rgba(122, 180, 255, 0.26);
+      background: rgba(10, 20, 33, 0.82);
+      box-shadow: var(--shadow), inset 0 0 0 1px rgba(122, 180, 255, 0.11);
+    }
+
+    body[data-theme="executive"] .pill {
+      border-color: rgba(122, 180, 255, 0.5);
+      color: #c2e3ff;
+      background: rgba(13, 28, 43, 0.9);
+    }
+
+    body[data-theme="executive"] .pill.ok {
+      border-color: rgba(132, 240, 172, 0.52);
+      color: #baf7cd;
+    }
+
+    body[data-theme="executive"] .pill.warn {
+      border-color: rgba(255, 133, 119, 0.56);
+      color: #ffc7be;
+    }
+
+    body[data-theme="executive"] input,
+    body[data-theme="executive"] textarea,
+    body[data-theme="executive"] select,
+    body[data-theme="executive"] button {
+      border-color: rgba(122, 180, 255, 0.3);
+      background: rgba(10, 22, 37, 0.92);
+      color: #eaf3ff;
+    }
+
+    body[data-theme="executive"] .btn-main {
+      border-color: rgba(108, 196, 255, 0.52);
+      background: linear-gradient(120deg, rgba(87, 166, 255, 0.92), rgba(78, 204, 190, 0.92));
+      color: #04131e;
+    }
+
+    body[data-theme="executive"] .btn-warn {
+      border-color: rgba(255, 133, 119, 0.56);
+      background: linear-gradient(120deg, rgba(217, 87, 73, 0.92), rgba(255, 133, 119, 0.92));
+      color: #230708;
+    }
+
+    body[data-theme="executive"] .kpi-card {
+      border-color: rgba(122, 180, 255, 0.32);
+      background: linear-gradient(150deg, rgba(11, 24, 38, 0.94), rgba(14, 31, 48, 0.9));
+      box-shadow: inset 0 0 0 1px rgba(122, 180, 255, 0.14);
+    }
+
+    body[data-theme="executive"] .kpi-label {
+      color: #acc7e8;
+    }
+
+    body[data-theme="executive"] .kpi-value {
+      color: #ecf6ff;
+    }
+
+    @media (max-width: 1080px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .left-col {
+        position: static;
+        grid-template-rows: auto auto;
+      }
+
+      .list {
+        max-height: 34vh;
+      }
+    }
+
+    @media (max-width: 760px) {
+      body {
+        padding: 12px;
+      }
+
+      .heading {
+        font-size: 18px;
+      }
+
+      .dialogue {
+        min-height: 420px;
+        max-height: 62vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="header">
+      <div class="header-main">
+        <div>
+          <h1 class="heading">awe-agentcheck | Multi-CLI Monitor</h1>
+          <p class="hint">Left: projects and participant roles. Right: agent conversation stream and controls.</p>
+        </div>
+        <div class="toolbar">
+          <button id="refreshBtn">Refresh</button>
+          <button id="pollBtn">Auto Poll: OFF</button>
+          <div class="theme-wrap">
+            <span class="theme-label">Theme</span>
+            <select id="themeSelect" class="theme-select" aria-label="Dashboard theme"></select>
+          </div>
+          <span id="connBadge" class="pill">API: CHECKING</span>
+        </div>
+      </div>
+      <div id="statsLine" class="mini-status">Loading stats...</div>
+      <div id="kpiStrip" class="kpi-strip"></div>
+    </section>
+
+    <main class="layout">
+      <aside class="left-col">
+        <section class="card">
+          <div class="tree-head">
+            <h2 class="card-title">Project Structure</h2>
+            <div class="tree-tools">
+              <button id="expandTreeBtn" class="tree-tool-btn" type="button">Expand</button>
+              <button id="collapseTreeBtn" class="tree-tool-btn" type="button">Collapse</button>
+            </div>
+          </div>
+          <div id="projectTreeMeta" class="mini-status"></div>
+          <div id="projectTree" class="list tree-list"></div>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">Roles / Sessions</h2>
+          <div id="roleList" class="list"></div>
+        </section>
+      </aside>
+
+      <section class="right-col">
+        <section class="card controls">
+          <h2 class="card-title">Dialogue Scope</h2>
+          <div class="controls-row">
+            <div style="flex:1; min-width:220px;">
+              <label for="projectSelect">Project</label>
+              <select id="projectSelect"></select>
+            </div>
+            <div style="flex:2; min-width:240px;">
+              <label for="taskSelect">Task</label>
+              <select id="taskSelect"></select>
+            </div>
+            <div style="flex:1; min-width:150px;">
+              <label for="forceReason">Force-fail reason</label>
+              <input id="forceReason" value="watchdog_timeout: operator forced fail" />
+            </div>
+          </div>
+          <div class="controls-row">
+            <button id="startBtn" class="btn-main">Start</button>
+            <button id="approveQueueBtn" class="btn-main">Approve + Queue</button>
+            <button id="approveStartBtn" class="btn-main">Approve + Start</button>
+            <button id="rejectBtn" class="btn-warn">Reject</button>
+            <button id="cancelBtn" class="btn-warn">Cancel</button>
+            <button id="forceFailBtn">Force Fail</button>
+            <button id="reloadEventsBtn">Reload Dialogue</button>
+          </div>
+          <div id="actionStatus" class="mini-status"></div>
+          <div id="taskSnapshot" class="status-grid"></div>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">Conversation</h2>
+          <div id="dialogue" class="dialogue"></div>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">Create Task</h2>
+          <div class="controls-row">
+            <div style="flex:1; min-width:220px;">
+              <label for="title">Title</label>
+              <input id="title" value="Improve monitor signal quality" />
+            </div>
+            <div style="flex:1; min-width:220px;">
+              <label for="workspacePath">Workspace path</label>
+              <input id="workspacePath" value="C:/Users/hangw/awe-agentcheck" />
+            </div>
+          </div>
+          <div class="controls-row">
+            <div style="flex:1; min-width:220px;">
+              <label for="author">Author</label>
+              <input id="author" value="claude#author-A" />
+            </div>
+            <div style="flex:1; min-width:220px;">
+              <label for="reviewers">Reviewers (comma-separated)</label>
+              <input id="reviewers" value="codex#review-B,claude#review-C" />
+            </div>
+          </div>
+          <div class="controls-row">
+            <div style="flex:1; min-width:160px;">
+              <label for="evolutionLevel">Evolution Level</label>
+              <select id="evolutionLevel">
+                <option value="0">0 | fix-only</option>
+                <option value="1">1 | guided evolve</option>
+                <option value="2">2 | proactive evolve</option>
+              </select>
+            </div>
+            <div style="flex:1; min-width:220px;">
+              <label for="evolveUntil">Evolve Until (optional)</label>
+              <input id="evolveUntil" value="" placeholder="2026-02-13 06:00" />
+            </div>
+          </div>
+          <div class="controls-row">
+            <div style="flex:0 0 220px;">
+              <label for="sandboxMode">Sandbox Mode</label>
+              <select id="sandboxMode">
+                <option value="1">1 | lab sandbox (default)</option>
+                <option value="0">0 | direct main workspace</option>
+              </select>
+            </div>
+            <div style="flex:1; min-width:220px;">
+              <label for="sandboxWorkspacePath">Sandbox Workspace Path (optional)</label>
+              <input id="sandboxWorkspacePath" value="C:/Users/hangw/awe-agentcheck-lab" placeholder="leave blank for auto <workspace>-lab" />
+            </div>
+          </div>
+          <div class="controls-row">
+            <div style="flex:0 0 220px;">
+              <label for="selfLoopMode">Self Loop Mode</label>
+              <select id="selfLoopMode">
+                <option value="0">0 | discuss then ask author (default)</option>
+                <option value="1">1 | autonomous execute</option>
+              </select>
+            </div>
+            <div style="flex:0 0 220px;">
+              <label for="autoMerge">Auto Merge</label>
+              <select id="autoMerge">
+                <option value="1">1 | enabled (default)</option>
+                <option value="0">0 | disabled</option>
+              </select>
+            </div>
+            <div style="flex:1; min-width:220px;">
+              <label for="mergeTargetPath">Merge Target Path (optional)</label>
+              <input id="mergeTargetPath" value="C:/Users/hangw/awe-agentcheck" placeholder="leave blank to merge in-place" />
+            </div>
+          </div>
+          <div class="controls-row">
+            <div style="flex:1; min-width:220px;">
+              <label for="description">Description</label>
+              <textarea id="description">Discuss, implement, review, and verify with medium gate.</textarea>
+            </div>
+          </div>
+          <div class="controls-row">
+            <button id="createBtn" class="btn-main">Create</button>
+            <button id="createAndStartBtn">Create + Start</button>
+          </div>
+          <div id="createStatus" class="mini-status"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const state = {
+      tasks: [],
+      stats: null,
+      selectedProject: null,
+      selectedRole: 'all',
+      selectedTaskId: null,
+      theme: 'neon',
+      eventsByTask: new Map(),
+      treeByProject: new Map(),
+      treeOpenByProject: new Map(),
+      polling: false,
+      timer: null,
+      apiHealthy: false,
+      apiFailureCount: 0,
+    };
+
+    const el = {
+      projectSelect: document.getElementById('projectSelect'),
+      projectTree: document.getElementById('projectTree'),
+      projectTreeMeta: document.getElementById('projectTreeMeta'),
+      roleList: document.getElementById('roleList'),
+      statsLine: document.getElementById('statsLine'),
+      kpiStrip: document.getElementById('kpiStrip'),
+      taskSelect: document.getElementById('taskSelect'),
+      dialogue: document.getElementById('dialogue'),
+      actionStatus: document.getElementById('actionStatus'),
+      taskSnapshot: document.getElementById('taskSnapshot'),
+      createStatus: document.getElementById('createStatus'),
+      pollBtn: document.getElementById('pollBtn'),
+      forceReason: document.getElementById('forceReason'),
+      connBadge: document.getElementById('connBadge'),
+      themeSelect: document.getElementById('themeSelect'),
+      expandTreeBtn: document.getElementById('expandTreeBtn'),
+      collapseTreeBtn: document.getElementById('collapseTreeBtn'),
+      approveQueueBtn: document.getElementById('approveQueueBtn'),
+      approveStartBtn: document.getElementById('approveStartBtn'),
+      rejectBtn: document.getElementById('rejectBtn'),
+    };
+
+    const THEME_OPTIONS = [
+      { id: 'neon', label: 'Neon Grid' },
+      { id: 'pixel', label: 'Terminal Pixel' },
+      { id: 'executive', label: 'Executive Glass' },
+    ];
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function normalizeTheme(themeId) {
+      const value = String(themeId || '').trim().toLowerCase();
+      return THEME_OPTIONS.some((theme) => theme.id === value) ? value : 'neon';
+    }
+
+    function readThemePreference() {
+      try {
+        return normalizeTheme(localStorage.getItem('awe-agentcheck-theme'));
+      } catch {
+        return 'neon';
+      }
+    }
+
+    function applyTheme(themeId, { persist = true } = {}) {
+      const theme = normalizeTheme(themeId);
+      state.theme = theme;
+      document.body.dataset.theme = theme;
+      if (el.themeSelect) {
+        el.themeSelect.value = theme;
+      }
+      if (persist) {
+        try {
+          localStorage.setItem('awe-agentcheck-theme', theme);
+        } catch {
+        }
+      }
+    }
+
+    function initThemeSelector() {
+      if (!el.themeSelect) {
+        applyTheme('neon', { persist: false });
+        return;
+      }
+      el.themeSelect.innerHTML = '';
+      for (const theme of THEME_OPTIONS) {
+        const option = document.createElement('option');
+        option.value = theme.id;
+        option.textContent = theme.label;
+        el.themeSelect.appendChild(option);
+      }
+      applyTheme(readThemePreference(), { persist: false });
+      el.themeSelect.addEventListener('change', () => applyTheme(el.themeSelect.value));
+    }
+
+    function setApiHealth(ok, detail = '') {
+      state.apiHealthy = !!ok;
+      if (ok) {
+        state.apiFailureCount = 0;
+        el.connBadge.className = 'pill ok';
+        el.connBadge.textContent = 'API: ONLINE';
+        return;
+      }
+      state.apiFailureCount += 1;
+      el.connBadge.className = 'pill warn';
+      el.connBadge.textContent = `API: RETRY(${state.apiFailureCount})`;
+      if (detail) {
+        el.actionStatus.textContent = `API unstable: ${detail}`;
+      }
+    }
+
+    async function api(path, options = {}) {
+      const method = String(options.method || 'GET').toUpperCase();
+      const retryable = options.retryable !== undefined ? !!options.retryable : true;
+      const retryAttempts = Number(options.retryAttempts || (method === 'GET' ? 3 : 2));
+      let lastError = null;
+
+      for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 10000);
+          const resp = await fetch(path, {
+            headers: { 'Content-Type': 'application/json' },
+            ...options,
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+
+          const text = await resp.text();
+          let data = {};
+          try {
+            data = text ? JSON.parse(text) : {};
+          } catch {
+            data = { raw: text };
+          }
+          if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}: ${JSON.stringify(data)}`);
+          }
+          setApiHealth(true);
+          return data;
+        } catch (err) {
+          lastError = err;
+          setApiHealth(false, String(err));
+          const canRetry = retryable && attempt < retryAttempts;
+          if (!canRetry) {
+            break;
+          }
+          await sleep(Math.min(2000, 250 * (2 ** (attempt - 1))));
+        }
+      }
+
+      throw lastError || new Error('API request failed');
+    }
+
+    function normalizeProjectPath(path) {
+      return String(path || '.').trim() || '.';
+    }
+
+    function escapeHtml(value) {
+      const text = String(value ?? '');
+      const table = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '\"': '&quot;',
+        "'": '&#39;',
+      };
+      return text.replace(/[&<>\"']/g, (ch) => table[ch] || ch);
+    }
+
+    function projectName(path) {
+      const clean = normalizeProjectPath(path).replace(/\\/g, '/');
+      const parts = clean.split('/').filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : clean;
+    }
+
+    function treeNodeLabel(path) {
+      const raw = String(path || '').replace(/\\/g, '/');
+      const trimmed = raw.replace(/\/+$/, '');
+      if (!trimmed) return '.';
+      const parts = trimmed.split('/').filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : trimmed;
+    }
+
+    function parseProvider(participantId) {
+      const text = String(participantId || '');
+      if (!text.includes('#')) return text || 'unknown';
+      return text.split('#')[0];
+    }
+
+    function hashText(text) {
+      let hash = 2166136261;
+      const src = String(text || '');
+      for (let i = 0; i < src.length; i += 1) {
+        hash ^= src.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    }
+
+    function seededRandom(seed) {
+      let value = seed >>> 0;
+      return () => {
+        value += 0x6d2b79f5;
+        let t = value;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function avatarPalette(provider, rng) {
+      const key = String(provider || '').toLowerCase();
+      const skinTones = ['#f6d2b7', '#deb38c', '#c98b66', '#9b6546'];
+      const hairByProvider = key === 'claude'
+        ? ['#f4f4f4', '#d7d7d7', '#9a9a9a', '#5f5f5f']
+        : key === 'codex'
+          ? ['#cfe3ff', '#a8bbd6', '#7f8ca1', '#4d5969']
+          : ['#f4d59a', '#b8b8b8', '#8e8e8e', '#5a5a5a'];
+      const shirtByProvider = key === 'claude'
+        ? ['#2b5d3f', '#284a73', '#6d5a2e']
+        : key === 'codex'
+          ? ['#2f4b78', '#2a5d66', '#564a7a']
+          : ['#505050', '#3a4f3a', '#553f3f'];
+      return {
+        skin: skinTones[Math.floor(rng() * skinTones.length)],
+        hair: hairByProvider[Math.floor(rng() * hairByProvider.length)],
+        shirt: shirtByProvider[Math.floor(rng() * shirtByProvider.length)],
+        eye: '#111111',
+        bg: '#0b0b0b',
+      };
+    }
+
+    function generateAvatarSvg(roleId, provider) {
+      const seed = `${provider}|${roleId}`;
+      const rng = seededRandom(hashText(seed));
+      const palette = avatarPalette(provider, rng);
+      const size = 10;
+      const grid = Array.from({ length: size }, () => Array(size).fill(null));
+
+      function px(x, y, color) {
+        if (x < 0 || y < 0 || x >= size || y >= size) return;
+        grid[y][x] = color;
+      }
+
+      function fillRect(x1, y1, x2, y2, color) {
+        for (let y = y1; y <= y2; y += 1) {
+          for (let x = x1; x <= x2; x += 1) {
+            px(x, y, color);
+          }
+        }
+      }
+
+      fillRect(2, 3, 7, 8, palette.skin);
+      fillRect(1, 4, 1, 6, palette.skin);
+      fillRect(8, 4, 8, 6, palette.skin);
+      fillRect(2, 9, 7, 9, palette.shirt);
+      fillRect(1, 9, 1, 9, palette.shirt);
+      fillRect(8, 9, 8, 9, palette.shirt);
+
+      const hairStyle = Math.floor(rng() * 3);
+      if (hairStyle === 0) {
+        fillRect(2, 1, 7, 2, palette.hair);
+        fillRect(2, 3, 2, 3, palette.hair);
+        fillRect(7, 3, 7, 3, palette.hair);
+      } else if (hairStyle === 1) {
+        fillRect(1, 1, 8, 2, palette.hair);
+        fillRect(1, 3, 1, 4, palette.hair);
+        fillRect(8, 3, 8, 4, palette.hair);
+        fillRect(4, 3, 5, 3, palette.hair);
+      } else {
+        fillRect(2, 1, 7, 1, palette.hair);
+        fillRect(2, 2, 2, 4, palette.hair);
+        fillRect(7, 2, 7, 4, palette.hair);
+        fillRect(3, 2, 6, 2, palette.hair);
+      }
+
+      const eyeStyle = Math.floor(rng() * 3);
+      const eyeY = 5;
+      if (eyeStyle === 0) {
+        px(3, eyeY, palette.eye);
+        px(6, eyeY, palette.eye);
+      } else if (eyeStyle === 1) {
+        px(3, eyeY, '#252525');
+        px(4, eyeY, '#252525');
+        px(5, eyeY, '#252525');
+        px(6, eyeY, '#252525');
+      } else {
+        px(3, eyeY, '#ffffff');
+        px(4, eyeY, palette.eye);
+        px(5, eyeY, palette.eye);
+        px(6, eyeY, '#ffffff');
+      }
+
+      px(5, 6, '#754f35');
+      const mouthStyle = Math.floor(rng() * 3);
+      if (mouthStyle === 0) {
+        px(4, 7, '#8a3f3f');
+        px(5, 7, '#8a3f3f');
+      } else if (mouthStyle === 1) {
+        px(4, 7, '#6b2f2f');
+        px(5, 8, '#6b2f2f');
+      } else {
+        px(4, 8, '#5d2b2b');
+        px(5, 8, '#5d2b2b');
+      }
+
+      if (rng() > 0.74) {
+        px(2, 5, '#1d1d1d');
+        px(7, 5, '#1d1d1d');
+      }
+      if (rng() > 0.78) {
+        fillRect(3, 8, 6, 8, '#4f4f4f');
+      }
+
+      const rects = [`<rect width="${size}" height="${size}" fill="${palette.bg}"></rect>`];
+      for (let y = 0; y < size; y += 1) {
+        for (let x = 0; x < size; x += 1) {
+          const color = grid[y][x];
+          if (!color) continue;
+          rects.push(`<rect x="${x}" y="${y}" width="1" height="1" fill="${color}"></rect>`);
+        }
+      }
+      return `<svg viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${rects.join('')}</svg>`;
+    }
+
+    function roleAvatarHtml(roleId, provider) {
+      return `<span class="role-avatar" aria-hidden="true">${generateAvatarSvg(roleId, provider)}</span>`;
+    }
+
+    function statusPill(status) {
+      const text = String(status || 'unknown');
+      if (text === 'passed') return `<span class="pill ok">${text}</span>`;
+      if (['failed_gate', 'failed_system', 'canceled'].includes(text)) return `<span class="pill warn">${text}</span>`;
+      return `<span class="pill">${text}</span>`;
+    }
+
+    function isActiveStatus(status) {
+      return ['running', 'queued', 'waiting_manual'].includes(String(status || ''));
+    }
+
+    function projectGroups() {
+      const map = new Map();
+      for (const task of state.tasks) {
+        const key = normalizeProjectPath(task.project_path || task.workspace_path);
+        let g = map.get(key);
+        if (!g) {
+          g = { key, name: projectName(key), tasks: [], active: 0, passed: 0, failed: 0 };
+          map.set(key, g);
+        }
+        g.tasks.push(task);
+        if (isActiveStatus(task.status)) g.active += 1;
+        if (task.status === 'passed') g.passed += 1;
+        if (['failed_gate', 'failed_system'].includes(task.status)) g.failed += 1;
+      }
+      return Array.from(map.values()).sort((a, b) => {
+        if (b.active !== a.active) return b.active - a.active;
+        if (b.tasks.length !== a.tasks.length) return b.tasks.length - a.tasks.length;
+        return a.name.localeCompare(b.name);
+      });
+    }
+
+    function roleGroups() {
+      const map = new Map();
+      for (const task of state.tasks) {
+        const participants = [task.author_participant, ...(task.reviewer_participants || [])];
+        for (const id of participants) {
+          const pid = String(id || '').trim();
+          if (!pid) continue;
+          let role = map.get(pid);
+          if (!role) {
+            role = { id: pid, provider: parseProvider(pid), tasks: 0, active: 0 };
+            map.set(pid, role);
+          }
+          role.tasks += 1;
+          if (isActiveStatus(task.status)) role.active += 1;
+        }
+      }
+      return Array.from(map.values()).sort((a, b) => {
+        if (b.active !== a.active) return b.active - a.active;
+        if (b.tasks !== a.tasks) return b.tasks - a.tasks;
+        return a.id.localeCompare(b.id);
+      });
+    }
+
+    function tasksInSelectedProject() {
+      const path = state.selectedProject;
+      if (!path) return [...state.tasks];
+      return state.tasks.filter((task) => normalizeProjectPath(task.project_path || task.workspace_path) === path);
+    }
+
+    function ensureSelections() {
+      const projects = projectGroups();
+      if (!projects.length) {
+        state.selectedProject = null;
+        state.selectedTaskId = null;
+        return;
+      }
+
+      if (!state.selectedProject || !projects.some((p) => p.key === state.selectedProject)) {
+        state.selectedProject = projects[0].key;
+      }
+
+      const scoped = tasksInSelectedProject();
+      if (!scoped.length) {
+        state.selectedTaskId = null;
+        return;
+      }
+
+      if (!state.selectedTaskId || !scoped.some((t) => t.task_id === state.selectedTaskId)) {
+        state.selectedTaskId = scoped[0].task_id;
+      }
+    }
+
+    function selectedTask() {
+      if (!state.selectedTaskId) return null;
+      return state.tasks.find((task) => task.task_id === state.selectedTaskId) || null;
+    }
+
+    function renderProjectSelector() {
+      const projects = projectGroups();
+      el.projectSelect.innerHTML = '';
+      if (!projects.length) {
+        const option = document.createElement('option');
+        option.textContent = 'No project';
+        option.value = '';
+        el.projectSelect.appendChild(option);
+        el.projectSelect.disabled = true;
+        return;
+      }
+
+      el.projectSelect.disabled = false;
+      for (const project of projects) {
+        const option = document.createElement('option');
+        option.value = project.key;
+        option.textContent = `${project.name} | tasks=${project.tasks.length} active=${project.active}`;
+        if (project.key === state.selectedProject) {
+          option.selected = true;
+        }
+        el.projectSelect.appendChild(option);
+      }
+    }
+
+    async function loadProjectTree(projectPath, { force = false } = {}) {
+      if (!projectPath) {
+        return null;
+      }
+      if (!force && state.treeByProject.has(projectPath)) {
+        return state.treeByProject.get(projectPath) || null;
+      }
+      const pathParam = encodeURIComponent(projectPath);
+      const data = await api(`/api/workspace-tree?workspace_path=${pathParam}&max_depth=4&max_entries=800`);
+      state.treeByProject.set(projectPath, data);
+      return data;
+    }
+
+    function treeOpenStateFor(projectPath) {
+      const key = normalizeProjectPath(projectPath);
+      if (!state.treeOpenByProject.has(key)) {
+        state.treeOpenByProject.set(key, new Map());
+      }
+      return state.treeOpenByProject.get(key);
+    }
+
+    function buildTreeHierarchy(tree) {
+      const workspace = normalizeProjectPath(tree.workspace_path).replace(/\\/g, '/');
+      const root = {
+        path: workspace,
+        kind: 'dir',
+        depth: -1,
+        name: projectName(workspace),
+        children: [],
+      };
+      const stack = [root];
+      for (const raw of tree.nodes || []) {
+        const path = normalizeProjectPath(raw.path).replace(/\\/g, '/');
+        if (!path) continue;
+        const depth = Math.max(0, Number(raw.depth || 0));
+        const kind = raw.kind === 'dir' ? 'dir' : 'file';
+        if (depth === 0 && path === workspace) {
+          continue;
+        }
+        const node = {
+          path,
+          kind,
+          depth,
+          name: treeNodeLabel(path),
+          children: [],
+        };
+        while (stack.length > depth + 1) {
+          stack.pop();
+        }
+        const parent = stack[stack.length - 1] || root;
+        parent.children.push(node);
+        if (kind === 'dir') {
+          stack.push(node);
+        }
+      }
+      return root.children;
+    }
+
+    function renderTreeBranch(nodes, depth, dirState) {
+      const branch = document.createElement('ul');
+      branch.className = depth > 0 ? 'tree-branch nested' : 'tree-branch';
+      for (const node of nodes) {
+        const item = document.createElement('li');
+        item.className = `tree-item ${node.kind}`;
+        if (node.kind === 'dir') {
+          const details = document.createElement('details');
+          details.className = 'tree-folder';
+          details.dataset.path = node.path;
+          details.open = dirState.has(node.path) ? !!dirState.get(node.path) : depth < 1;
+          details.addEventListener('toggle', () => {
+            dirState.set(node.path, details.open);
+          });
+
+          const summary = document.createElement('summary');
+          summary.className = 'tree-entry dir';
+          summary.title = node.path;
+
+          const caret = document.createElement('span');
+          caret.className = 'tree-caret';
+          caret.textContent = '>';
+
+          const icon = document.createElement('span');
+          icon.className = 'tree-icon';
+          icon.textContent = 'D';
+
+          const name = document.createElement('span');
+          name.className = 'tree-name';
+          name.textContent = node.name;
+
+          summary.appendChild(caret);
+          summary.appendChild(icon);
+          summary.appendChild(name);
+          details.appendChild(summary);
+
+          if (node.children.length) {
+            details.appendChild(renderTreeBranch(node.children, depth + 1, dirState));
+          } else {
+            const empty = document.createElement('div');
+            empty.className = 'tree-leaf-empty';
+            empty.textContent = '(empty)';
+            details.appendChild(empty);
+          }
+          item.appendChild(details);
+        } else {
+          const entry = document.createElement('div');
+          entry.className = 'tree-entry file';
+          entry.title = node.path;
+
+          const pad = document.createElement('span');
+          pad.className = 'tree-pad';
+          pad.textContent = ' ';
+
+          const icon = document.createElement('span');
+          icon.className = 'tree-icon';
+          icon.textContent = 'F';
+
+          const name = document.createElement('span');
+          name.className = 'tree-name';
+          name.textContent = node.name;
+
+          entry.appendChild(pad);
+          entry.appendChild(icon);
+          entry.appendChild(name);
+          item.appendChild(entry);
+        }
+        branch.appendChild(item);
+      }
+      return branch;
+    }
+
+    function setTreeExpansion(open) {
+      const project = normalizeProjectPath(state.selectedProject);
+      const dirState = treeOpenStateFor(project);
+      const folders = el.projectTree.querySelectorAll('details.tree-folder');
+      folders.forEach((folder) => {
+        folder.open = open;
+        const path = folder.dataset.path;
+        if (path) {
+          dirState.set(path, open);
+        }
+      });
+    }
+
+    function renderProjectTree(tree) {
+      el.projectTree.innerHTML = '';
+      if (!tree || !Array.isArray(tree.nodes)) {
+        el.projectTreeMeta.textContent = 'No project tree available.';
+        el.projectTree.innerHTML = '<div class="tree-empty">Select a project to load structure.</div>';
+        if (el.expandTreeBtn) el.expandTreeBtn.disabled = true;
+        if (el.collapseTreeBtn) el.collapseTreeBtn.disabled = true;
+        return;
+      }
+
+      const extra = tree.truncated ? ' (truncated)' : '';
+      el.projectTreeMeta.textContent = `root=${tree.workspace_path} | entries=${tree.total_entries}${extra}`;
+      const hierarchy = buildTreeHierarchy(tree);
+      if (!hierarchy.length) {
+        el.projectTree.innerHTML = '<div class="tree-empty">Project is empty.</div>';
+        if (el.expandTreeBtn) el.expandTreeBtn.disabled = true;
+        if (el.collapseTreeBtn) el.collapseTreeBtn.disabled = true;
+        return;
+      }
+      const dirState = treeOpenStateFor(tree.workspace_path);
+      el.projectTree.appendChild(renderTreeBranch(hierarchy, 0, dirState));
+      if (el.expandTreeBtn) el.expandTreeBtn.disabled = false;
+      if (el.collapseTreeBtn) el.collapseTreeBtn.disabled = false;
+    }
+
+    function renderRoles() {
+      const roles = roleGroups();
+      el.roleList.innerHTML = '';
+
+      const allBtn = document.createElement('button');
+      if (state.selectedRole === 'all') allBtn.classList.add('active');
+      allBtn.dataset.role = 'all';
+      allBtn.innerHTML = `
+        <div class="item-top">
+          <span class="role-main">
+            ${roleAvatarHtml('all-roles', 'system')}
+            <span class="item-name">all roles</span>
+          </span>
+          <span class="pill">${roles.length}</span>
+        </div>
+        <div class="item-meta">Show full conversation stream.</div>
+      `;
+      el.roleList.appendChild(allBtn);
+
+      for (const role of roles) {
+        const button = document.createElement('button');
+        if (state.selectedRole === role.id) button.classList.add('active');
+        button.dataset.role = role.id;
+        button.innerHTML = `
+          <div class="item-top">
+            <span class="role-main">
+              ${roleAvatarHtml(role.id, role.provider)}
+              <span class="item-name">${escapeHtml(role.id)}</span>
+            </span>
+            <span class="pill">${escapeHtml(role.provider)}</span>
+          </div>
+          <div class="item-meta">
+            <span>tasks: ${role.tasks}</span>
+            <span>active: ${role.active}</span>
+          </div>
+        `;
+        el.roleList.appendChild(button);
+      }
+    }
+
+    function renderTaskSelect() {
+      const scoped = tasksInSelectedProject();
+      el.taskSelect.innerHTML = '';
+      if (!scoped.length) {
+        const option = document.createElement('option');
+        option.textContent = 'No task in selected project';
+        option.value = '';
+        el.taskSelect.appendChild(option);
+        el.taskSelect.disabled = true;
+        return;
+      }
+
+      el.taskSelect.disabled = false;
+      for (const task of scoped) {
+        const option = document.createElement('option');
+        option.value = task.task_id;
+        option.textContent = `${task.task_id} | ${task.title}`;
+        if (task.task_id === state.selectedTaskId) {
+          option.selected = true;
+        }
+        el.taskSelect.appendChild(option);
+      }
+    }
+
+    function renderTaskSnapshot() {
+      const task = selectedTask();
+      if (!task) {
+        el.taskSnapshot.innerHTML = '<div class="empty">No task selected.</div>';
+        if (el.approveQueueBtn) el.approveQueueBtn.disabled = true;
+        if (el.approveStartBtn) el.approveStartBtn.disabled = true;
+        if (el.rejectBtn) el.rejectBtn.disabled = true;
+        return;
+      }
+
+      const project = normalizeProjectPath(task.workspace_path);
+      const reviewerCount = (task.reviewer_participants || []).length;
+      el.taskSnapshot.innerHTML = '';
+
+      const boxes = [
+        { label: 'Task', value: `${task.task_id} (${task.rounds_completed}/${task.max_rounds})` },
+        { label: 'Status', value: task.status, html: statusPill(task.status) },
+        { label: 'Project', value: task.project_path || project },
+        { label: 'Workspace', value: project },
+        { label: 'Sandbox', value: String(task.sandbox_mode ? 1 : 0) },
+        { label: 'SandboxPath', value: task.sandbox_workspace_path || 'n/a' },
+        { label: 'SelfLoop', value: String(task.self_loop_mode ?? 1) },
+        { label: 'Evolution', value: String(task.evolution_level ?? 0) },
+        { label: 'EvolveUntil', value: task.evolve_until || 'n/a' },
+        { label: 'AutoMerge', value: String(task.auto_merge !== false ? 1 : 0) },
+        { label: 'MergeTarget', value: task.merge_target_path || 'in-place' },
+        { label: 'Author', value: task.author_participant },
+        { label: 'Reviewers', value: String(reviewerCount) },
+        { label: 'Last Reason', value: task.last_gate_reason || 'n/a' },
+      ];
+
+      for (const item of boxes) {
+        const div = document.createElement('div');
+        div.className = 'status-box';
+        div.innerHTML = `<strong>${escapeHtml(item.label)}</strong>${item.html || escapeHtml(item.value)}`;
+        el.taskSnapshot.appendChild(div);
+      }
+
+      const waitingManual = String(task.status) === 'waiting_manual';
+      if (el.approveQueueBtn) el.approveQueueBtn.disabled = !waitingManual;
+      if (el.approveStartBtn) el.approveStartBtn.disabled = !waitingManual;
+      if (el.rejectBtn) el.rejectBtn.disabled = !waitingManual;
+    }
+
+    function eventActor(event, task) {
+      const payload = event.payload || {};
+      const type = String(event.type || '');
+      if (type === 'review' || type === 'proposal_review') {
+        return String(payload.participant || 'reviewer');
+      }
+      if (type === 'discussion' || type === 'implementation') {
+        if (task && task.author_participant) return task.author_participant;
+        if (payload.provider) return String(payload.provider);
+        return 'author';
+      }
+      return 'system';
+    }
+
+    function eventText(event) {
+      const payload = event.payload || {};
+      if (payload.output) return String(payload.output);
+      if (event.type === 'author_confirmation_required' && payload.summary) return String(payload.summary);
+      if (event.type === 'author_decision' && payload.decision) {
+        return `decision=${payload.decision}${payload.note ? ` | note=${payload.note}` : ''}`;
+      }
+      if (event.type === 'verification') return `tests_ok=${payload.tests_ok} lint_ok=${payload.lint_ok}`;
+      if (payload.reason) return String(payload.reason);
+      if (payload.status) return `status=${payload.status}`;
+      const keys = Object.keys(payload);
+      if (!keys.length) return '';
+      try {
+        return JSON.stringify(payload, null, 2);
+      } catch {
+        return String(payload);
+      }
+    }
+
+    function eventClass(event) {
+      const t = String(event.type || '');
+      if (t === 'discussion' || t === 'implementation') return 'agent';
+      if (t === 'review' || t === 'proposal_review') return 'review';
+      if (t.includes('failed') || t === 'system_failure' || t === 'force_failed') return 'system bad';
+      return 'system';
+    }
+
+    function renderDialogue(events) {
+      const task = selectedTask();
+      const stream = Array.isArray(events) ? events : [];
+      const filtered = stream.filter((event) => {
+        if (state.selectedRole === 'all') return true;
+        return eventActor(event, task) === state.selectedRole;
+      });
+
+      el.dialogue.innerHTML = '';
+      if (!task) {
+        el.dialogue.innerHTML = '<div class="empty">Select a project/task to view dialogue.</div>';
+        return;
+      }
+      if (!filtered.length) {
+        el.dialogue.innerHTML = '<div class="empty">No dialogue for this role scope yet.</div>';
+        return;
+      }
+
+      for (const event of filtered) {
+        const item = document.createElement('article');
+        item.className = `message ${eventClass(event)}`;
+
+        const head = document.createElement('div');
+        head.className = 'msg-head';
+
+        const actor = document.createElement('div');
+        actor.className = 'msg-actor';
+        actor.textContent = eventActor(event, task);
+
+        const meta = document.createElement('div');
+        meta.className = 'msg-kind';
+        const roundText = event.round ? `round ${event.round}` : 'task';
+        meta.textContent = `${event.type} | ${roundText}`;
+
+        const body = document.createElement('pre');
+        body.className = 'msg-text';
+        const text = eventText(event) || '(no payload text)';
+        body.textContent = text;
+
+        head.appendChild(actor);
+        head.appendChild(meta);
+        item.appendChild(head);
+        item.appendChild(body);
+        el.dialogue.appendChild(item);
+      }
+    }
+
+    function renderKpiStrip(stats) {
+      if (!el.kpiStrip) return;
+      if (!stats) {
+        el.kpiStrip.innerHTML = '';
+        return;
+      }
+
+      const kpis = [
+        { label: 'Total Tasks', value: String(Number(stats.total_tasks || 0)) },
+        { label: 'Active', value: String(Number(stats.active_tasks || 0)) },
+        { label: 'Pass 50', value: `${(Number(stats.pass_rate_50 || 0) * 100).toFixed(1)}%` },
+        { label: 'Gate Fail 50', value: `${(Number(stats.failed_gate_rate_50 || 0) * 100).toFixed(1)}%` },
+        { label: 'System Fail 50', value: `${(Number(stats.failed_system_rate_50 || 0) * 100).toFixed(1)}%` },
+        { label: 'Avg Sec 50', value: Number(stats.mean_task_duration_seconds_50 || 0).toFixed(1) },
+      ];
+
+      el.kpiStrip.innerHTML = '';
+      for (const item of kpis) {
+        const card = document.createElement('article');
+        card.className = 'kpi-card';
+        card.innerHTML = `
+          <div class="kpi-label">${escapeHtml(item.label)}</div>
+          <div class="kpi-value">${escapeHtml(item.value)}</div>
+        `;
+        el.kpiStrip.appendChild(card);
+      }
+    }
+
+    function renderStats() {
+      const stats = state.stats;
+      if (!stats) {
+        el.statsLine.textContent = 'Stats unavailable.';
+        renderKpiStrip(null);
+        return;
+      }
+      el.statsLine.textContent =
+        `Total=${stats.total_tasks} | Active=${stats.active_tasks} | ` +
+        `Status=${JSON.stringify(stats.status_counts)} | ` +
+        `Reasons=${JSON.stringify(stats.reason_bucket_counts)} | ` +
+        `Providers=${JSON.stringify(stats.provider_error_counts)} | ` +
+        `Pass50=${(Number(stats.pass_rate_50 || 0) * 100).toFixed(1)}% | ` +
+        `FG50=${(Number(stats.failed_gate_rate_50 || 0) * 100).toFixed(1)}% | ` +
+        `FS50=${(Number(stats.failed_system_rate_50 || 0) * 100).toFixed(1)}% | ` +
+        `AvgSec50=${Number(stats.mean_task_duration_seconds_50 || 0).toFixed(1)}`;
+      renderKpiStrip(stats);
+    }
+
+    async function loadEvents(taskId, { force = false } = {}) {
+      if (!taskId) return [];
+      if (!force && state.eventsByTask.has(taskId)) {
+        return state.eventsByTask.get(taskId) || [];
+      }
+      const events = await api(`/api/tasks/${taskId}/events`);
+      state.eventsByTask.set(taskId, events);
+      return events;
+    }
+
+    async function refreshConversation({ force = false } = {}) {
+      const task = selectedTask();
+      if (!task) {
+        renderDialogue([]);
+        return;
+      }
+      try {
+        const events = await loadEvents(task.task_id, { force });
+        renderDialogue(events);
+      } catch (err) {
+        renderDialogue([]);
+        el.actionStatus.textContent = `Conversation load failed: ${String(err)}`;
+      }
+    }
+
+    async function loadData({ forceEvents = false } = {}) {
+      const [tasksResult, statsResult] = await Promise.allSettled([
+        api('/api/tasks?limit=200'),
+        api('/api/stats'),
+      ]);
+
+      let updated = false;
+      if (tasksResult.status === 'fulfilled') {
+        state.tasks = Array.isArray(tasksResult.value) ? tasksResult.value : [];
+        updated = true;
+      }
+      if (statsResult.status === 'fulfilled') {
+        state.stats = statsResult.value || null;
+        updated = true;
+      }
+      if (!updated) {
+        const reason = tasksResult.status === 'rejected'
+          ? String(tasksResult.reason || '')
+          : String(statsResult.reason || '');
+        throw new Error(`all data requests failed: ${reason}`);
+      }
+
+      ensureSelections();
+      renderStats();
+      renderProjectSelector();
+      renderRoles();
+      renderTaskSelect();
+      renderTaskSnapshot();
+      try {
+        const tree = await loadProjectTree(state.selectedProject, { force: forceEvents });
+        renderProjectTree(tree);
+      } catch (err) {
+        renderProjectTree(null);
+        el.actionStatus.textContent = `Project tree load failed: ${String(err)}`;
+      }
+      await refreshConversation({ force: forceEvents });
+    }
+
+    async function startSelectedTask() {
+      const task = selectedTask();
+      if (!task) return;
+      try {
+        await api(`/api/tasks/${task.task_id}/start`, {
+          method: 'POST',
+          body: JSON.stringify({ background: true }),
+        });
+        state.eventsByTask.delete(task.task_id);
+        el.actionStatus.textContent = `Started ${task.task_id}`;
+        await loadData({ forceEvents: true });
+      } catch (err) {
+        el.actionStatus.textContent = `Start failed: ${String(err)}`;
+      }
+    }
+
+    async function cancelSelectedTask() {
+      const task = selectedTask();
+      if (!task) return;
+      try {
+        await api(`/api/tasks/${task.task_id}/cancel`, { method: 'POST' });
+        state.eventsByTask.delete(task.task_id);
+        el.actionStatus.textContent = `Cancel requested for ${task.task_id}`;
+        await loadData({ forceEvents: true });
+      } catch (err) {
+        el.actionStatus.textContent = `Cancel failed: ${String(err)}`;
+      }
+    }
+
+    async function forceFailSelectedTask() {
+      const task = selectedTask();
+      if (!task) return;
+      const reason = String(el.forceReason.value || '').trim() || 'watchdog_timeout: operator forced fail';
+      try {
+        await api(`/api/tasks/${task.task_id}/force-fail`, {
+          method: 'POST',
+          body: JSON.stringify({ reason }),
+        });
+        state.eventsByTask.delete(task.task_id);
+        el.actionStatus.textContent = `Force-failed ${task.task_id}`;
+        await loadData({ forceEvents: true });
+      } catch (err) {
+        el.actionStatus.textContent = `Force-fail failed: ${String(err)}`;
+      }
+    }
+
+    async function submitAuthorDecision(approve, autoStart = false) {
+      const task = selectedTask();
+      if (!task) return;
+      try {
+        await api(`/api/tasks/${task.task_id}/author-decision`, {
+          method: 'POST',
+          body: JSON.stringify({
+            approve: !!approve,
+            note: approve ? 'approved from operator console' : 'rejected from operator console',
+            auto_start: !!autoStart,
+          }),
+        });
+        state.eventsByTask.delete(task.task_id);
+        el.actionStatus.textContent = approve
+          ? `Approved ${task.task_id}${autoStart ? ' and requested start' : ''}`
+          : `Rejected ${task.task_id}`;
+        await loadData({ forceEvents: true });
+      } catch (err) {
+        el.actionStatus.textContent = `Author decision failed: ${String(err)}`;
+      }
+    }
+
+    async function createTask(autoStart) {
+      const evolveUntilRaw = String(document.getElementById('evolveUntil').value || '').trim();
+      const sandboxPathRaw = String(document.getElementById('sandboxWorkspacePath').value || '').trim();
+      const mergeTargetRaw = String(document.getElementById('mergeTargetPath').value || '').trim();
+      const payload = {
+        title: document.getElementById('title').value,
+        description: document.getElementById('description').value,
+        author_participant: document.getElementById('author').value,
+        reviewer_participants: document.getElementById('reviewers').value.split(',').map((v) => v.trim()).filter(Boolean),
+        evolution_level: Number(document.getElementById('evolutionLevel').value || 0),
+        evolve_until: (evolveUntilRaw || null),
+        sandbox_mode: Number(document.getElementById('sandboxMode').value || 1) === 1,
+        sandbox_workspace_path: (sandboxPathRaw || null),
+        self_loop_mode: Number(document.getElementById('selfLoopMode').value || 0),
+        auto_merge: Number(document.getElementById('autoMerge').value || 1) === 1,
+        merge_target_path: (mergeTargetRaw || null),
+        workspace_path: document.getElementById('workspacePath').value,
+        auto_start: !!autoStart,
+      };
+
+      try {
+        const task = await api('/api/tasks', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        state.selectedProject = normalizeProjectPath(task.workspace_path);
+        state.selectedTaskId = task.task_id;
+        state.eventsByTask.delete(task.task_id);
+        state.treeByProject.delete(state.selectedProject);
+        el.createStatus.textContent = `Created ${task.task_id}`;
+        await loadData({ forceEvents: true });
+      } catch (err) {
+        el.createStatus.textContent = `Create failed: ${String(err)}`;
+      }
+    }
+
+    function setPolling(enabled) {
+      state.polling = enabled;
+      el.pollBtn.textContent = `Auto Poll: ${enabled ? 'ON' : 'OFF'}`;
+      if (state.timer) {
+        clearInterval(state.timer);
+        state.timer = null;
+      }
+      if (enabled) {
+        state.timer = setInterval(async () => {
+          try {
+            await loadData();
+          } catch {
+          }
+        }, 3500);
+      }
+    }
+
+    function computeDefaultEvolveUntil() {
+      const now = new Date();
+      const target = new Date(now);
+      target.setHours(6, 0, 0, 0);
+      if (now >= target) {
+        target.setDate(target.getDate() + 1);
+      }
+      const yyyy = target.getFullYear();
+      const mm = String(target.getMonth() + 1).padStart(2, '0');
+      const dd = String(target.getDate()).padStart(2, '0');
+      const hh = String(target.getHours()).padStart(2, '0');
+      const mi = String(target.getMinutes()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', async () => {
+      try {
+        await loadData({ forceEvents: true });
+      } catch (err) {
+        el.actionStatus.textContent = `Refresh failed: ${String(err)}`;
+      }
+    });
+    document.getElementById('reloadEventsBtn').addEventListener('click', async () => {
+      await refreshConversation({ force: true });
+    });
+    document.getElementById('pollBtn').addEventListener('click', () => setPolling(!state.polling));
+    document.getElementById('startBtn').addEventListener('click', () => startSelectedTask());
+    document.getElementById('approveQueueBtn').addEventListener('click', () => submitAuthorDecision(true, false));
+    document.getElementById('approveStartBtn').addEventListener('click', () => submitAuthorDecision(true, true));
+    document.getElementById('rejectBtn').addEventListener('click', () => submitAuthorDecision(false, false));
+    document.getElementById('cancelBtn').addEventListener('click', () => cancelSelectedTask());
+    document.getElementById('forceFailBtn').addEventListener('click', () => forceFailSelectedTask());
+    document.getElementById('createBtn').addEventListener('click', () => createTask(false));
+    document.getElementById('createAndStartBtn').addEventListener('click', () => createTask(true));
+
+    const evolveUntilInput = document.getElementById('evolveUntil');
+    if (evolveUntilInput && !String(evolveUntilInput.value || '').trim()) {
+      evolveUntilInput.value = computeDefaultEvolveUntil();
+    }
+
+    initThemeSelector();
+
+    el.taskSelect.addEventListener('change', async () => {
+      state.selectedTaskId = el.taskSelect.value || null;
+      renderTaskSnapshot();
+      await refreshConversation({ force: true });
+    });
+
+    el.projectSelect.addEventListener('change', async () => {
+      const project = el.projectSelect.value || null;
+      state.selectedProject = project;
+      state.selectedTaskId = null;
+      ensureSelections();
+      renderProjectSelector();
+      renderTaskSelect();
+      renderTaskSnapshot();
+      try {
+        const tree = await loadProjectTree(state.selectedProject, { force: true });
+        renderProjectTree(tree);
+      } catch (err) {
+        renderProjectTree(null);
+        el.actionStatus.textContent = `Project tree load failed: ${String(err)}`;
+      }
+      await refreshConversation({ force: true });
+    });
+
+    el.roleList.addEventListener('click', async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const button = target.closest('button[data-role]');
+      if (!button) return;
+      state.selectedRole = button.getAttribute('data-role') || 'all';
+      renderRoles();
+      await refreshConversation();
+    });
+
+    loadData({ forceEvents: true }).catch((err) => {
+      setApiHealth(false, String(err));
+      el.statsLine.textContent = `Failed to load dashboard: ${String(err)}`;
+    });
+  </script>
+</body>
+</html>

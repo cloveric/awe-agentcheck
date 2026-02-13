@@ -1,0 +1,883 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+import os
+from pathlib import Path
+import re
+import shutil
+
+from awe_agentcheck.adapters import ParticipantRunner
+from awe_agentcheck.domain.gate import evaluate_medium_gate
+from awe_agentcheck.domain.models import ReviewVerdict, TaskStatus
+from awe_agentcheck.fusion import AutoFusionManager
+from awe_agentcheck.participants import parse_participant_id
+from awe_agentcheck.repository import TaskRepository
+from awe_agentcheck.storage.artifacts import ArtifactStore
+from awe_agentcheck.workflow import RunConfig, ShellCommandExecutor, WorkflowEngine
+
+
+@dataclass(frozen=True)
+class CreateTaskInput:
+    title: str
+    description: str
+    author_participant: str
+    reviewer_participants: list[str]
+    evolution_level: int = 0
+    evolve_until: str | None = None
+    sandbox_mode: bool = True
+    sandbox_workspace_path: str | None = None
+    self_loop_mode: int = 0
+    auto_merge: bool = True
+    merge_target_path: str | None = None
+    workspace_path: str = str(Path.cwd())
+    max_rounds: int = 3
+    test_command: str = 'py -m pytest -q'
+    lint_command: str = 'py -m ruff check .'
+
+
+@dataclass(frozen=True)
+class GateInput:
+    tests_ok: bool
+    lint_ok: bool
+    reviewer_verdicts: list[ReviewVerdict]
+
+
+@dataclass(frozen=True)
+class TaskView:
+    task_id: str
+    title: str
+    description: str
+    author_participant: str
+    reviewer_participants: list[str]
+    evolution_level: int
+    evolve_until: str | None
+    sandbox_mode: bool
+    sandbox_workspace_path: str | None
+    self_loop_mode: int
+    project_path: str
+    auto_merge: bool
+    merge_target_path: str | None
+    workspace_path: str
+    status: TaskStatus
+    last_gate_reason: str | None
+    max_rounds: int
+    test_command: str
+    lint_command: str
+    rounds_completed: int
+    cancel_requested: bool
+
+
+@dataclass(frozen=True)
+class StatsView:
+    total_tasks: int
+    status_counts: dict[str, int]
+    active_tasks: int
+    reason_bucket_counts: dict[str, int]
+    provider_error_counts: dict[str, int]
+    recent_terminal_total: int
+    pass_rate_50: float
+    failed_gate_rate_50: float
+    failed_system_rate_50: float
+    mean_task_duration_seconds_50: float
+
+
+_PROVIDER_RE = re.compile(r'provider=([a-zA-Z0-9_-]+)')
+_TERMINAL_STATUSES = {
+    TaskStatus.PASSED.value,
+    TaskStatus.FAILED_GATE.value,
+    TaskStatus.FAILED_SYSTEM.value,
+    TaskStatus.CANCELED.value,
+}
+
+
+def _reason_bucket(reason: str | None) -> str | None:
+    text = (reason or '').strip().lower()
+    if not text:
+        return None
+    if text in {'passed', 'canceled'}:
+        return None
+    if 'watchdog_timeout' in text:
+        return 'watchdog_timeout'
+    if 'provider_limit' in text:
+        return 'provider_limit'
+    if 'command_timeout' in text:
+        return 'command_timeout'
+    if 'command_not_found' in text:
+        return 'command_not_found'
+    if 'review_blocker' in text:
+        return 'review_blocker'
+    if 'review_unknown' in text:
+        return 'review_unknown'
+    if 'review_missing' in text:
+        return 'review_missing'
+    if 'tests_failed' in text:
+        return 'tests_failed'
+    if 'lint_failed' in text:
+        return 'lint_failed'
+    if 'concurrency_limit' in text:
+        return 'concurrency_limit'
+    if 'author_confirmation_required' in text:
+        return 'author_confirmation_required'
+    if 'author_rejected' in text:
+        return 'author_rejected'
+    if 'workflow_error' in text:
+        return 'workflow_error_other'
+    return 'other'
+
+
+class OrchestratorService:
+    def __init__(
+        self,
+        *,
+        repository: TaskRepository,
+        artifact_store: ArtifactStore,
+        workflow_engine: WorkflowEngine | None = None,
+        max_concurrent_running_tasks: int = 1,
+    ):
+        self.repository = repository
+        self.artifact_store = artifact_store
+        self.max_concurrent_running_tasks = max(0, int(max_concurrent_running_tasks))
+        self.fusion_manager = AutoFusionManager(snapshot_root=self.artifact_store.root / 'snapshots')
+        self.workflow_engine = workflow_engine or WorkflowEngine(
+            runner=ParticipantRunner(),
+            command_executor=ShellCommandExecutor(),
+        )
+
+    def create_task(self, payload: CreateTaskInput) -> TaskView:
+        project_root = Path(payload.workspace_path).resolve()
+        if not project_root.exists() or not project_root.is_dir():
+            raise ValueError(f'workspace_path must be an existing directory: {payload.workspace_path}')
+        evolution_level = max(0, min(2, int(payload.evolution_level)))
+        evolve_until = self._normalize_evolve_until(payload.evolve_until)
+        sandbox_mode = bool(payload.sandbox_mode)
+        self_loop_mode = max(0, min(1, int(payload.self_loop_mode)))
+        sandbox_workspace_path = self._normalize_merge_target_path(payload.sandbox_workspace_path)
+        if sandbox_mode:
+            sandbox_workspace_path = sandbox_workspace_path or self._default_sandbox_path(project_root)
+            sandbox_root = Path(sandbox_workspace_path)
+            if sandbox_root.exists() and not sandbox_root.is_dir():
+                raise ValueError(f'sandbox_workspace_path must be a directory: {sandbox_workspace_path}')
+            sandbox_root.mkdir(parents=True, exist_ok=True)
+            self._bootstrap_sandbox_workspace(project_root, sandbox_root)
+            workspace_root = sandbox_root
+        else:
+            sandbox_workspace_path = None
+            workspace_root = project_root
+
+        auto_merge = bool(payload.auto_merge)
+        merge_target_path = self._normalize_merge_target_path(payload.merge_target_path)
+        if auto_merge and sandbox_mode and not merge_target_path:
+            merge_target_path = str(project_root)
+        if auto_merge and merge_target_path:
+            merge_target = Path(merge_target_path)
+            if not merge_target.exists() or not merge_target.is_dir():
+                raise ValueError(f'merge_target_path must be an existing directory: {merge_target_path}')
+
+        row = self.repository.create_task(
+            title=payload.title,
+            description=payload.description,
+            author_participant=payload.author_participant,
+            reviewer_participants=payload.reviewer_participants,
+            evolution_level=evolution_level,
+            evolve_until=evolve_until,
+            sandbox_mode=sandbox_mode,
+            sandbox_workspace_path=sandbox_workspace_path,
+            project_path=str(project_root),
+            self_loop_mode=self_loop_mode,
+            auto_merge=auto_merge,
+            merge_target_path=merge_target_path,
+            workspace_path=str(workspace_root),
+            max_rounds=payload.max_rounds,
+            test_command=payload.test_command,
+            lint_command=payload.lint_command,
+        )
+        self.artifact_store.create_task_workspace(row['task_id'])
+        self.artifact_store.update_state(
+            row['task_id'],
+            {
+                'status': row['status'],
+                'rounds_completed': row.get('rounds_completed', 0),
+                'cancel_requested': row.get('cancel_requested', False),
+                'sandbox_mode': bool(row.get('sandbox_mode', False)),
+                'sandbox_workspace_path': row.get('sandbox_workspace_path'),
+                'self_loop_mode': int(row.get('self_loop_mode', 1)),
+                'project_path': row.get('project_path'),
+                'auto_merge': bool(row.get('auto_merge', True)),
+                'merge_target_path': row.get('merge_target_path'),
+            },
+        )
+        return self._to_view(row)
+
+    def list_tasks(self, *, limit: int = 100) -> list[TaskView]:
+        rows = self.repository.list_tasks(limit=limit)
+        return [self._to_view(row) for row in rows]
+
+    def get_task(self, task_id: str) -> TaskView | None:
+        row = self.repository.get_task(task_id)
+        if row is None:
+            return None
+        return self._to_view(row)
+
+    def get_stats(self) -> StatsView:
+        rows = self.repository.list_tasks(limit=10_000)
+        counts: dict[str, int] = {}
+        reason_bucket_counts: dict[str, int] = {}
+        provider_error_counts: dict[str, int] = {}
+        for row in rows:
+            status = str(row.get('status', 'unknown'))
+            counts[status] = counts.get(status, 0) + 1
+
+            reason = row.get('last_gate_reason')
+            bucket = _reason_bucket(reason)
+            if bucket:
+                reason_bucket_counts[bucket] = reason_bucket_counts.get(bucket, 0) + 1
+
+            provider_match = _PROVIDER_RE.search(str(reason or ''))
+            if provider_match:
+                provider = provider_match.group(1).strip().lower()
+                provider_error_counts[provider] = provider_error_counts.get(provider, 0) + 1
+
+        active = counts.get(TaskStatus.RUNNING.value, 0) + counts.get(TaskStatus.QUEUED.value, 0)
+        recent_rows = rows[:50]
+        recent_terminal = [r for r in recent_rows if str(r.get('status', '')) in _TERMINAL_STATUSES]
+        recent_terminal_total = len(recent_terminal)
+        if recent_terminal_total > 0:
+            pass_rate_50 = sum(1 for r in recent_terminal if str(r.get('status')) == TaskStatus.PASSED.value) / recent_terminal_total
+            failed_gate_rate_50 = sum(1 for r in recent_terminal if str(r.get('status')) == TaskStatus.FAILED_GATE.value) / recent_terminal_total
+            failed_system_rate_50 = sum(1 for r in recent_terminal if str(r.get('status')) == TaskStatus.FAILED_SYSTEM.value) / recent_terminal_total
+        else:
+            pass_rate_50 = 0.0
+            failed_gate_rate_50 = 0.0
+            failed_system_rate_50 = 0.0
+
+        durations: list[float] = []
+        for row in recent_terminal:
+            created = self._parse_iso_datetime(row.get('created_at'))
+            updated = self._parse_iso_datetime(row.get('updated_at'))
+            if created is None or updated is None:
+                continue
+            delta = (updated - created).total_seconds()
+            if delta >= 0:
+                durations.append(delta)
+        mean_task_duration_seconds_50 = (sum(durations) / len(durations)) if durations else 0.0
+
+        return StatsView(
+            total_tasks=len(rows),
+            status_counts=counts,
+            active_tasks=active,
+            reason_bucket_counts=reason_bucket_counts,
+            provider_error_counts=provider_error_counts,
+            recent_terminal_total=recent_terminal_total,
+            pass_rate_50=pass_rate_50,
+            failed_gate_rate_50=failed_gate_rate_50,
+            failed_system_rate_50=failed_system_rate_50,
+            mean_task_duration_seconds_50=mean_task_duration_seconds_50,
+        )
+
+    def list_events(self, task_id: str) -> list[dict]:
+        return self.repository.list_events(task_id)
+
+    def request_cancel(self, task_id: str) -> TaskView:
+        row = self.repository.set_cancel_requested(task_id, requested=True)
+        self.repository.append_event(
+            task_id,
+            event_type='cancel_requested',
+            payload={'requested': True},
+            round_number=None,
+        )
+        self.artifact_store.update_state(task_id, {'cancel_requested': True})
+        return self._to_view(row)
+
+    def mark_failed_system(self, task_id: str, *, reason: str) -> TaskView:
+        row = self.repository.update_task_status(
+            task_id,
+            status=TaskStatus.FAILED_SYSTEM.value,
+            reason=reason,
+            rounds_completed=None,
+        )
+        self.repository.append_event(
+            task_id,
+            event_type='system_failure',
+            payload={'reason': reason},
+            round_number=None,
+        )
+        self.artifact_store.update_state(
+            task_id,
+            {'status': TaskStatus.FAILED_SYSTEM.value, 'last_gate_reason': reason},
+        )
+        self.artifact_store.write_final_report(task_id, f'status=failed_system\\nreason={reason}')
+        return self._to_view(row)
+
+    def force_fail_task(self, task_id: str, *, reason: str) -> TaskView:
+        row = self.repository.get_task(task_id)
+        if row is None:
+            raise KeyError(task_id)
+        if row['status'] in {TaskStatus.PASSED.value, TaskStatus.CANCELED.value}:
+            return self._to_view(row)
+
+        row = self.repository.set_cancel_requested(task_id, requested=True)
+        row = self.repository.update_task_status(
+            task_id,
+            status=TaskStatus.FAILED_SYSTEM.value,
+            reason=reason,
+            rounds_completed=row.get('rounds_completed', 0),
+        )
+        self.repository.append_event(
+            task_id,
+            event_type='force_failed',
+            payload={'reason': reason, 'cancel_requested': True},
+            round_number=None,
+        )
+        self.artifact_store.update_state(
+            task_id,
+            {
+                'status': TaskStatus.FAILED_SYSTEM.value,
+                'last_gate_reason': reason,
+                'cancel_requested': True,
+            },
+        )
+        self.artifact_store.write_final_report(task_id, f'status=failed_system\\nreason={reason}')
+        return self._to_view(row)
+
+    def start_task(self, task_id: str) -> TaskView:
+        row = self.repository.get_task(task_id)
+        if row is None:
+            raise KeyError(task_id)
+
+        # Terminal states are treated as idempotent no-op starts.
+        if row['status'] in {TaskStatus.PASSED.value, TaskStatus.CANCELED.value}:
+            return self._to_view(row)
+
+        if row['status'] == TaskStatus.RUNNING.value:
+            return self._to_view(row)
+
+        if row['status'] == TaskStatus.WAITING_MANUAL.value:
+            return self._to_view(row)
+
+        if int(row.get('self_loop_mode', 1)) == 0 and str(row.get('last_gate_reason') or '') != 'author_approved':
+            return self._prepare_author_confirmation(task_id, row)
+
+        if self.max_concurrent_running_tasks > 0:
+            running_now = self._count_running_tasks(exclude_task_id=task_id)
+            if running_now >= self.max_concurrent_running_tasks:
+                deferred = self.repository.update_task_status(
+                    task_id,
+                    status=TaskStatus.QUEUED.value,
+                    reason='concurrency_limit',
+                    rounds_completed=row.get('rounds_completed', 0),
+                )
+                self.repository.append_event(
+                    task_id,
+                    event_type='start_deferred',
+                    payload={
+                        'reason': 'concurrency_limit',
+                        'running_now': running_now,
+                        'limit': self.max_concurrent_running_tasks,
+                    },
+                    round_number=None,
+                )
+                self.artifact_store.update_state(
+                    task_id,
+                    {
+                        'status': TaskStatus.QUEUED.value,
+                        'last_gate_reason': 'concurrency_limit',
+                    },
+                )
+                return self._to_view(deferred)
+
+        row = self.repository.update_task_status(task_id, status=TaskStatus.RUNNING.value, reason=None, rounds_completed=row.get('rounds_completed', 0))
+        self.repository.append_event(task_id, event_type='task_running', payload={'status': 'running'}, round_number=None)
+        self.artifact_store.update_state(task_id, {'status': 'running'})
+
+        def on_event(event: dict) -> None:
+            self.repository.append_event(
+                task_id,
+                event_type=str(event.get('type', 'event')),
+                payload=event,
+                round_number=event.get('round'),
+            )
+            self.artifact_store.append_event(task_id, event)
+
+            event_type = str(event.get('type', ''))
+            content = str(event.get('output', '')).strip()
+            round_no = int(event.get('round', 0) or 0)
+            if event_type in {'discussion', 'implementation', 'review'} and content:
+                role = event_type
+                participant = event.get('participant') or event.get('provider') or role
+                self.artifact_store.append_discussion(
+                    task_id,
+                    role=f'{role}:{participant}',
+                    round_number=max(round_no, 1),
+                    content=content,
+                )
+
+        def should_cancel() -> bool:
+            return self.repository.is_cancel_requested(task_id)
+
+        try:
+            author = parse_participant_id(row['author_participant'])
+            reviewers = [parse_participant_id(v) for v in row['reviewer_participants']]
+            workspace_root = Path(str(row.get('workspace_path') or Path.cwd()))
+            baseline_manifest = self.fusion_manager.build_manifest(workspace_root)
+
+            result = self.workflow_engine.run(
+                RunConfig(
+                    task_id=task_id,
+                    title=row['title'],
+                    description=row['description'],
+                    author=author,
+                    reviewers=reviewers,
+                    evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
+                    evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
+                    cwd=Path(str(row.get('workspace_path') or Path.cwd())),
+                    max_rounds=int(row['max_rounds']),
+                    test_command=row['test_command'],
+                    lint_command=row['lint_command'],
+                ),
+                on_event=on_event,
+                should_cancel=should_cancel,
+            )
+        except Exception as exc:
+            return self.mark_failed_system(task_id, reason=f'workflow_error: {exc}')
+
+        final_status = self._map_run_status(result.status)
+        latest = self.repository.get_task(task_id)
+        if latest is None:
+            raise KeyError(task_id)
+        if str(latest.get('status')) != TaskStatus.RUNNING.value:
+            return self._to_view(latest)
+
+        self.repository.update_task_status(
+            task_id,
+            status=final_status.value,
+            reason=result.gate_reason,
+            rounds_completed=result.rounds,
+        )
+        updated = self.repository.set_cancel_requested(task_id, requested=False)
+
+        self.artifact_store.update_state(
+            task_id,
+            {
+                'status': final_status.value,
+                'last_gate_reason': result.gate_reason,
+                'rounds_completed': result.rounds,
+                'cancel_requested': False,
+            },
+        )
+        self.artifact_store.write_final_report(
+            task_id,
+            f"status={final_status.value}\nrounds={result.rounds}\nreason={result.gate_reason}",
+        )
+
+        if final_status == TaskStatus.PASSED and bool(row.get('auto_merge', True)):
+            try:
+                target_root = self._resolve_merge_target(row)
+                fusion = self.fusion_manager.run(
+                    task_id=task_id,
+                    source_root=workspace_root,
+                    target_root=target_root,
+                    before_manifest=baseline_manifest,
+                )
+                fusion_payload = {
+                    'source_path': fusion.source_path,
+                    'target_path': fusion.target_path,
+                    'changed_files': fusion.changed_files,
+                    'copied_files': fusion.copied_files,
+                    'deleted_files': fusion.deleted_files,
+                    'snapshot_path': fusion.snapshot_path,
+                    'changelog_path': fusion.changelog_path,
+                    'merged_at': fusion.merged_at,
+                    'mode': fusion.mode,
+                }
+                self.repository.append_event(
+                    task_id,
+                    event_type='auto_merge_completed',
+                    payload=fusion_payload,
+                    round_number=None,
+                )
+                self.artifact_store.write_artifact_json(task_id, name='auto_merge_summary', payload=fusion_payload)
+                self.artifact_store.update_state(task_id, {'auto_merge_last': fusion_payload})
+            except Exception as exc:
+                return self.mark_failed_system(task_id, reason=f'auto_merge_error: {exc}')
+
+        return self._to_view(updated)
+
+    def submit_author_decision(self, task_id: str, *, approve: bool, note: str | None = None) -> TaskView:
+        row = self.repository.get_task(task_id)
+        if row is None:
+            raise KeyError(task_id)
+        if row['status'] in {TaskStatus.PASSED.value, TaskStatus.CANCELED.value}:
+            return self._to_view(row)
+        if row['status'] != TaskStatus.WAITING_MANUAL.value:
+            return self._to_view(row)
+
+        note_text = str(note or '').strip() or None
+        payload = {
+            'decision': 'approved' if approve else 'rejected',
+            'note': note_text,
+        }
+        self.repository.append_event(
+            task_id,
+            event_type='author_decision',
+            payload=payload,
+            round_number=None,
+        )
+        self.artifact_store.append_event(
+            task_id,
+            {'type': 'author_decision', **payload},
+        )
+
+        rounds = int(row.get('rounds_completed', 0))
+        if approve:
+            self.repository.set_cancel_requested(task_id, requested=False)
+            updated = self.repository.update_task_status(
+                task_id,
+                status=TaskStatus.QUEUED.value,
+                reason='author_approved',
+                rounds_completed=rounds,
+            )
+            self.artifact_store.update_state(
+                task_id,
+                {
+                    'status': TaskStatus.QUEUED.value,
+                    'last_gate_reason': 'author_approved',
+                    'cancel_requested': False,
+                    'author_decision': payload,
+                },
+            )
+            return self._to_view(updated)
+
+        self.repository.set_cancel_requested(task_id, requested=True)
+        updated = self.repository.update_task_status(
+            task_id,
+            status=TaskStatus.CANCELED.value,
+            reason='author_rejected',
+            rounds_completed=rounds,
+        )
+        self.artifact_store.update_state(
+            task_id,
+            {
+                'status': TaskStatus.CANCELED.value,
+                'last_gate_reason': 'author_rejected',
+                'cancel_requested': True,
+                'author_decision': payload,
+            },
+        )
+        self.artifact_store.write_final_report(task_id, 'status=canceled\nreason=author_rejected')
+        return self._to_view(updated)
+
+    def evaluate_gate(self, task_id: str, payload: GateInput) -> TaskView:
+        outcome = evaluate_medium_gate(
+            tests_ok=payload.tests_ok,
+            lint_ok=payload.lint_ok,
+            reviewer_verdicts=payload.reviewer_verdicts,
+        )
+        next_status = TaskStatus.PASSED if outcome.passed else TaskStatus.FAILED_GATE
+        row = self.repository.update_task_status(
+            task_id,
+            status=next_status.value,
+            reason=outcome.reason,
+            rounds_completed=None,
+        )
+        self.repository.append_event(
+            task_id,
+            event_type='manual_gate',
+            payload={
+                'tests_ok': payload.tests_ok,
+                'lint_ok': payload.lint_ok,
+                'reviewer_verdicts': [v.value for v in payload.reviewer_verdicts],
+                'result': outcome.reason,
+            },
+            round_number=None,
+        )
+        return self._to_view(row)
+
+    def _prepare_author_confirmation(self, task_id: str, row: dict) -> TaskView:
+        summary = (
+            f"Task: {str(row.get('title') or '')}\n"
+            "Generated proposal requires author approval before implementation."
+        )
+        review_payload: list[dict] = []
+
+        try:
+            runner = getattr(self.workflow_engine, 'runner', None)
+            timeout = int(getattr(self.workflow_engine, 'participant_timeout_seconds', 240))
+            author = parse_participant_id(str(row['author_participant']))
+            reviewers = [parse_participant_id(v) for v in row.get('reviewer_participants', [])]
+            config = RunConfig(
+                task_id=task_id,
+                title=str(row.get('title', '')),
+                description=str(row.get('description', '')),
+                author=author,
+                reviewers=reviewers,
+                evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
+                evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
+                cwd=Path(str(row.get('workspace_path') or Path.cwd())),
+                max_rounds=int(row.get('max_rounds', 3)),
+                test_command=str(row.get('test_command', 'py -m pytest -q')),
+                lint_command=str(row.get('lint_command', 'py -m ruff check .')),
+            )
+
+            discussion_text = str(row.get('description') or '').strip()
+            if runner is not None:
+                discussion = runner.run(
+                    participant=author,
+                    prompt=WorkflowEngine._discussion_prompt(config, 1, None),
+                    cwd=config.cwd,
+                    timeout_seconds=timeout,
+                )
+                discussion_text = str(discussion.output or '').strip() or discussion_text
+                if discussion_text:
+                    discussion_event = {
+                        'type': 'discussion',
+                        'round': 1,
+                        'provider': author.provider,
+                        'output': discussion_text,
+                    }
+                    self.repository.append_event(
+                        task_id,
+                        event_type='discussion',
+                        payload=discussion_event,
+                        round_number=1,
+                    )
+                    self.artifact_store.append_event(task_id, discussion_event)
+                    self.artifact_store.append_discussion(
+                        task_id,
+                        role=f'discussion:{author.participant_id}',
+                        round_number=1,
+                        content=discussion_text,
+                    )
+
+                for reviewer in reviewers:
+                    review = runner.run(
+                        participant=reviewer,
+                        prompt=self._proposal_review_prompt(config, discussion_text),
+                        cwd=config.cwd,
+                        timeout_seconds=timeout,
+                    )
+                    verdict = WorkflowEngine._normalize_verdict(str(getattr(review, 'verdict', '') or ''))
+                    review_text = str(getattr(review, 'output', '') or '').strip()
+                    payload = {
+                        'type': 'proposal_review',
+                        'round': 1,
+                        'participant': reviewer.participant_id,
+                        'verdict': verdict.value,
+                        'output': review_text,
+                    }
+                    review_payload.append(payload)
+                    self.repository.append_event(
+                        task_id,
+                        event_type='proposal_review',
+                        payload=payload,
+                        round_number=1,
+                    )
+                    self.artifact_store.append_event(task_id, payload)
+                    if review_text:
+                        self.artifact_store.append_discussion(
+                            task_id,
+                            role=f'proposal_review:{reviewer.participant_id}',
+                            round_number=1,
+                            content=review_text,
+                        )
+
+            proposal_preview = WorkflowEngine._clip_text(discussion_text, max_chars=1200).strip()
+            no_blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value)
+            blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.BLOCKER.value)
+            unknown = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.UNKNOWN.value)
+            summary = (
+                f"Task: {str(row.get('title') or '')}\n"
+                f"Proposal verdicts: no_blocker={no_blocker}, blocker={blocker}, unknown={unknown}\n"
+                f"Proposal:\n{proposal_preview}"
+            )
+        except Exception as exc:
+            return self.mark_failed_system(task_id, reason=f'proposal_error: {exc}')
+
+        waiting = self.repository.update_task_status(
+            task_id,
+            status=TaskStatus.WAITING_MANUAL.value,
+            reason='author_confirmation_required',
+            rounds_completed=row.get('rounds_completed', 0),
+        )
+        pending_payload = {
+            'summary': summary,
+            'self_loop_mode': int(row.get('self_loop_mode', 0)),
+            'review_payload': review_payload,
+        }
+        self.repository.append_event(
+            task_id,
+            event_type='author_confirmation_required',
+            payload=pending_payload,
+            round_number=None,
+        )
+        self.artifact_store.append_event(
+            task_id,
+            {'type': 'author_confirmation_required', **pending_payload},
+        )
+        self.artifact_store.write_artifact_json(task_id, name='pending_proposal', payload=pending_payload)
+        self.artifact_store.update_state(
+            task_id,
+            {
+                'status': TaskStatus.WAITING_MANUAL.value,
+                'last_gate_reason': 'author_confirmation_required',
+                'pending_proposal': pending_payload,
+            },
+        )
+        return self._to_view(waiting)
+
+    @staticmethod
+    def _map_run_status(status: str) -> TaskStatus:
+        normalized = (status or '').strip().lower()
+        if normalized == 'passed':
+            return TaskStatus.PASSED
+        if normalized == 'canceled':
+            return TaskStatus.CANCELED
+        return TaskStatus.FAILED_GATE
+
+    def _count_running_tasks(self, *, exclude_task_id: str | None = None) -> int:
+        rows = self.repository.list_tasks(limit=10_000)
+        count = 0
+        for row in rows:
+            task_id = str(row.get('task_id', ''))
+            if exclude_task_id and task_id == exclude_task_id:
+                continue
+            if str(row.get('status', '')) == TaskStatus.RUNNING.value:
+                count += 1
+        return count
+
+    @staticmethod
+    def _parse_iso_datetime(value) -> datetime | None:
+        text = str(value or '').strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _normalize_evolve_until(value: str | None) -> str | None:
+        text = str(value or '').strip()
+        if not text:
+            return None
+        candidate = text.replace(' ', 'T')
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError as exc:
+            raise ValueError(f'evolve_until must be ISO/local datetime, got: {text}') from exc
+        return parsed.replace(microsecond=0).isoformat()
+
+    @staticmethod
+    def _normalize_merge_target_path(value: str | None) -> str | None:
+        text = str(value or '').strip()
+        if not text:
+            return None
+        return str(Path(text))
+
+    @staticmethod
+    def _default_sandbox_path(project_root: Path) -> str:
+        parent = project_root.parent
+        name = f'{project_root.name}-lab'
+        return str(parent / name)
+
+    @staticmethod
+    def _is_sandbox_ignored(rel_path: str) -> bool:
+        normalized = rel_path.replace('\\', '/').strip('./')
+        if not normalized:
+            return False
+        head = normalized.split('/', 1)[0]
+        ignored_heads = {
+            '.git',
+            '.agents',
+            '.venv',
+            '__pycache__',
+            '.pytest_cache',
+            '.ruff_cache',
+            'node_modules',
+            '.mypy_cache',
+            '.idea',
+            '.vscode',
+        }
+        if head in ignored_heads:
+            return True
+        if normalized.endswith('.pyc') or normalized.endswith('.pyo'):
+            return True
+        return False
+
+    @staticmethod
+    def _bootstrap_sandbox_workspace(project_root: Path, sandbox_root: Path) -> None:
+        try:
+            entries = list(sandbox_root.iterdir())
+        except OSError:
+            entries = []
+        if entries:
+            return
+
+        for root, dirs, files in os.walk(project_root):
+            root_path = Path(root)
+            rel_root = root_path.relative_to(project_root)
+            rel_root_text = '' if str(rel_root) == '.' else rel_root.as_posix()
+            if rel_root_text and OrchestratorService._is_sandbox_ignored(rel_root_text):
+                dirs[:] = []
+                continue
+
+            keep_dirs: list[str] = []
+            for name in dirs:
+                rel = f'{rel_root_text}/{name}' if rel_root_text else name
+                if not OrchestratorService._is_sandbox_ignored(rel):
+                    keep_dirs.append(name)
+            dirs[:] = keep_dirs
+
+            for filename in files:
+                rel = f'{rel_root_text}/{filename}' if rel_root_text else filename
+                if OrchestratorService._is_sandbox_ignored(rel):
+                    continue
+                src = root_path / filename
+                dst = sandbox_root / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+
+    @staticmethod
+    def _proposal_review_prompt(config: RunConfig, discussion_output: str) -> str:
+        clipped = WorkflowEngine._clip_text(discussion_output, max_chars=2500)
+        return (
+            f"Task: {config.title}\n"
+            "You are reviewing a proposed implementation plan before code changes.\n"
+            "Mark BLOCKER only for correctness, regression, security, or data-loss risks.\n"
+            "Output one line: VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN.\n"
+            "Then provide concise rationale and critical risks.\n"
+            f"Plan:\n{clipped}\n"
+        )
+
+    @staticmethod
+    def _resolve_merge_target(row: dict) -> Path:
+        merge_target = str(row.get('merge_target_path') or '').strip()
+        if merge_target:
+            return Path(merge_target)
+        return Path(str(row.get('workspace_path') or Path.cwd()))
+
+    @staticmethod
+    def _to_view(row: dict) -> TaskView:
+        return TaskView(
+            task_id=str(row['task_id']),
+            title=str(row['title']),
+            description=str(row['description']),
+            author_participant=str(row['author_participant']),
+            reviewer_participants=[str(v) for v in row.get('reviewer_participants', [])],
+            evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
+            evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
+            sandbox_mode=bool(row.get('sandbox_mode', False)),
+            sandbox_workspace_path=(str(row.get('sandbox_workspace_path')).strip() if row.get('sandbox_workspace_path') else None),
+            self_loop_mode=max(0, min(1, int(row.get('self_loop_mode', 1)))),
+            project_path=str(row.get('project_path') or row.get('workspace_path') or Path.cwd()),
+            auto_merge=bool(row.get('auto_merge', True)),
+            merge_target_path=(str(row.get('merge_target_path')).strip() if row.get('merge_target_path') else None),
+            workspace_path=str(row.get('workspace_path', str(Path.cwd()))),
+            status=TaskStatus(str(row['status'])),
+            last_gate_reason=row.get('last_gate_reason'),
+            max_rounds=int(row.get('max_rounds', 3)),
+            test_command=str(row.get('test_command', 'py -m pytest -q')),
+            lint_command=str(row.get('lint_command', 'py -m ruff check .')),
+            rounds_completed=int(row.get('rounds_completed', 0)),
+            cancel_requested=bool(row.get('cancel_requested', False)),
+        )
