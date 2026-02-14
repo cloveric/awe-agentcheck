@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cloveric/awe-agentcheck"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-awe--agentcheck-0f172a?style=for-the-badge&logo=github"></a>&nbsp;
-  <a href="https://github.com/cloveric/awe-agentcheck/stargazers"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/cloveric/awe-agentcheck?style=for-the-badge&logo=github&label=Stars&color=fbbf24"></a>&nbsp;
+  <a href="https://github.com/cloveric/awe-agentforge"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-awe--agentforge-0f172a?style=for-the-badge&logo=github"></a>&nbsp;
+  <a href="https://github.com/cloveric/awe-agentforge/stargazers"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/cloveric/awe-agentforge?style=for-the-badge&logo=github&label=Stars&color=fbbf24"></a>&nbsp;
   <a href="#"><img alt="Version" src="https://img.shields.io/badge/version-0.1.0-f59e0b?style=for-the-badge"></a>&nbsp;
   <a href="#"><img alt="Python" src="https://img.shields.io/badge/Python-3.10+-3b82f6?style=for-the-badge&logo=python&logoColor=white"></a>&nbsp;
   <a href="#"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white"></a>&nbsp;
@@ -130,13 +130,13 @@
 ## 项目热度（Stars）
 
 <p align="center">
-  <a href="https://github.com/cloveric/awe-agentcheck/stargazers"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/cloveric/awe-agentcheck?style=for-the-badge&logo=github&label=GitHub%20Stars&color=fbbf24"></a>&nbsp;
-  <a href="https://github.com/cloveric/awe-agentcheck/network/members"><img alt="GitHub forks" src="https://img.shields.io/github/forks/cloveric/awe-agentcheck?style=for-the-badge&logo=github&label=Forks&color=60a5fa"></a>
+  <a href="https://github.com/cloveric/awe-agentforge/stargazers"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/cloveric/awe-agentforge?style=for-the-badge&logo=github&label=GitHub%20Stars&color=fbbf24"></a>&nbsp;
+  <a href="https://github.com/cloveric/awe-agentforge/network/members"><img alt="GitHub forks" src="https://img.shields.io/github/forks/cloveric/awe-agentforge?style=for-the-badge&logo=github&label=Forks&color=60a5fa"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/cloveric/awe-agentcheck/stargazers">
-    <img src="https://api.star-history.com/svg?repos=cloveric/awe-agentcheck&type=Date" alt="Star History Chart" width="92%" />
+  <a href="https://github.com/cloveric/awe-agentforge/stargazers">
+    <img src="https://api.star-history.com/svg?repos=cloveric/awe-agentforge&type=Date" alt="Star History Chart" width="92%" />
   </a>
 </p>
 
@@ -198,8 +198,8 @@ queued → running → waiting_manual → (approve) → queued → running → p
 ### 第 1 步：安装
 
 ```bash
-git clone https://github.com/cloveric/awe-agentcheck.git
-cd awe-agentcheck
+git clone https://github.com/cloveric/awe-agentforge.git
+cd awe-agentforge
 pip install -e .[dev]
 ```
 
@@ -811,3 +811,4 @@ MIT
 <p align="center">
   <sub>为需要结构化、可观测、安全的多模型代码审查工作流的团队而构建。</sub>
 </p>
+

@@ -41,6 +41,10 @@
    - display-level brand updated to `AWE-AgentForge` in README/web/hero
    - internal package/runtime IDs intentionally unchanged (`awe-agentcheck` / `awe_agentcheck`) for compatibility
    - added `docs/API_EXPOSURE_AUDIT.md` with local listener/tunnel checks and exposure guardrails
+12. GitHub repository rename executed:
+   - old: `https://github.com/cloveric/awe-agentcheck`
+   - new: `https://github.com/cloveric/awe-agentforge`
+   - README (EN/CN) links/badges/clone examples synced to new repo URL
 
 ## Pause Window Notice (Operator Directive)
 
