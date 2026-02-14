@@ -1,226 +1,809 @@
 <p align="center">
-  <img src="docs/assets/awe-agentcheck-hero.svg" alt="awe-agentcheck hero" width="100%" />
+  <img src="docs/assets/awe-agentcheck-hero.svg" alt="awe-agentcheck" width="100%" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/cloveric/awe-agentcheck"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-awe--agentcheck-0f172a?style=for-the-badge&logo=github"></a>
-  <a href="#"><img alt="Python" src="https://img.shields.io/badge/Python-3.11+-2563eb?style=for-the-badge&logo=python&logoColor=white"></a>
-  <a href="#"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-Control%20Plane-0891b2?style=for-the-badge&logo=fastapi&logoColor=white"></a>
-  <a href="#"><img alt="Sandbox First" src="https://img.shields.io/badge/Default-Sandbox%20First-1d4ed8?style=for-the-badge"></a>
-  <a href="#"><img alt="Author Gate" src="https://img.shields.io/badge/Default-Author%20Approval-f97316?style=for-the-badge"></a>
-  <a href="#"><img alt="Observability" src="https://img.shields.io/badge/Observability-OTel%20%7C%20Prom%20%7C%20Loki%20%7C%20Tempo-16a34a?style=for-the-badge"></a>
+  <a href="https://github.com/cloveric/awe-agentcheck"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-awe--agentcheck-0f172a?style=for-the-badge&logo=github"></a>&nbsp;
+  <a href="https://github.com/cloveric/awe-agentcheck/stargazers"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/cloveric/awe-agentcheck?style=for-the-badge&logo=github&label=Stars&color=fbbf24"></a>&nbsp;
+  <a href="#"><img alt="Version" src="https://img.shields.io/badge/version-0.1.0-f59e0b?style=for-the-badge"></a>&nbsp;
+  <a href="#"><img alt="Python" src="https://img.shields.io/badge/Python-3.10+-3b82f6?style=for-the-badge&logo=python&logoColor=white"></a>&nbsp;
+  <a href="#"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white"></a>&nbsp;
+  <a href="#"><img alt="License" src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge"></a>
 </p>
 
 <p align="center">
-  <b>Professional multi-CLI orchestration for author/reviewer agent engineering.</b><br/>
-  Multi-provider, sandbox-first, observable, and production-oriented.
+  <a href="#"><img alt="Sandbox First" src="https://img.shields.io/badge/default-sandbox_first-1d4ed8?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Author Gate" src="https://img.shields.io/badge/default-author_approval-f97316?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Auto Fusion" src="https://img.shields.io/badge/default-auto_fusion-22c55e?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Observability" src="https://img.shields.io/badge/OTel_%7C_Prom_%7C_Loki_%7C_Tempo-observability-8b5cf6?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Ruff" src="https://img.shields.io/badge/code_style-ruff-d4aa00?style=flat-square"></a>
+</p>
+
+<br/>
+
+<p align="center">
+  <b>Production-grade multi-CLI orchestration for structured AI engineering loops.</b><br/>
+  <sub>Let Claude and Codex review each other's code in a sandbox-first, observable, and policy-controlled environment.</sub>
 </p>
 
 <p align="center">
-  <a href="README.zh-CN.md"><b>中文文档 / Chinese README</b></a>
+  <a href="README.zh-CN.md">&#127464;&#127475; 中文文档</a>&nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="docs/RUNBOOK.md">Runbook</a>&nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="docs/ARCHITECTURE_FLOW.md">Architecture</a>&nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="#beginner-dashboard-guide-button-by-button">Dashboard Guide</a>&nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="#project-pulse-stars">Stars</a>&nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="#quick-start">Quick Start</a>
 </p>
+
+<br/>
 
 ---
 
-## Table of Contents
+<br/>
 
-- [What is awe-agentcheck](#what-is-awe-agentcheck)
-- [Visual Overview](#visual-overview)
-- [Feature Matrix](#feature-matrix)
-- [Task Strategy Modes](#task-strategy-modes)
-- [Quick Start](#quick-start)
-- [CLI](#cli)
-- [API](#api)
-- [Roadmap](#roadmap)
-- [Documentation](#documentation)
+## Why awe-agentcheck?
 
-## What is awe-agentcheck
+<table>
+<tr>
+<td width="33%" align="center">
 
-`awe-agentcheck` is an orchestration control plane for structured AI engineering loops:
+**Sandbox First**
 
-`discussion -> implementation -> review -> verification -> gate`
+Every task runs in an isolated `*-lab` workspace by default. Auto-generated per-task sandboxes are cleaned on pass, preventing cross-run contamination.
 
-Designed for:
+</td>
+<td width="33%" align="center">
 
-- Claude reviewing Codex outputs
-- Codex reviewing Claude outputs
-- same CLI, different sessions cross-checking
-- overnight autonomous improvement with strict safety controls
+**Author Approval Gate**
+
+No code reaches production without human sign-off. The default `waiting_manual` state ensures the author reviews every proposal before implementation begins.
+
+</td>
+<td width="33%" align="center">
+
+**Auto Fusion**
+
+On pass, artifacts merge automatically with changelog generation and snapshot preservation. Disable per-task when you need manual control.
+
+</td>
+</tr>
+<tr>
+<td width="33%" align="center">
+
+**Multi-Provider Roles**
+
+`provider#alias` model lets Claude write / Codex review, or vice versa. Support for same-provider multi-session cross-checking.
+
+</td>
+<td width="33%" align="center">
+
+**Web Monitor Console**
+
+Real-time dashboard with project tree, role/session panels, avatar-based chat dialogue, and full task lifecycle controls.
+
+</td>
+<td width="33%" align="center">
+
+**Overnight Autonomy**
+
+Watchdog timeouts, provider fallback, cooldown control, and single-instance locks for safe unattended continuous evolution.
+
+</td>
+</tr>
+</table>
+
+<br/>
+
+## Architecture
+
+<p align="center">
+  <img src="docs/assets/architecture-overview.svg" alt="system architecture" width="100%" />
+</p>
+
+<br/>
 
 ## Visual Overview
 
-### 1) Dashboard Preview
+### Monitor Dashboard (Terminal Pixel Theme)
 
 <p align="center">
-  <img src="docs/assets/dashboard-preview.svg" alt="dashboard preview" width="100%" />
+  <img src="docs/assets/dashboard-preview.svg" alt="terminal pixel dashboard preview with multi-role sessions" width="100%" />
 </p>
 
-### 2) Runtime Flow
+Preview focus:
+
+1. Terminal pixel visual style.
+2. High-density multi-role session panel (not only 2-3 roles).
+3. Conversation-centric layout with operational controls visible.
+
+### Runtime Flow (Clean Lanes, No Arrow Crossing Through Bubbles)
 
 <p align="center">
   <img src="docs/assets/workflow-flow.svg" alt="workflow flow" width="100%" />
 </p>
 
-## Feature Matrix
+<br/>
 
-| Capability | Description | Status |
-|---|---|---|
-| Sandbox-first execution | Default `sandbox_mode=1` runs in `*-lab` workspace | `GA` |
-| Author-approval gate | Default `self_loop_mode=0`, waits `waiting_manual` before implementation | `GA` |
-| Autonomous self-loop | `self_loop_mode=1` for unattended operation | `GA` |
-| Auto fusion | On pass, optional merge + `CHANGELOG.auto.md` + snapshot | `GA` |
-| Multi-provider role model | `provider#alias` participants (cross-provider or same-provider multi-session) | `GA` |
-| Operator web console | Project tree (expand/collapse), roles/sessions, avatar-based chat dialogue, control panel | `GA` |
-| Theme system | Neon, Terminal Pixel, Executive Glass | `GA` |
-| Observability stack | OTel, Prometheus, Loki, Tempo, Grafana | `GA` |
-| Overnight supervisor | Timeout watchdog, provider fallback, cooldown control | `GA` |
+## Project Pulse (Stars)
 
-## Task Strategy Modes
+<p align="center">
+  <a href="https://github.com/cloveric/awe-agentcheck/stargazers"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/cloveric/awe-agentcheck?style=for-the-badge&logo=github&label=GitHub%20Stars&color=fbbf24"></a>&nbsp;
+  <a href="https://github.com/cloveric/awe-agentcheck/network/members"><img alt="GitHub forks" src="https://img.shields.io/github/forks/cloveric/awe-agentcheck?style=for-the-badge&logo=github&label=Forks&color=60a5fa"></a>
+</p>
 
-| Control | Values | Default | Effect |
-|---|---|---|---|
-| `sandbox_mode` | `0` / `1` | `1` | run in main workspace or lab workspace |
-| `self_loop_mode` | `0` / `1` | `0` | manual author approval or autonomous loop |
-| `auto_merge` | `0` / `1` | `1` | auto-fusion artifacts on passed tasks |
+<p align="center">
+  <a href="https://github.com/cloveric/awe-agentcheck/stargazers">
+    <img src="https://api.star-history.com/svg?repos=cloveric/awe-agentcheck&type=Date" alt="Star History Chart" width="92%" />
+  </a>
+</p>
 
-Auto-fusion default and toggle:
+<br/>
 
-1. New tasks default to `auto_merge=1` (enabled).
-2. Disable per task with CLI `--no-auto-merge`, API payload `auto_merge=false`, or Web Create Task `Auto Merge=0`.
-3. When enabled and task is `passed`, system emits `auto_merge_completed` and writes `.agents/threads/<task_id>/artifacts/auto_merge_summary.json`.
+## Core Concepts
 
-Manual policy flow (`self_loop_mode=0`):
+Before diving into usage, here are the key concepts:
 
-1. Start task
-2. Generate discussion/proposal review
-3. Move to `waiting_manual`
-4. Author approves or rejects
-5. Approve => queue/start implementation; Reject => canceled
+### Participants
 
-Sandbox default behavior:
+Every task has one **author** (who writes the code) and one or more **reviewers** (who evaluate it). Participants are identified using the `provider#alias` format:
 
-1. If `sandbox_workspace_path` is not provided, system creates a unique per-task sandbox under `<project>-lab/<timestamp>-<id>`.
-2. If task passes and auto-fusion completes, generated sandbox is auto-cleaned to prevent run-to-run contamination.
-3. If custom `sandbox_workspace_path` is provided, sandbox is retained by default.
+| Format | Meaning |
+|:---|:---|
+| `claude#author-A` | Claude CLI acting as author, alias "author-A" |
+| `codex#review-B` | Codex CLI acting as reviewer, alias "review-B" |
+| `claude#review-C` | Claude CLI acting as second reviewer, alias "review-C" |
+
+The `provider` determines which CLI tool is invoked (`claude` or `codex`). The `alias` is a human-readable label for identification in the web console and logs.
+
+### Task Lifecycle
+
+Every task follows this lifecycle:
+
+```
+queued → running → passed / failed_gate / failed_system / canceled
+```
+
+In manual mode (`self_loop_mode=0`), an extra state is inserted:
+
+```
+queued → running → waiting_manual → (approve) → queued → running → passed/failed
+                                  → (reject)  → canceled
+```
+
+### Three Controls
+
+| Control | Values | Default | What It Does |
+|:---|:---:|:---:|:---|
+| `sandbox_mode` | `0` / `1` | **`1`** | `1` = run in an isolated `*-lab` copy of the workspace; `0` = run directly in main workspace |
+| `self_loop_mode` | `0` / `1` | **`0`** | `0` = pause for author approval after discussion; `1` = run autonomously end-to-end |
+| `auto_merge` | `0` / `1` | **`1`** | `1` = on pass, auto-merge changes back + generate changelog; `0` = keep results in sandbox only |
+
+> [!TIP]
+> **Recommended defaults for safety**: `sandbox_mode=1` + `self_loop_mode=0` + `auto_merge=1` — sandbox execution with human sign-off and automatic artifact fusion on pass.
+
+<br/>
 
 ## Quick Start
 
-```powershell
-cd C:/Users/hangw/awe-agentcheck
-py -m pip install -e .[dev]
+### Prerequisites
+
+- **Python 3.10+**
+- **Claude CLI** installed and authenticated (for Claude participants)
+- **Codex CLI** installed and authenticated (for Codex participants)
+- **PostgreSQL** (optional — falls back to in-memory database if unavailable)
+
+### Step 1: Install
+
+```bash
+git clone https://github.com/cloveric/awe-agentcheck.git
+cd awe-agentcheck
+pip install -e .[dev]
 ```
 
-Start API:
+### Step 2: Configure Environment
+
+The system needs to know where your tools are and how to connect. Set the following environment variables:
 
 ```powershell
+# Required: tell Python where the source is
+$env:PYTHONPATH="src"
+
+# Optional: database connection (omit for in-memory mode)
 $env:AWE_DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/awe_agentcheck"
-$env:AWE_ARTIFACT_ROOT="C:/Users/hangw/awe-agentcheck/.agents"
-$env:AWE_CLAUDE_COMMAND="claude -p --dangerously-skip-permissions --effort low"
-$env:AWE_CODEX_COMMAND="codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=low"
-$env:AWE_PARTICIPANT_TIMEOUT_SECONDS="240"
-$env:AWE_COMMAND_TIMEOUT_SECONDS="300"
-$env:AWE_PARTICIPANT_TIMEOUT_RETRIES="1"
-$env:AWE_MAX_CONCURRENT_RUNNING_TASKS="1"
-$env:PYTHONPATH="C:/Users/hangw/awe-agentcheck/src"
+
+# Optional: where task artifacts (logs, reports, events) are stored
+$env:AWE_ARTIFACT_ROOT=".agents"
+```
+
+<details>
+<summary><b>All environment variables reference</b></summary>
+
+| Variable | Default | Description |
+|:---|:---|:---|
+| `PYTHONPATH` | _(none)_ | Must include `src/` directory |
+| `AWE_DATABASE_URL` | `postgresql+psycopg://...` | PostgreSQL connection string. If DB is unavailable, falls back to in-memory |
+| `AWE_ARTIFACT_ROOT` | `.agents` | Directory for task artifacts (threads, events, reports) |
+| `AWE_CLAUDE_COMMAND` | `claude -p --dangerously-skip-permissions --effort low` | Command template for invoking Claude CLI |
+| `AWE_CODEX_COMMAND` | `codex exec --skip-git-repo-check ...` | Command template for invoking Codex CLI |
+| `AWE_PARTICIPANT_TIMEOUT_SECONDS` | `240` | Max seconds a single participant (Claude/Codex) can run per step |
+| `AWE_COMMAND_TIMEOUT_SECONDS` | `300` | Max seconds for test/lint commands |
+| `AWE_PARTICIPANT_TIMEOUT_RETRIES` | `1` | Retry count when a participant times out |
+| `AWE_MAX_CONCURRENT_RUNNING_TASKS` | `1` | How many tasks can run simultaneously |
+| `AWE_DRY_RUN` | `false` | When `true`, participants are not actually invoked |
+| `AWE_SERVICE_NAME` | `awe-agentcheck` | Service name for observability |
+| `AWE_OTEL_EXPORTER_OTLP_ENDPOINT` | _(none)_ | OpenTelemetry collector endpoint |
+
+> [!NOTE]
+> Without `AWE_DATABASE_URL` (or when PostgreSQL is down), the system automatically uses an in-memory database. This is fine for development and testing, but data is lost on restart.
+</details>
+
+### Step 3: Start the API Server
+
+```powershell
 py -m uvicorn awe_agentcheck.main:app --reload --port 8000
 ```
 
-Open web monitor:
+You should see:
 
-- `http://localhost:8000/`
+```
+INFO:     Uvicorn running on http://127.0.0.1:8000
+INFO:     Started reloader process
+```
 
-## CLI
+### Step 4: Open the Web Monitor
 
-Default policy (sandbox + author approval):
+Open your browser and navigate to:
+
+```
+http://localhost:8000/
+```
+
+You'll see the monitor dashboard with:
+- **Left panel**: project file tree + roles/sessions
+- **Right panel**: task controls, conversation stream, and task creation form
+
+## Beginner Dashboard Guide (Button-by-Button)
+
+If this is your first time, operate in this exact order:
+
+1. Confirm API is online (`API: ONLINE` at the top right).
+2. Click `Refresh`.
+3. In `Dialogue Scope`, choose `Project` and `Task`.
+4. Read `Conversation` first, then decide start/approve/reject.
+5. Use `Force Fail` only when a task is stuck and cannot recover.
+
+### Top Bar
+
+| Control | What it means | When to use |
+|:---|:---|:---|
+| `Refresh` | Pull latest tasks/stats/tree/events immediately | Any time data looks stale |
+| `Auto Poll: OFF/ON` | Toggle periodic refresh | Turn ON during active runs |
+| `Theme` | Switch visual style (`Neon Grid`, `Terminal Pixel`, `Executive Glass`) | Personal preference |
+| `API: ONLINE/RETRY(n)` | Backend health indicator | If `RETRY`, check server logs first |
+
+### Left Panel: Project Structure
+
+| Control | What it means | When to use |
+|:---|:---|:---|
+| `Expand` | Open all currently loaded folders in the tree | Get full repository context quickly |
+| `Collapse` | Close all folders | Reduce noise when tree is too dense |
+| Tree node (`[D]` / `[F]`) | Directory or file item for selected project | Verify target repo and key files |
+
+### Left Panel: Roles / Sessions
+
+| Control | What it means | When to use |
+|:---|:---|:---|
+| `all roles` | Show full mixed conversation stream | Default view for global context |
+| `provider#alias` role row | Filter conversation to a single role/session | Debug one participant's behavior |
+
+### Right Panel: Dialogue Scope + Task Controls
+
+| Control | What it means | When to use |
+|:---|:---|:---|
+| `Project` | Active project scope | Switch when multiple repos are tracked |
+| `Task` | Active task scope | Move between tasks in selected project |
+| `Force-fail reason` | Reason text sent if force-failing a task | Fill before pressing `Force Fail` |
+| `Start` | Start selected `queued` task | Normal start action |
+| `Approve + Queue` | Approve proposal in `waiting_manual`, leave task queued | Approve now, start later |
+| `Approve + Start` | Approve proposal and immediately run | Fast path after proposal review |
+| `Reject` | Reject proposal in `waiting_manual` and cancel task | Proposal is risky or low quality |
+| `Cancel` | Cancel current running/queued task | Stop work intentionally |
+| `Force Fail` | Mark task `failed_system` with your reason | Last resort for stuck/hung tasks |
+| `Reload Dialogue` | Force re-fetch event stream for selected task | Dialogue appears incomplete |
+
+### Conversation Panel
+
+| Area | What it means | How to read |
+|:---|:---|:---|
+| Actor label (e.g. `claude#author-A`) | Who sent the event | Track accountability by role |
+| Event kind (e.g. `discussion`, `review`) | Workflow stage marker | Detect where failures happen |
+| Message body | Raw or summarized event payload | Validate claims before approving |
+
+### Create Task Form (Every Input)
+
+| Field | Meaning | Recommended beginner value |
+|:---|:---|:---|
+| `Title` | Task name shown everywhere | Clear and short |
+| `Workspace path` | Repository root path | Your actual project path |
+| `Author` | Implementing participant | `claude#author-A` or `codex#author-A` |
+| `Reviewers` | One or more reviewers, comma-separated | At least 1 reviewer |
+| `Evolution Level` | `0` fix-only, `1` guided evolve, `2` proactive evolve | Start with `0` |
+| `Evolve Until` | Optional deadline (`YYYY-MM-DD HH:MM`) | Empty unless running overnight |
+| `Sandbox Mode` | `1` sandbox / `0` main workspace | Keep `1` for safety |
+| `Sandbox Workspace Path` | Optional custom sandbox path | Leave blank (auto per-task path) |
+| `Self Loop Mode` | `0` manual approval / `1` autonomous | Start with `0` |
+| `Auto Merge` | `1` auto-fusion on pass / `0` disable | Keep `1` initially |
+| `Merge Target Path` | Where pass results are merged | Project root |
+| `Description` | Detailed requirement text | Include acceptance criteria |
+
+### Create Buttons
+
+| Button | Behavior | Use case |
+|:---|:---|:---|
+| `Create` | Create task only (stays queued) | You want to review settings first |
+| `Create + Start` | Create and start immediately | You already trust current settings |
+
+### Safe Beginner Preset
+
+Use this default stack for lowest risk:
+
+- `Sandbox Mode = 1`
+- `Self Loop Mode = 0`
+- `Auto Merge = 1`
+- Reviewer count `>= 1`
+
+Then run this rhythm: `Create + Start` -> wait for `waiting_manual` -> inspect `Conversation` -> `Approve + Start` or `Reject`.
+
+<br/>
+
+### Step 5: Create Your First Task
+
+You can create a task via the **Web UI** (use the "Create Task" form at the bottom of the dashboard) or via the **CLI**:
 
 ```powershell
 py -m awe_agentcheck.cli run `
-  --task "Improve monitor signal quality" `
+  --task "Fix the login validation bug" `
+  --author "claude#author-A" `
+  --reviewer "codex#review-B" `
+  --workspace-path "." `
+  --auto-start
+```
+
+This will:
+1. Create a task with title "Fix the login validation bug"
+2. Assign Claude as the author and Codex as the reviewer
+3. Use default policies (`sandbox_mode=1`, `self_loop_mode=0`, `auto_merge=1`)
+4. Automatically start the task (`--auto-start`)
+5. Since `self_loop_mode=0`, the system will run a discussion first, then pause at `waiting_manual` for your approval
+
+### Step 6: Approve and Execute (Manual Mode)
+
+After the system pauses at `waiting_manual`, review the proposal in the web UI or via CLI, then approve:
+
+```powershell
+# Approve the proposal and immediately start execution
+py -m awe_agentcheck.cli decide <task-id> --approve --auto-start
+```
+
+Or reject:
+
+```powershell
+# Reject the proposal (task will be canceled)
+py -m awe_agentcheck.cli decide <task-id>
+```
+
+> [!IMPORTANT]
+> In manual mode, the task **will not** proceed to implementation until you explicitly approve. This is by design — it ensures you have full control over what gets implemented.
+
+<br/>
+
+## CLI Reference
+
+The CLI communicates with the API server over HTTP. Make sure the server is running before using any CLI command.
+
+```
+py -m awe_agentcheck.cli [--api-base URL] <command> [options]
+```
+
+Global option: `--api-base` (default: `http://127.0.0.1:8000`) — the API server URL.
+
+### `run` — Create a New Task
+
+Creates a task and optionally starts it immediately.
+
+```powershell
+py -m awe_agentcheck.cli run `
+  --task "Task title" `
+  --description "Detailed description of what to do" `
   --author "claude#author-A" `
   --reviewer "codex#review-B" `
   --reviewer "claude#review-C" `
   --sandbox-mode 1 `
   --self-loop-mode 0 `
-  --workspace-path "C:/Users/hangw/awe-agentcheck" `
+  --auto-merge `
+  --workspace-path "C:/path/to/your/project" `
+  --max-rounds 3 `
+  --test-command "py -m pytest -q" `
+  --lint-command "py -m ruff check ." `
   --auto-start
 ```
 
-Disable auto-fusion for a single task:
+| Flag | Required | Default | Description |
+|:---|:---:|:---|:---|
+| `--task` | Yes | — | Task title (shown in UI and logs) |
+| `--description` | No | same as `--task` | Detailed description for the AI participants |
+| `--author` | Yes | — | Author participant in `provider#alias` format |
+| `--reviewer` | Yes | — | Reviewer participant (repeatable for multiple reviewers) |
+| `--sandbox-mode` | No | `1` | `1` = sandbox, `0` = main workspace |
+| `--sandbox-workspace-path` | No | auto-generated | Custom sandbox directory path |
+| `--self-loop-mode` | No | `0` | `0` = manual approval, `1` = autonomous |
+| `--auto-merge` / `--no-auto-merge` | No | enabled | Enable/disable auto-fusion on pass |
+| `--merge-target-path` | No | project root | Where to merge changes back to |
+| `--workspace-path` | No | `.` | Path to the target repository |
+| `--max-rounds` | No | `3` | Maximum discussion/review/gate rounds |
+| `--test-command` | No | `py -m pytest -q` | Command to run tests |
+| `--lint-command` | No | `py -m ruff check .` | Command to run linter |
+| `--evolution-level` | No | `0` | `0` = fix-only, `1` = guided evolve, `2` = proactive evolve |
+| `--evolve-until` | No | — | Deadline for evolution (e.g. `2026-02-13 06:00`) |
+| `--auto-start` | No | `false` | Start immediately after creation |
+
+### `decide` — Submit Author Decision
+
+Used in manual mode to approve or reject a proposal at `waiting_manual` state.
+
+```powershell
+# Approve and immediately start
+py -m awe_agentcheck.cli decide <task-id> --approve --auto-start
+
+# Approve without auto-start (task goes to queued)
+py -m awe_agentcheck.cli decide <task-id> --approve
+
+# Reject (task is canceled)
+py -m awe_agentcheck.cli decide <task-id>
+
+# Approve with a note
+py -m awe_agentcheck.cli decide <task-id> --approve --note "Looks good, proceed" --auto-start
+```
+
+### `status` — Get Task Details
+
+```powershell
+py -m awe_agentcheck.cli status <task-id>
+```
+
+Returns the full task object as JSON, including status, rounds completed, gate reason, etc.
+
+### `tasks` — List All Tasks
+
+```powershell
+py -m awe_agentcheck.cli tasks --limit 20
+```
+
+### `stats` — Show Aggregated Statistics
+
+```powershell
+py -m awe_agentcheck.cli stats
+```
+
+Returns pass rates, failure buckets, provider error counts, and average task duration.
+
+### `start` — Start an Existing Task
+
+```powershell
+py -m awe_agentcheck.cli start <task-id>
+py -m awe_agentcheck.cli start <task-id> --background
+```
+
+### `cancel` — Cancel a Task
+
+```powershell
+py -m awe_agentcheck.cli cancel <task-id>
+```
+
+### `force-fail` — Force-Fail a Task
+
+```powershell
+py -m awe_agentcheck.cli force-fail <task-id> --reason "Manual abort: wrong branch"
+```
+
+### `events` — List Task Events
+
+```powershell
+py -m awe_agentcheck.cli events <task-id>
+```
+
+Returns the full event timeline for a task (discussions, reviews, verifications, gate results, etc.).
+
+### `tree` — Show Workspace File Tree
+
+```powershell
+py -m awe_agentcheck.cli tree --workspace-path "." --max-depth 4
+```
+
+<br/>
+
+## Usage Examples
+
+### Example 1: Safe Manual Review (Recommended for First Use)
+
+The most conservative approach — sandbox execution with manual approval:
 
 ```powershell
 py -m awe_agentcheck.cli run `
-  --task "No auto-merge run" `
+  --task "Improve error handling in the API layer" `
   --author "claude#author-A" `
   --reviewer "codex#review-B" `
-  --workspace-path "C:/Users/hangw/awe-agentcheck" `
+  --reviewer "claude#review-C" `
+  --workspace-path "." `
+  --auto-start
+```
+
+What happens:
+1. System creates an isolated sandbox workspace (`awe-agentcheck-lab/20260213-...`)
+2. Claude (author) generates a discussion proposal
+3. Codex and Claude (reviewers) evaluate the proposal
+4. Task pauses at `waiting_manual` — you review in the web UI
+5. You approve → system runs implementation → reviewers review code → tests + lint → gate decision
+6. If passed: changes auto-merge back to your main workspace with a changelog
+
+### Example 2: Fully Autonomous Overnight Run
+
+For unattended operation (make sure you trust the safety controls):
+
+```powershell
+py -m awe_agentcheck.cli run `
+  --task "Overnight continuous improvement" `
+  --author "codex#author-A" `
+  --reviewer "claude#review-B" `
+  --sandbox-mode 1 `
+  --self-loop-mode 1 `
+  --max-rounds 5 `
+  --workspace-path "." `
+  --auto-start
+```
+
+What happens:
+1. Codex (author) goes directly into the workflow loop — no manual checkpoint
+2. Each round: discussion → implementation → review → verify → gate
+3. If gate passes: done. If fails: retries up to 5 rounds
+4. Results auto-merge back on pass
+
+### Example 3: No Auto-Merge (Keep Results in Sandbox)
+
+When you want to review changes manually before merging:
+
+```powershell
+py -m awe_agentcheck.cli run `
+  --task "Experimental refactoring" `
+  --author "claude#author-A" `
+  --reviewer "codex#review-B" `
+  --workspace-path "." `
   --no-auto-merge `
   --auto-start
 ```
 
-Approve and start:
+What happens:
+1. Everything runs as normal, but on pass, changes stay in the sandbox
+2. You can manually review the sandbox directory and merge changes yourself
 
-```powershell
-py -m awe_agentcheck.cli decide task-1 --approve --auto-start
-```
+### Example 4: Direct Main Workspace (No Sandbox)
 
-Autonomous direct-main run:
+When you want changes applied directly to your main workspace:
 
 ```powershell
 py -m awe_agentcheck.cli run `
-  --task "Autonomous run" `
-  --author "codex#author-A" `
-  --reviewer "claude#review-B" `
+  --task "Quick fix: typo in README" `
+  --author "claude#author-A" `
+  --reviewer "codex#review-B" `
   --sandbox-mode 0 `
   --self-loop-mode 1 `
-  --workspace-path "C:/Users/hangw/awe-agentcheck" `
+  --workspace-path "." `
   --auto-start
 ```
 
-## API
+> [!WARNING]
+> With `sandbox_mode=0`, changes are made directly in your workspace. Use this only for low-risk tasks or when you have git to revert.
 
-- `POST /api/tasks`
-- `GET /api/tasks`
-- `GET /api/tasks/{task_id}`
-- `POST /api/tasks/{task_id}/start`
-- `POST /api/tasks/{task_id}/cancel`
-- `POST /api/tasks/{task_id}/force-fail`
-- `POST /api/tasks/{task_id}/author-decision`
-- `GET /api/tasks/{task_id}/events`
-- `GET /api/workspace-tree`
-- `GET /api/stats`
+<br/>
+
+## API Reference
+
+All endpoints are served at `http://localhost:8000`. Request/response bodies are JSON.
+
+### Create Task
+
+```
+POST /api/tasks
+```
+
+<details>
+<summary>Request body</summary>
+
+```json
+{
+  "title": "Fix login validation bug",
+  "description": "The email validator accepts invalid formats",
+  "author_participant": "claude#author-A",
+  "reviewer_participants": ["codex#review-B"],
+  "sandbox_mode": true,
+  "self_loop_mode": 0,
+  "auto_merge": true,
+  "workspace_path": ".",
+  "max_rounds": 3,
+  "test_command": "py -m pytest -q",
+  "lint_command": "py -m ruff check .",
+  "auto_start": true
+}
+```
+</details>
+
+<details>
+<summary>Response (201)</summary>
+
+```json
+{
+  "task_id": "task-abc123",
+  "title": "Fix login validation bug",
+  "status": "queued",
+  "sandbox_mode": true,
+  "self_loop_mode": 0,
+  "auto_merge": true,
+  "rounds_completed": 0,
+  ...
+}
+```
+</details>
+
+### All Endpoints
+
+| Method | Endpoint | Description |
+|:---:|:---|:---|
+| `POST` | `/api/tasks` | Create a new task |
+| `GET` | `/api/tasks` | List all tasks (`?limit=100`) |
+| `GET` | `/api/tasks/{id}` | Get task details |
+| `POST` | `/api/tasks/{id}/start` | Start a task (`{"background": true}` for async) |
+| `POST` | `/api/tasks/{id}/cancel` | Request task cancellation |
+| `POST` | `/api/tasks/{id}/force-fail` | Force-fail with `{"reason": "..."}` |
+| `POST` | `/api/tasks/{id}/author-decision` | Approve/reject in manual mode: `{"approve": true, "auto_start": true}` |
+| `GET` | `/api/tasks/{id}/events` | Get full event timeline |
+| `POST` | `/api/tasks/{id}/gate` | Submit manual gate result |
+| `GET` | `/api/workspace-tree` | File tree (`?workspace_path=.&max_depth=4`) |
+| `GET` | `/api/stats` | Aggregated statistics (pass rates, durations, failure buckets) |
+| `GET` | `/healthz` | Health check |
+
+<br/>
+
+## Feature Matrix
+
+| Capability | Description | Status |
+|:---|:---|:---:|
+| **Sandbox-first execution** | Default `sandbox_mode=1`, runs in `*-lab` workspace with auto-generated per-task isolation | `GA` |
+| **Author-approval gate** | Default `self_loop_mode=0`, enters `waiting_manual` before implementation | `GA` |
+| **Autonomous self-loop** | `self_loop_mode=1` for unattended operation | `GA` |
+| **Auto fusion** | On pass: merge + `CHANGELOG.auto.md` + snapshot | `GA` |
+| **Multi-provider role model** | `provider#alias` participants (cross-provider or same-provider multi-session) | `GA` |
+| **Web monitor console** | Project tree, roles/sessions, avatar-based chat, task controls, drag-and-drop | `GA` |
+| **Multi-theme UI** | Neon Grid, Terminal Pixel, Executive Glass | `GA` |
+| **Observability stack** | OpenTelemetry, Prometheus, Loki, Tempo, Grafana | `GA` |
+| **Overnight supervisor** | Timeout watchdog, provider fallback, cooldown, single-instance lock | `GA` |
+
+<br/>
+
+## How the Workflow Works
+
+### Manual Mode (`self_loop_mode=0` — Default)
+
+This is the recommended mode for most use cases:
+
+1. **Create task** → status becomes `queued`
+2. **Start task** → system detects manual mode, runs the **discussion phase**:
+   - Author (e.g. Claude) generates an implementation proposal
+   - Reviewers evaluate the proposal and flag blockers
+3. **Wait for human** → status becomes `waiting_manual`, task pauses
+4. **Author decides**:
+   - **Approve** → status becomes `queued` (with `author_approved` reason), then immediately re-starts into the full workflow
+   - **Reject** → status becomes `canceled`
+5. **Full workflow** runs: Discussion → Implementation → Review → Verify (test + lint) → Gate Decision
+6. **Gate result**:
+   - **Pass** → `passed` → Auto Fusion (merge + changelog + snapshot + sandbox cleanup)
+   - **Fail** → retry next round (up to `max_rounds`), then `failed_gate`
+
+### Autonomous Mode (`self_loop_mode=1`)
+
+For unattended operation:
+
+1. **Create task** → `queued`
+2. **Start task** → immediately enters the full workflow (no manual checkpoint)
+3. **Round 1..N**: Discussion → Implementation → Review → Verify → Gate
+4. **Gate result**:
+   - **Pass** → `passed` → Auto Fusion
+   - **Fail** → retry until `max_rounds` exhausted → `failed_gate`
+
+### Auto-Fusion Details
+
+When a task passes and `auto_merge=1`:
+
+1. Changed files are copied from sandbox to your main workspace
+2. `CHANGELOG.auto.md` is appended with a summary
+3. A snapshot is saved to `.agents/snapshots/`
+4. The auto-generated sandbox is cleaned up (if system-generated)
+5. An `auto_merge_summary.json` artifact is written
+
+<details>
+<summary><b>Sandbox lifecycle details</b></summary>
+
+1. Without explicit `sandbox_workspace_path`, the system creates a unique per-task sandbox: `<project>-lab/<timestamp>-<id>/`
+2. The sandbox is a filtered copy of your project (excludes `.git`, `.venv`, `node_modules`, `__pycache__`, etc.)
+3. When task passes and auto-fusion completes, system-generated sandboxes are auto-cleaned
+4. If you specified a custom `sandbox_workspace_path`, it is retained by default
+</details>
+
+<br/>
 
 ## Roadmap
 
-### 2026 Q1
+### 2026 Q1 &nbsp; <img src="https://img.shields.io/badge/status-complete-22c55e?style=flat-square" alt="complete"/>
 
-- [x] sandbox-first default policy
-- [x] author-approval gate
-- [x] auto-fusion + changelog + snapshot
-- [x] role/session monitor with multi-theme UI
+- [x] Sandbox-first default policy
+- [x] Author-approval gate
+- [x] Auto-fusion + changelog + snapshot
+- [x] Role/session monitor with multi-theme UI
 
-### 2026 Q2
+### 2026 Q2 &nbsp; <img src="https://img.shields.io/badge/status-planned-3b82f6?style=flat-square" alt="planned"/>
 
-- [ ] richer GitHub/PR integration (change summary linking to task artifacts)
-- [ ] policy templates by repo size/risk profile
-- [ ] pluggable participant adapters beyond Codex/Claude
+- [ ] Richer GitHub/PR integration (change summary linking to task artifacts)
+- [ ] Policy templates by repo size/risk profile
+- [ ] Pluggable participant adapters beyond Codex/Claude
 
-### 2026 Q3
+### 2026 Q3 &nbsp; <img src="https://img.shields.io/badge/status-planned-3b82f6?style=flat-square" alt="planned"/>
 
-- [ ] branch-aware auto promotion pipeline (sandbox -> main with policy guard)
-- [ ] advanced visual analytics (failure taxonomy trends, reviewer drift signals)
+- [ ] Branch-aware auto promotion pipeline (sandbox -> main with policy guard)
+- [ ] Advanced visual analytics (failure taxonomy trends, reviewer drift signals)
+
+<br/>
 
 ## Documentation
 
-- `README.zh-CN.md`
-- `docs/RUNBOOK.md`
-- `docs/ARCHITECTURE_FLOW.md`
-- `docs/TESTING_TARGET_POLICY.md`
-- `docs/SESSION_HANDOFF.md`
-- `docs/plans/2026-02-13-sandbox-and-author-gate.md`
+| Document | Description |
+|:---|:---|
+| [`README.zh-CN.md`](README.zh-CN.md) | Chinese documentation |
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Operations guide & commands |
+| [`docs/ARCHITECTURE_FLOW.md`](docs/ARCHITECTURE_FLOW.md) | System architecture deep dive |
+| [`docs/TESTING_TARGET_POLICY.md`](docs/TESTING_TARGET_POLICY.md) | Testing approach & policy |
+| [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md) | Session handoff notes |
 
-## Verification
+<br/>
 
-```powershell
+## Development
+
+```bash
+# Lint
 py -m ruff check .
+
+# Test
 py -m pytest -q
 ```
+
+<br/>
+
+## Contributing
+
+Contributions are welcome! Please ensure:
+
+1. Code passes `ruff check .` with no warnings
+2. All tests pass with `pytest -q`
+3. New features include appropriate test coverage
+
+<br/>
+
+## License
+
+MIT
+
+<br/>
+
+---
+
+<p align="center">
+  <sub>Built for teams that demand structured, observable, and safe multi-model code review workflows.</sub>
+</p>

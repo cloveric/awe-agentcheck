@@ -28,6 +28,11 @@
 8. Documentation sync completed:
    - clarified current default `auto_merge=1` across README/RUNBOOK/ARCH docs
    - documented disable options: Web `Auto Merge=0`, CLI `--no-auto-merge`, API `auto_merge=false`
+9. GitHub presentation refresh completed:
+   - upgraded `docs/assets/dashboard-preview.svg` to terminal-pixel multi-role preview
+   - redesigned `docs/assets/workflow-flow.svg` into clean-lane runtime flow (no arrow crossing through node bubbles)
+   - added bilingual README updates for beginner-grade dashboard button guide
+   - added star statistics section (badges + star history chart link) in both README files
 
 ## Pause Window Notice (Operator Directive)
 

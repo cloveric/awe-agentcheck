@@ -1,83 +1,230 @@
-<svg width="1600" height="900" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="dashboard preview">
+<svg width="1600" height="920" viewBox="0 0 1600 920" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="terminal pixel dashboard preview">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#050816"/>
-      <stop offset="50%" stop-color="#0b1630"/>
-      <stop offset="100%" stop-color="#071f29"/>
+      <stop offset="0%" stop-color="#010303"/>
+      <stop offset="55%" stop-color="#03070a"/>
+      <stop offset="100%" stop-color="#02090b"/>
     </linearGradient>
-    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0f1b38" stop-opacity="0.94"/>
-      <stop offset="100%" stop-color="#0b2432" stop-opacity="0.94"/>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#071418"/>
+      <stop offset="100%" stop-color="#051116"/>
     </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#38bdf8"/>
-      <stop offset="100%" stop-color="#2dd4bf"/>
+    <linearGradient id="panelSoft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#08181d"/>
+      <stop offset="100%" stop-color="#071217"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#020617" flood-opacity="0.6"/>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
     </filter>
+    <pattern id="scan" width="6" height="6" patternUnits="userSpaceOnUse">
+      <rect width="6" height="6" fill="none"/>
+      <path d="M0 0H6" stroke="#6fffd5" stroke-opacity="0.04" stroke-width="1"/>
+      <path d="M0 3H6" stroke="#6fffd5" stroke-opacity="0.025" stroke-width="1"/>
+    </pattern>
+    <style>
+      .title { font: 700 34px Consolas, 'Courier New', monospace; letter-spacing: 1px; fill: #b8ffe9; }
+      .sub { font: 400 16px Consolas, 'Courier New', monospace; fill: #7cd5ba; }
+      .h2 { font: 700 18px Consolas, 'Courier New', monospace; letter-spacing: 1px; fill: #8df8da; }
+      .meta { font: 400 13px Consolas, 'Courier New', monospace; fill: #87cbb8; }
+      .tree { font: 400 13px Consolas, 'Courier New', monospace; fill: #beeede; }
+      .tag { font: 700 11px Consolas, 'Courier New', monospace; fill: #d9fff5; }
+      .btn { font: 700 12px Consolas, 'Courier New', monospace; fill: #c9fff0; }
+      .msgActor { font: 700 12px Consolas, 'Courier New', monospace; }
+      .msgText { font: 400 12px Consolas, 'Courier New', monospace; fill: #d2f7ea; }
+      .field { font: 700 11px Consolas, 'Courier New', monospace; fill: #7fd5bf; }
+      .value { font: 400 12px Consolas, 'Courier New', monospace; fill: #d4fff0; }
+    </style>
   </defs>
 
-  <rect width="1600" height="900" fill="url(#bg)"/>
-  <rect x="0" y="0" width="1600" height="900" fill="url(#accent)" opacity="0.08"/>
-
-  <rect x="30" y="24" width="1540" height="110" rx="16" fill="url(#panel)" stroke="#60a5fa" stroke-opacity="0.38" filter="url(#shadow)"/>
-  <text x="64" y="76" fill="#dbeafe" font-size="40" font-family="Segoe UI, Arial, sans-serif" font-weight="700">AWE-AGENTCHECK | MULTI-CLI MONITOR</text>
-  <text x="64" y="112" fill="#9fb4d8" font-size="22" font-family="Consolas, monospace">Project Tree + Roles + Dialogue + Author Gate + Auto Fusion + Observability</text>
-
-  <rect x="30" y="150" width="430" height="720" rx="14" fill="url(#panel)" stroke="#22d3ee" stroke-opacity="0.3" filter="url(#shadow)"/>
-  <rect x="490" y="150" width="1080" height="220" rx="14" fill="url(#panel)" stroke="#38bdf8" stroke-opacity="0.3" filter="url(#shadow)"/>
-  <rect x="490" y="386" width="1080" height="484" rx="14" fill="url(#panel)" stroke="#2dd4bf" stroke-opacity="0.3" filter="url(#shadow)"/>
-
-  <text x="54" y="192" fill="#a7f3d0" font-size="22" font-family="Consolas, monospace" font-weight="700">PROJECT STRUCTURE</text>
-  <text x="510" y="192" fill="#bfdbfe" font-size="22" font-family="Consolas, monospace" font-weight="700">DIALOGUE SCOPE + TASK CONTROLS</text>
-  <text x="510" y="428" fill="#bbf7d0" font-size="22" font-family="Consolas, monospace" font-weight="700">CONVERSATION + CREATE TASK</text>
-
-  <g fill="#93c5fd" font-size="18" font-family="Consolas, monospace">
-    <text x="58" y="236">root/</text>
-    <text x="78" y="268">src/</text>
-    <text x="98" y="300">awe_agentcheck/</text>
-    <text x="118" y="332">service.py</text>
-    <text x="118" y="364">api.py</text>
-    <text x="78" y="396">web/</text>
-    <text x="98" y="428">index.html</text>
-    <text x="78" y="460">docs/</text>
-    <text x="98" y="492">RUNBOOK.md</text>
+  <rect width="1600" height="920" fill="url(#bg)"/>
+  <rect width="1600" height="920" fill="url(#scan)"/>
+  <g stroke="#20e8a2" stroke-opacity="0.15" stroke-width="1">
+    <path d="M0 80H1600M0 180H1600M0 280H1600M0 380H1600M0 480H1600M0 580H1600M0 680H1600M0 780H1600M0 880H1600"/>
+    <path d="M200 0V920M400 0V920M600 0V920M800 0V920M1000 0V920M1200 0V920M1400 0V920"/>
   </g>
 
-  <g fill="#86efac" font-size="18" font-family="Consolas, monospace">
-    <text x="58" y="556">ROLES / SESSIONS</text>
-    <rect x="58" y="578" width="370" height="50" rx="10" fill="#0a1f35" stroke="#60a5fa" stroke-opacity="0.35"/>
-    <rect x="58" y="640" width="370" height="50" rx="10" fill="#0a1f35" stroke="#34d399" stroke-opacity="0.35"/>
-    <rect x="58" y="702" width="370" height="50" rx="10" fill="#0a1f35" stroke="#22d3ee" stroke-opacity="0.35"/>
-    <text x="78" y="610">claude#author-A</text>
-    <text x="78" y="672">codex#review-B</text>
-    <text x="78" y="734">claude#review-C</text>
+  <rect x="18" y="18" width="1564" height="86" fill="#061418" stroke="#20e8a2" stroke-width="1.5"/>
+  <text x="38" y="57" class="title">AWE-AGENTCHECK | MULTI-CLI MONITOR</text>
+  <text x="38" y="82" class="sub">THEME: TERMINAL PIXEL  |  Focus: sandbox-first + reviewer cross-check + auto-fusion</text>
+  <rect x="1338" y="42" width="110" height="28" fill="#0a1d1f" stroke="#35f0b3"/>
+  <text x="1360" y="61" class="btn">Refresh</text>
+  <rect x="1458" y="42" width="110" height="28" fill="#0a1d1f" stroke="#35f0b3"/>
+  <text x="1472" y="61" class="btn">Auto Poll ON</text>
+
+  <rect x="18" y="118" width="396" height="790" fill="url(#panel)" stroke="#20e8a2" stroke-width="1.2"/>
+  <rect x="32" y="134" width="368" height="444" fill="url(#panelSoft)" stroke="#1de2a0" stroke-opacity="0.65"/>
+  <text x="44" y="159" class="h2">PROJECT STRUCTURE</text>
+  <rect x="300" y="142" width="46" height="20" fill="#0b2024" stroke="#33ebb1"/>
+  <text x="308" y="156" class="tag">EXP</text>
+  <rect x="352" y="142" width="46" height="20" fill="#0b2024" stroke="#33ebb1"/>
+  <text x="357" y="156" class="tag">COL</text>
+  <text x="44" y="183" class="meta">root=C:/Users/hangw/awe-agentcheck | entries=194</text>
+
+  <g class="tree">
+    <text x="48" y="212">[D] src</text>
+    <text x="66" y="234">[D] awe_agentcheck</text>
+    <text x="84" y="256">[F] service.py</text>
+    <text x="84" y="278">[F] api.py</text>
+    <text x="84" y="300">[F] workflow.py</text>
+    <text x="84" y="322">[F] fusion.py</text>
+    <text x="48" y="348">[D] web</text>
+    <text x="66" y="370">[F] index.html</text>
+    <text x="48" y="396">[D] docs</text>
+    <text x="66" y="418">[D] assets</text>
+    <text x="84" y="440">[F] dashboard-preview.svg</text>
+    <text x="84" y="462">[F] workflow-flow.svg</text>
+    <text x="66" y="484">[F] RUNBOOK.md</text>
+    <text x="48" y="510">[D] tests</text>
+    <text x="66" y="532">[F] test_service.py</text>
+    <text x="66" y="554">[F] test_api.py</text>
+  </g>
+
+  <rect x="32" y="596" width="368" height="296" fill="url(#panelSoft)" stroke="#1de2a0" stroke-opacity="0.65"/>
+  <text x="44" y="620" class="h2">ROLES / SESSIONS</text>
+  <text x="44" y="640" class="meta">8 active roles | codex + claude + future adapters</text>
+
+  <g>
+    <rect x="44" y="654" width="344" height="28" fill="#091b1f" stroke="#2ce8ab"/>
+    <rect x="50" y="660" width="16" height="16" fill="#73ffd6"/>
+    <text x="74" y="673" class="tree">all roles | stream: merged</text>
+
+    <rect x="44" y="688" width="344" height="28" fill="#091b1f" stroke="#2ce8ab"/>
+    <rect x="50" y="694" width="16" height="16" fill="#8ec1ff"/>
+    <text x="74" y="707" class="tree">codex#author-A | tasks=42 active=2</text>
+
+    <rect x="44" y="722" width="344" height="28" fill="#091b1f" stroke="#2ce8ab"/>
+    <rect x="50" y="728" width="16" height="16" fill="#d8f2ff"/>
+    <text x="74" y="741" class="tree">claude#review-B | tasks=45 active=3</text>
+
+    <rect x="44" y="756" width="344" height="28" fill="#091b1f" stroke="#2ce8ab"/>
+    <rect x="50" y="762" width="16" height="16" fill="#b9ffd9"/>
+    <text x="74" y="775" class="tree">claude#author-C | tasks=38 active=2</text>
+
+    <rect x="44" y="790" width="344" height="28" fill="#091b1f" stroke="#2ce8ab"/>
+    <rect x="50" y="796" width="16" height="16" fill="#9ab4ff"/>
+    <text x="74" y="809" class="tree">codex#review-D | tasks=39 active=2</text>
+
+    <rect x="44" y="824" width="344" height="28" fill="#091b1f" stroke="#2ce8ab"/>
+    <rect x="50" y="830" width="16" height="16" fill="#ffc88b"/>
+    <text x="74" y="843" class="tree">gemini#review-E | tasks=8 active=1</text>
+
+    <rect x="44" y="858" width="344" height="28" fill="#091b1f" stroke="#2ce8ab"/>
+    <rect x="50" y="864" width="16" height="16" fill="#ffa1a1"/>
+    <text x="74" y="877" class="tree">qwen#review-F | tasks=3 active=1</text>
+  </g>
+
+  <rect x="430" y="118" width="1152" height="248" fill="url(#panel)" stroke="#20e8a2" stroke-width="1.2"/>
+  <text x="446" y="143" class="h2">DIALOGUE SCOPE + TASK CONTROLS</text>
+
+  <rect x="446" y="156" width="286" height="30" fill="#0a1f24" stroke="#2ce8ab"/>
+  <text x="454" y="176" class="field">PROJECT</text>
+  <text x="530" y="176" class="value">awe-agentcheck</text>
+
+  <rect x="744" y="156" width="402" height="30" fill="#0a1f24" stroke="#2ce8ab"/>
+  <text x="752" y="176" class="field">TASK</text>
+  <text x="798" y="176" class="value">task-210 | AutoEvolve: Stabilize watchdog retries</text>
+
+  <rect x="1158" y="156" width="408" height="30" fill="#0a1f24" stroke="#2ce8ab"/>
+  <text x="1166" y="176" class="field">FORCE-FAIL REASON</text>
+  <text x="1296" y="176" class="value">watchdog_timeout: operator forced fail</text>
+
+  <g>
+    <rect x="446" y="198" width="86" height="32" fill="#11462f" stroke="#43f6bd"/>
+    <text x="470" y="219" class="btn">Start</text>
+
+    <rect x="542" y="198" width="146" height="32" fill="#11462f" stroke="#43f6bd"/>
+    <text x="556" y="219" class="btn">Approve + Queue</text>
+
+    <rect x="698" y="198" width="142" height="32" fill="#11462f" stroke="#43f6bd"/>
+    <text x="712" y="219" class="btn">Approve + Start</text>
+
+    <rect x="850" y="198" width="84" height="32" fill="#4f2d16" stroke="#ff9355"/>
+    <text x="874" y="219" class="btn">Reject</text>
+
+    <rect x="944" y="198" width="84" height="32" fill="#4f2d16" stroke="#ff9355"/>
+    <text x="968" y="219" class="btn">Cancel</text>
+
+    <rect x="1038" y="198" width="98" height="32" fill="#262e36" stroke="#9ec0d8"/>
+    <text x="1052" y="219" class="btn">Force Fail</text>
+
+    <rect x="1146" y="198" width="146" height="32" fill="#262e36" stroke="#9ec0d8"/>
+    <text x="1158" y="219" class="btn">Reload Dialogue</text>
+  </g>
+
+  <g class="meta">
+    <text x="448" y="254">Status: running</text>
+    <text x="600" y="254">Round: 2 / 3</text>
+    <text x="742" y="254">Reviewers: 3</text>
+    <text x="860" y="254">Self Loop Mode: 0</text>
+    <text x="1046" y="254">Auto Merge: 1</text>
+    <text x="1170" y="254">Evolution Level: 2</text>
+    <text x="1360" y="254">Evolve Until: 2026-02-17 06:00</text>
+  </g>
+
+  <rect x="446" y="268" width="1118" height="86" fill="#07181d" stroke="#1fe5a4" stroke-opacity="0.7"/>
+  <text x="458" y="292" class="tree">Task Snapshot</text>
+  <text x="458" y="316" class="meta">workspace=C:/Users/hangw/awe-agentcheck  |  sandbox=C:/Users/hangw/awe-agentcheck-lab/20260214-052100-task210</text>
+  <text x="458" y="338" class="meta">reason_bucket_counts={"provider_limit":4,"command_timeout":3}  |  pass_rate_50=61.9%</text>
+
+  <rect x="430" y="380" width="1152" height="350" fill="url(#panel)" stroke="#20e8a2" stroke-width="1.2"/>
+  <text x="446" y="405" class="h2">CONVERSATION</text>
+
+  <g>
+    <rect x="448" y="418" width="1116" height="66" fill="#081a1f" stroke="#1fe5a4" stroke-opacity="0.6"/>
+    <rect x="458" y="429" width="42" height="42" fill="#d8f2ff" stroke="#98b5c6"/>
+    <text x="510" y="444" class="msgActor" fill="#d8f2ff">system</text>
+    <text x="510" y="462" class="msgText">task_started | status=running | sandbox ready</text>
   </g>
 
   <g>
-    <rect x="514" y="214" width="210" height="44" rx="10" fill="#0a2135" stroke="#60a5fa" stroke-opacity="0.35"/>
-    <rect x="736" y="214" width="210" height="44" rx="10" fill="#0a2135" stroke="#60a5fa" stroke-opacity="0.35"/>
-    <rect x="958" y="214" width="210" height="44" rx="10" fill="#0a2135" stroke="#60a5fa" stroke-opacity="0.35"/>
-    <rect x="1180" y="214" width="210" height="44" rx="10" fill="#0a2135" stroke="#60a5fa" stroke-opacity="0.35"/>
-    <text x="526" y="242" fill="#c7d2fe" font-size="17" font-family="Consolas, monospace">Start</text>
-    <text x="748" y="242" fill="#c7d2fe" font-size="17" font-family="Consolas, monospace">Approve + Start</text>
-    <text x="970" y="242" fill="#c7d2fe" font-size="17" font-family="Consolas, monospace">Reject</text>
-    <text x="1192" y="242" fill="#c7d2fe" font-size="17" font-family="Consolas, monospace">Force Fail</text>
+    <rect x="448" y="492" width="1116" height="84" fill="#082017" stroke="#2ee9b0" stroke-opacity="0.75"/>
+    <rect x="458" y="510" width="42" height="42" fill="#8effcf" stroke="#3f9f7f"/>
+    <text x="510" y="527" class="msgActor" fill="#8effcf">claude#author-C</text>
+    <text x="510" y="546" class="msgText">Round 2 plan: harden retry behavior for start/cancel transitions and add timeout regression tests.</text>
+    <text x="510" y="564" class="msgText">I will patch service timeout guards, then run pytest+ruff before proposing merge.</text>
   </g>
 
-  <g fill="#e2e8f0" font-size="17" font-family="Consolas, monospace">
-    <rect x="514" y="456" width="1032" height="64" rx="10" fill="#091a2f" stroke="#2dd4bf" stroke-opacity="0.34"/>
-    <rect x="514" y="532" width="1032" height="64" rx="10" fill="#091a2f" stroke="#2dd4bf" stroke-opacity="0.34"/>
-    <rect x="514" y="608" width="1032" height="64" rx="10" fill="#091a2f" stroke="#2dd4bf" stroke-opacity="0.34"/>
-    <text x="532" y="495">system | status=running | task_running</text>
-    <text x="532" y="571">claude#author-A | discussion | round=1</text>
-    <text x="532" y="647">codex#review-B | proposal_review | verdict=no_blocker</text>
+  <g>
+    <rect x="448" y="584" width="1116" height="74" fill="#101b2b" stroke="#87b6ff" stroke-opacity="0.7"/>
+    <rect x="1514" y="598" width="42" height="42" fill="#9ab4ff" stroke="#4d6399"/>
+    <text x="510" y="619" class="msgText">codex#review-D: request clearer failure reason mapping for provider_limit vs command_timeout.</text>
+    <text x="510" y="638" class="msgText">Also verify auto cleanup only affects generated sandbox paths.</text>
+    <text x="1468" y="610" class="msgActor" fill="#9ab4ff" text-anchor="end">codex#review-D</text>
   </g>
 
-  <text x="514" y="726" fill="#93c5fd" font-size="18" font-family="Consolas, monospace">CREATE TASK (sandbox_mode / self_loop_mode / auto_merge)</text>
-  <rect x="514" y="742" width="1032" height="106" rx="10" fill="#091a2f" stroke="#60a5fa" stroke-opacity="0.34"/>
-  <text x="532" y="778" fill="#cbd5e1" font-size="16" font-family="Consolas, monospace">title: Improve monitor signal quality</text>
-  <text x="532" y="806" fill="#cbd5e1" font-size="16" font-family="Consolas, monospace">sandbox_mode=1 | self_loop_mode=0 | auto_merge=1</text>
-  <text x="532" y="834" fill="#cbd5e1" font-size="16" font-family="Consolas, monospace">workspace: C:/Users/hangw/awe-agentcheck -> sandbox: .../awe-agentcheck-lab</text>
+  <g>
+    <rect x="448" y="666" width="1116" height="52" fill="#1e1010" stroke="#ff8576" stroke-opacity="0.7"/>
+    <rect x="458" y="673" width="42" height="38" fill="#ffd0c8" stroke="#a7746f"/>
+    <text x="510" y="698" class="msgText">system: author_confirmation_required | summary ready for operator decision.</text>
+  </g>
+
+  <rect x="430" y="744" width="1152" height="164" fill="url(#panel)" stroke="#20e8a2" stroke-width="1.2"/>
+  <text x="446" y="768" class="h2">CREATE TASK</text>
+
+  <text x="448" y="791" class="field">TITLE</text>
+  <rect x="448" y="798" width="460" height="26" fill="#0a1f24" stroke="#2ce8ab"/>
+  <text x="456" y="816" class="value">Improve parser reliability under high concurrency</text>
+
+  <text x="922" y="791" class="field">WORKSPACE PATH</text>
+  <rect x="922" y="798" width="642" height="26" fill="#0a1f24" stroke="#2ce8ab"/>
+  <text x="930" y="816" class="value">C:/Users/hangw/awe-agentcheck</text>
+
+  <text x="448" y="839" class="field">AUTHOR</text>
+  <rect x="448" y="846" width="300" height="24" fill="#0a1f24" stroke="#2ce8ab"/>
+  <text x="456" y="863" class="value">claude#author-C</text>
+
+  <text x="760" y="839" class="field">REVIEWERS</text>
+  <rect x="760" y="846" width="804" height="24" fill="#0a1f24" stroke="#2ce8ab"/>
+  <text x="768" y="863" class="value">codex#review-B,codex#review-D,claude#review-E,gemini#review-F</text>
+
+  <rect x="448" y="877" width="100" height="24" fill="#124a32" stroke="#42f6bc"/>
+  <text x="473" y="893" class="btn">Create</text>
+  <rect x="558" y="877" width="136" height="24" fill="#19423b" stroke="#9fd5c7"/>
+  <text x="572" y="893" class="btn">Create + Start</text>
+
+  <text x="1530" y="893" text-anchor="end" class="meta">Preview target: Terminal Pixel layout with high-role density</text>
 </svg>
