@@ -33,6 +33,10 @@
    - redesigned `docs/assets/workflow-flow.svg` into clean-lane runtime flow (no arrow crossing through node bubbles)
    - added bilingual README updates for beginner-grade dashboard button guide
    - added star statistics section (badges + star history chart link) in both README files
+10. About/narrative focus adjusted:
+   - reduced sandbox-first emphasis in top README messaging
+   - reframed product essence to multi-agent collaboration, bug-fix loops, and continuous self-evolution
+   - synchronized hero tagline (`docs/assets/awe-agentcheck-hero.svg`) with new narrative
 
 ## Pause Window Notice (Operator Directive)
 

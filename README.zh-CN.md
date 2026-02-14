@@ -12,18 +12,18 @@
 </p>
 
 <p align="center">
-  <a href="#"><img alt="Sandbox First" src="https://img.shields.io/badge/default-sandbox_first-1d4ed8?style=flat-square"></a>&nbsp;
-  <a href="#"><img alt="Author Gate" src="https://img.shields.io/badge/default-author_approval-f97316?style=flat-square"></a>&nbsp;
-  <a href="#"><img alt="Auto Fusion" src="https://img.shields.io/badge/default-auto_fusion-22c55e?style=flat-square"></a>&nbsp;
-  <a href="#"><img alt="Observability" src="https://img.shields.io/badge/OTel_%7C_Prom_%7C_Loki_%7C_Tempo-observability-8b5cf6?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Multi-Agent Collaboration" src="https://img.shields.io/badge/core-multi_agent_collaboration-06b6d4?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Bugfix and Review Loops" src="https://img.shields.io/badge/core-bugfix_%2B_review_loops-22c55e?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Self Evolution" src="https://img.shields.io/badge/core-self_evolution-8b5cf6?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Policy Guardrails" src="https://img.shields.io/badge/safety-policy_guardrails-f97316?style=flat-square"></a>&nbsp;
   <a href="#"><img alt="Ruff" src="https://img.shields.io/badge/code_style-ruff-d4aa00?style=flat-square"></a>
 </p>
 
 <br/>
 
 <p align="center">
-  <b>面向多 CLI 代理协作的生产级编排平台。</b><br/>
-  <sub>让 Claude 和 Codex 在沙盒优先、可观测、策略可控的环境中互审代码。</sub>
+  <b>面向真实工程问题的多智能体协作引擎。</b><br/>
+  <sub>协调 Claude、Codex 及其他 CLI 智能体，完成故障诊断、修复实现、交叉评审，并持续推动代码库自我进化。</sub>
 </p>
 
 <p align="center">
@@ -47,46 +47,46 @@
 <tr>
 <td width="33%" align="center">
 
-**沙盒优先**
+**多智能体协作**
 
-每个任务默认运行在隔离的 `*-lab` 工作区。系统为每个任务自动生成独立沙盒，通过后自动清理，防止跨任务污染。
-
-</td>
-<td width="33%" align="center">
-
-**作者确认门**
-
-任何代码在进入生产前都需要人工签核。默认 `waiting_manual` 状态确保作者在实现开始前审查每一份提案。
+让一个智能体负责实现，其他智能体负责审阅与反驳，在多轮交叉中收敛到可落地方案。
 
 </td>
 <td width="33%" align="center">
 
-**自动融合**
+**Bug 修复引擎**
 
-任务通过后，工件自动合并并生成变更日志和快照。需要手动控制时可按任务关闭。
+把模糊问题变成结构化流程：复现、修复、审阅、验证、门禁，重点是稳定解决真实缺陷。
+
+</td>
+<td width="33%" align="center">
+
+**持续自我进化**
+
+除了修 bug，还支持引导式/主动式进化，让智能体持续提出改进并验证质量收益。
 
 </td>
 </tr>
 <tr>
 <td width="33%" align="center">
 
-**多提供者角色模型**
+**人工与策略控制**
 
-`provider#alias` 让 Claude 写 / Codex 审，或反向协作。支持同提供者多会话互审。
-
-</td>
-<td width="33%" align="center">
-
-**Web 监控控制台**
-
-实时面板：项目树、角色/会话区、头像化对话流，以及完整的任务生命周期控制。
+作者审批、门禁判定、强制失败等机制确保高风险场景下仍由人类掌控节奏与边界。
 
 </td>
 <td width="33%" align="center">
 
-**夜间自主运行**
+**实时运维控制台**
 
-看门狗超时、提供者降级、冷却控制、单实例锁，保障无人值守连续进化的安全。
+在一个页面里看项目树、角色会话和对话流，并直接执行任务控制动作。
+
+</td>
+<td width="33%" align="center">
+
+**可靠性与可观测性**
+
+通过看门狗、降级切换、冷却策略、指标日志追踪，保障长时间自动运行可测量、可诊断。
 
 </td>
 </tr>

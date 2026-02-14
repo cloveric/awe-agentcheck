@@ -176,7 +176,7 @@
     <!-- Tag line with separators -->
     <g font-family="'JetBrains Mono', Consolas, monospace" font-size="17" letter-spacing="0.8">
       <text x="800" y="330" text-anchor="middle" fill="#94a3b8">
-        sandbox-first  ·  author-approval gate  ·  auto-fusion  ·  observability
+        multi-agent collaboration  ·  bug-fix loops  ·  self-evolution  ·  observability
       </text>
     </g>
 

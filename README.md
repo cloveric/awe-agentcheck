@@ -12,18 +12,18 @@
 </p>
 
 <p align="center">
-  <a href="#"><img alt="Sandbox First" src="https://img.shields.io/badge/default-sandbox_first-1d4ed8?style=flat-square"></a>&nbsp;
-  <a href="#"><img alt="Author Gate" src="https://img.shields.io/badge/default-author_approval-f97316?style=flat-square"></a>&nbsp;
-  <a href="#"><img alt="Auto Fusion" src="https://img.shields.io/badge/default-auto_fusion-22c55e?style=flat-square"></a>&nbsp;
-  <a href="#"><img alt="Observability" src="https://img.shields.io/badge/OTel_%7C_Prom_%7C_Loki_%7C_Tempo-observability-8b5cf6?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Multi-Agent Collaboration" src="https://img.shields.io/badge/core-multi_agent_collaboration-06b6d4?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Bugfix and Review Loops" src="https://img.shields.io/badge/core-bugfix_%2B_review_loops-22c55e?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Self Evolution" src="https://img.shields.io/badge/core-self_evolution-8b5cf6?style=flat-square"></a>&nbsp;
+  <a href="#"><img alt="Policy Guardrails" src="https://img.shields.io/badge/safety-policy_guardrails-f97316?style=flat-square"></a>&nbsp;
   <a href="#"><img alt="Ruff" src="https://img.shields.io/badge/code_style-ruff-d4aa00?style=flat-square"></a>
 </p>
 
 <br/>
 
 <p align="center">
-  <b>Production-grade multi-CLI orchestration for structured AI engineering loops.</b><br/>
-  <sub>Let Claude and Codex review each other's code in a sandbox-first, observable, and policy-controlled environment.</sub>
+  <b>Production-grade multi-agent collaboration engine for real software work.</b><br/>
+  <sub>Coordinate Claude, Codex, and other CLI agents to diagnose bugs, implement fixes, review each other, and continuously evolve your codebase.</sub>
 </p>
 
 <p align="center">
@@ -47,46 +47,46 @@
 <tr>
 <td width="33%" align="center">
 
-**Sandbox First**
+**Multi-Agent Collaboration**
 
-Every task runs in an isolated `*-lab` workspace by default. Auto-generated per-task sandboxes are cleaned on pass, preventing cross-run contamination.
-
-</td>
-<td width="33%" align="center">
-
-**Author Approval Gate**
-
-No code reaches production without human sign-off. The default `waiting_manual` state ensures the author reviews every proposal before implementation begins.
+Run cross-agent workflows where one model authors, others review, and sessions challenge each other until the result is defensible.
 
 </td>
 <td width="33%" align="center">
 
-**Auto Fusion**
+**Bug Resolution Engine**
 
-On pass, artifacts merge automatically with changelog generation and snapshot preservation. Disable per-task when you need manual control.
+Turn vague failures into structured rounds: reproduce, patch, review, verify, and gate. Built for real bug-fixing throughput, not demo chats.
+
+</td>
+<td width="33%" align="center">
+
+**Continuous Self-Evolution**
+
+Run guided or proactive evolution loops so agents can propose, test, and refine improvements beyond the immediate bug ticket.
 
 </td>
 </tr>
 <tr>
 <td width="33%" align="center">
 
-**Multi-Provider Roles**
+**Human + Policy Control**
 
-`provider#alias` model lets Claude write / Codex review, or vice versa. Support for same-provider multi-session cross-checking.
-
-</td>
-<td width="33%" align="center">
-
-**Web Monitor Console**
-
-Real-time dashboard with project tree, role/session panels, avatar-based chat dialogue, and full task lifecycle controls.
+Manual author approval, medium-gate decisions, and force-fail controls keep operators in charge when risk is high.
 
 </td>
 <td width="33%" align="center">
 
-**Overnight Autonomy**
+**Live Operations Console**
 
-Watchdog timeouts, provider fallback, cooldown control, and single-instance locks for safe unattended continuous evolution.
+Monitor project tree, role sessions, and conversation flow in real time, then execute task controls from a single surface.
+
+</td>
+<td width="33%" align="center">
+
+**Reliability + Observability**
+
+Use watchdog timeouts, provider fallback, cooldowns, metrics, logs, and traces to keep long-running automation measurable and stable.
 
 </td>
 </tr>
