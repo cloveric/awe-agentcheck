@@ -670,6 +670,10 @@ class WorkflowEngine:
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
         plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
+        plain_review_format = WorkflowEngine._plain_review_format_instruction(
+            enabled=bool(config.plain_mode),
+            language=config.conversation_language,
+        )
         mode_guidance = ''
         if level >= 1:
             mode_guidance = (
@@ -689,6 +693,7 @@ class WorkflowEngine:
             "Do not mark BLOCKER for style-only, process-only, or preference-only feedback.\n"
             f"{mode_guidance}"
             "Output must include one line: VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN.\n"
+            f"{plain_review_format}\n"
             "Do not ask follow-up questions. Keep response concise.\n"
             f"Implementation summary:\n{clipped}\n"
         )
@@ -773,6 +778,29 @@ class WorkflowEngine:
         return (
             'Plain Mode: enabled. Write for small/beginner readers in short sentences. '
             'Avoid internal process jargon, hidden prompt mechanics, or tool/skill self-reference. '
-            'Start with one-line conclusion, then compact bullet points: issue -> impact -> evidence, '
-            'and next actions.'
+            'Avoid legalistic wording such as abstract blocker-policy debates. '
+            'Use concrete language focused on what is wrong, why it matters, and what to do next.'
+        )
+
+    @staticmethod
+    def _plain_review_format_instruction(*, enabled: bool, language: str | None) -> str:
+        if not bool(enabled):
+            return (
+                "After VERDICT line, provide concise rationale and critical risks."
+            )
+        lang = str(language or '').strip().lower()
+        if lang == 'zh':
+            return (
+                "After VERDICT line, write exactly 3 short lines:\n"
+                "问题: <一句话>\n"
+                "影响: <一句话>\n"
+                "下一步: <一句话>\n"
+                "Each line should be simple and concrete; no internal workflow terms."
+            )
+        return (
+            "After VERDICT line, write exactly 3 short lines:\n"
+            "Issue: <one sentence>\n"
+            "Impact: <one sentence>\n"
+            "Next: <one sentence>\n"
+            "Keep wording simple and concrete; no internal workflow terms."
         )

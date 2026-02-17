@@ -537,6 +537,64 @@ def test_api_project_history_clear_removes_terminal_records_only(tmp_path: Path)
     assert task_c['task_id'] in ids
 
 
+def test_api_events_fallback_to_artifact_history_when_task_missing_from_repository(tmp_path: Path):
+    repository = InMemoryTaskRepository()
+    artifact_store = ArtifactStore(tmp_path / '.agents')
+    service = OrchestratorService(
+        repository=repository,
+        artifact_store=artifact_store,
+        workflow_engine=FakeWorkflowEngine(),
+    )
+    client = TestClient(create_app(service=service))
+
+    task_id = 'task-history-only-1'
+    artifact_store.update_state(
+        task_id,
+        {
+            'task_id': task_id,
+            'status': 'passed',
+            'project_path': str(tmp_path),
+            'workspace_path': str(tmp_path),
+        },
+    )
+    artifact_store.append_event(
+        task_id,
+        {
+            'seq': 1,
+            'task_id': task_id,
+            'type': 'discussion',
+            'round': 1,
+            'payload': {
+                'participant': 'codex#author-A',
+                'output': 'history plan',
+            },
+            'created_at': '2026-02-17T09:26:35Z',
+        },
+    )
+    artifact_store.append_event(
+        task_id,
+        {
+            'type': 'review',
+            'round': 1,
+            'participant': 'claude#review-B',
+            'verdict': 'no_blocker',
+            'output': 'history review',
+            'created_at': '2026-02-17T09:27:00Z',
+        },
+    )
+
+    resp = client.get(f'/api/tasks/{task_id}/events')
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 2
+    assert rows[0]['task_id'] == task_id
+    assert rows[0]['type'] == 'discussion'
+    assert rows[1]['type'] == 'review'
+    assert rows[1]['payload']['participant'] == 'claude#review-B'
+    assert rows[1]['payload']['verdict'] == 'no_blocker'
+    assert rows[1]['payload']['output'] == 'history review'
+
+
 def test_api_create_task_rejects_invalid_evolve_until(tmp_path: Path):
     client = build_client(tmp_path)
     resp = client.post(

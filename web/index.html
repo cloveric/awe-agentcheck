@@ -2214,6 +2214,7 @@
             <button id="cancelBtn" class="btn-warn">Cancel</button>
             <button id="forceFailBtn">Force Fail</button>
             <button id="reloadEventsBtn">Reload Conversation Only</button>
+            <button id="streamDetailBtn">Stream Details: OFF</button>
           </div>
           <div id="actionStatus" class="mini-status"></div>
           <div id="taskSnapshot" class="status-grid"></div>
@@ -2434,10 +2435,15 @@
       createHelpCollapsed: true,
       createHelpLanguage: 'zh',
       polling: true,
+      showStreamDetails: false,
       timer: null,
       apiHealthy: false,
       apiFailureCount: 0,
+      lastDialogueSignature: '',
+      selectionNeedsValidation: false,
     };
+
+    const SELECTION_PREF_KEY = 'awe-agentcheck-selection';
 
     const el = {
       projectSelect: document.getElementById('projectSelect'),
@@ -2464,7 +2470,10 @@
       createHelpLangZhBtn: document.getElementById('createHelpLangZhBtn'),
       createStatus: document.getElementById('createStatus'),
       pollBtn: document.getElementById('pollBtn'),
+      streamDetailBtn: document.getElementById('streamDetailBtn'),
       startBtn: document.getElementById('startBtn'),
+      cancelBtn: document.getElementById('cancelBtn'),
+      forceFailBtn: document.getElementById('forceFailBtn'),
       forceReason: document.getElementById('forceReason'),
       connBadge: document.getElementById('connBadge'),
       themeSelect: document.getElementById('themeSelect'),
@@ -2492,6 +2501,14 @@
       streamMode: document.getElementById('streamMode'),
       debateMode: document.getElementById('debateMode'),
     };
+
+    const savedSelection = readSelectionPreference();
+    if (savedSelection) {
+      state.selectedProject = savedSelection.selectedProject;
+      state.selectedTaskId = savedSelection.selectedTaskId;
+      state.selectedRole = savedSelection.selectedRole;
+      state.selectionNeedsValidation = true;
+    }
 
     const THEME_OPTIONS = [
       { id: 'neon', label: 'Neon Grid' },
@@ -2649,6 +2666,54 @@
       } catch {
       }
       return true;
+    }
+
+    function readSelectionPreference() {
+      try {
+        const raw = String(localStorage.getItem(SELECTION_PREF_KEY) || '').trim();
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return null;
+        const selectedProject = normalizeProjectPath(parsed.selectedProject || '') || null;
+        const selectedTaskId = String(parsed.selectedTaskId || '').trim() || null;
+        const selectedRoleRaw = String(parsed.selectedRole || '').trim();
+        const selectedRole = selectedRoleRaw || 'all';
+        return { selectedProject, selectedTaskId, selectedRole };
+      } catch {
+        return null;
+      }
+    }
+
+    function persistSelectionPreference() {
+      try {
+        const selectedProject = normalizeProjectPath(state.selectedProject || '') || '';
+        const selectedTaskId = String(state.selectedTaskId || '').trim();
+        const selectedRoleRaw = String(state.selectedRole || '').trim();
+        const selectedRole = selectedRoleRaw || 'all';
+        if (!selectedProject && !selectedTaskId && selectedRole === 'all') {
+          localStorage.removeItem(SELECTION_PREF_KEY);
+          return;
+        }
+        localStorage.setItem(
+          SELECTION_PREF_KEY,
+          JSON.stringify({
+            selectedProject,
+            selectedTaskId,
+            selectedRole,
+          }),
+        );
+      } catch {
+      }
+    }
+
+    function readStreamDetailPreference() {
+      try {
+        const raw = String(localStorage.getItem('awe-agentcheck-stream-detail') || '').trim();
+        if (raw === '1') return true;
+        if (raw === '0') return false;
+      } catch {
+      }
+      return false;
     }
 
     function applyTheme(themeId, { persist = true } = {}) {
@@ -3710,7 +3775,9 @@
         }
       }
 
-      const sourceTasks = scopedTasks.length ? scopedTasks : state.tasks;
+      const sourceTasks = (selected && selected._history_only)
+        ? []
+        : (scopedTasks.length ? scopedTasks : state.tasks);
       const map = new Map();
       for (const task of sourceTasks) {
         const participants = [task.author_participant, ...(task.reviewer_participants || [])];
@@ -3745,12 +3812,106 @@
       return state.tasks.filter((task) => normalizeProjectPath(task.project_path || task.workspace_path) === path);
     }
 
+    function makeHistoryOnlyTask(item) {
+      const taskId = String(item.task_id || '').trim();
+      const projectPath = String(item.project_path || '').trim();
+      const status = String(item.status || 'unknown').trim() || 'unknown';
+      const historyStamp = String(item.updated_at || item.created_at || '').trim();
+      return {
+        task_id: taskId,
+        title: String(item.title || `Task ${taskId}`).trim() || `Task ${taskId}`,
+        description: '',
+        author_participant: '',
+        reviewer_participants: [],
+        evolution_level: 0,
+        evolve_until: null,
+        conversation_language: 'en',
+        provider_models: {},
+        provider_model_params: {},
+        claude_team_agents: false,
+        repair_mode: 'balanced',
+        plain_mode: true,
+        stream_mode: true,
+        debate_mode: true,
+        sandbox_mode: false,
+        sandbox_workspace_path: null,
+        sandbox_generated: false,
+        sandbox_cleanup_on_pass: false,
+        self_loop_mode: 0,
+        project_path: projectPath,
+        auto_merge: !!(item.revisions && item.revisions.auto_merge),
+        merge_target_path: null,
+        workspace_path: projectPath,
+        status,
+        last_gate_reason: item.last_gate_reason || null,
+        max_rounds: 1,
+        test_command: '',
+        lint_command: '',
+        rounds_completed: 0,
+        cancel_requested: false,
+        created_at: String(item.created_at || '').trim(),
+        updated_at: String(item.updated_at || '').trim(),
+        _history_only: true,
+        _history_stamp: historyStamp,
+      };
+    }
+
+    function historyOnlyTasksInSelectedProject() {
+      const liveIds = new Set(state.tasks.map((task) => String(task.task_id || '').trim()).filter(Boolean));
+      const path = state.selectedProject;
+      const out = [];
+      for (const item of state.historyItems || []) {
+        const taskId = String(item.task_id || '').trim();
+        if (!taskId || liveIds.has(taskId)) continue;
+        const itemProject = normalizeProjectPath(item.project_path || '');
+        if (path && itemProject !== path) continue;
+        out.push(makeHistoryOnlyTask(item));
+      }
+      return out;
+    }
+
+    function taskSortPriority(status) {
+      const text = String(status || '').trim().toLowerCase();
+      if (text === 'running') return 30;
+      if (text === 'waiting_manual') return 20;
+      if (text === 'queued') return 10;
+      return 0;
+    }
+
+    function taskSortStamp(task) {
+      const raw = String(
+        task.updated_at
+        || task.created_at
+        || task._history_stamp
+        || ''
+      ).trim();
+      if (!raw) return 0;
+      const dt = parseEventDate(raw);
+      if (Number.isNaN(dt.getTime())) return 0;
+      return dt.getTime();
+    }
+
+    function taskChoicesInSelectedProject() {
+      const combined = [...tasksInSelectedProject(), ...historyOnlyTasksInSelectedProject()];
+      combined.sort((a, b) => {
+        const sourceDiff = Number(!!a._history_only) - Number(!!b._history_only);
+        if (sourceDiff !== 0) return sourceDiff;
+        const prioDiff = taskSortPriority(b.status) - taskSortPriority(a.status);
+        if (prioDiff !== 0) return prioDiff;
+        const stampDiff = taskSortStamp(b) - taskSortStamp(a);
+        if (stampDiff !== 0) return stampDiff;
+        return String(a.task_id || '').localeCompare(String(b.task_id || ''));
+      });
+      return combined;
+    }
+
     function ensureSelections() {
       const projects = projectGroups();
       if (!projects.length) {
         state.selectedProject = null;
         state.selectedTaskId = null;
         state.selectedRole = 'all';
+        persistSelectionPreference();
         return;
       }
 
@@ -3758,27 +3919,48 @@
         state.selectedProject = projects[0].key;
       }
 
-      const scoped = tasksInSelectedProject();
+      const scoped = taskChoicesInSelectedProject();
       if (!scoped.length) {
         state.selectedTaskId = null;
         state.selectedRole = 'all';
+        persistSelectionPreference();
         return;
       }
 
       if (!state.selectedTaskId || !scoped.some((t) => t.task_id === state.selectedTaskId)) {
-        const running = scoped.find((t) => String(t.status || '') === 'running');
-        state.selectedTaskId = (running || scoped[0]).task_id;
+        const liveScoped = scoped.filter((t) => !t._history_only);
+        const runningLive = liveScoped.find((t) => String(t.status || '') === 'running');
+        const runningAny = scoped.find((t) => String(t.status || '') === 'running');
+        state.selectedTaskId = (runningLive || liveScoped[0] || runningAny || scoped[0]).task_id;
+      }
+
+      if (state.selectionNeedsValidation) {
+        const current = scoped.find((t) => t.task_id === state.selectedTaskId) || null;
+        const liveScoped = scoped.filter((t) => !t._history_only);
+        if (current && current._history_only && liveScoped.length) {
+          const runningLive = liveScoped.find((t) => String(t.status || '') === 'running');
+          state.selectedTaskId = (runningLive || liveScoped[0]).task_id;
+        }
+        state.selectionNeedsValidation = false;
       }
 
       const current = scoped.find((t) => t.task_id === state.selectedTaskId) || null;
       if (state.selectedRole !== 'all' && current && !participantInTask(current, state.selectedRole)) {
         state.selectedRole = 'all';
       }
+      persistSelectionPreference();
     }
 
     function selectedTask() {
       if (!state.selectedTaskId) return null;
-      return state.tasks.find((task) => task.task_id === state.selectedTaskId) || null;
+      const key = String(state.selectedTaskId || '').trim();
+      if (!key) return null;
+      const live = state.tasks.find((task) => String(task.task_id || '').trim() === key);
+      if (live) return live;
+
+      const history = (state.historyItems || []).find((item) => String(item.task_id || '').trim() === key);
+      if (!history) return null;
+      return makeHistoryOnlyTask(history);
     }
 
     function renderProjectSelector() {
@@ -4018,7 +4200,7 @@
     }
 
     function renderTaskSelect() {
-      const scoped = tasksInSelectedProject();
+      const scoped = taskChoicesInSelectedProject();
       el.taskSelect.innerHTML = '';
       if (!scoped.length) {
         const option = document.createElement('option');
@@ -4033,7 +4215,8 @@
       for (const task of scoped) {
         const option = document.createElement('option');
         option.value = task.task_id;
-        option.textContent = `${task.task_id} | ${task.title}`;
+        const sourceTag = task._history_only ? ' | history' : '';
+        option.textContent = `${task.task_id} | ${task.title}${sourceTag}`;
         if (task.task_id === state.selectedTaskId) {
           option.selected = true;
         }
@@ -4046,20 +4229,25 @@
       if (!task) {
         el.taskSnapshot.innerHTML = '<div class="empty">No task selected.</div>';
         if (el.startBtn) el.startBtn.disabled = true;
+        if (el.cancelBtn) el.cancelBtn.disabled = true;
+        if (el.forceFailBtn) el.forceFailBtn.disabled = true;
         if (el.approveQueueBtn) el.approveQueueBtn.disabled = true;
         if (el.approveStartBtn) el.approveStartBtn.disabled = true;
         if (el.rejectBtn) el.rejectBtn.disabled = true;
         return;
       }
 
+      const historyOnly = !!task._history_only;
       const project = normalizeProjectPath(task.workspace_path);
       const reviewerCount = (task.reviewer_participants || []).length;
       el.taskSnapshot.innerHTML = '';
 
       const boxes = [
-        { label: 'Task', value: `${task.task_id} (${task.rounds_completed}/${task.max_rounds})` },
+        { label: 'TaskSource', value: historyOnly ? 'history (read-only)' : 'live' },
+        { label: 'TaskID', value: task.task_id },
+        { label: 'RoundProgress', value: `${task.rounds_completed}/${task.max_rounds}` },
         { label: 'Status', value: task.status, html: statusPill(task.status) },
-        { label: 'Project', value: task.project_path || project },
+        { label: 'ProjectPath', value: task.project_path || project },
         { label: 'Workspace', value: project },
         { label: 'ConversationLang', value: String(task.conversation_language || 'en') },
         { label: 'Sandbox', value: String(task.sandbox_mode ? 1 : 0) },
@@ -4102,12 +4290,20 @@
         el.taskSnapshot.appendChild(row);
       }
 
-      const waitingManual = String(task.status) === 'waiting_manual';
-      const canStart = String(task.status) === 'queued';
+      const status = String(task.status || '').trim().toLowerCase();
+      const waitingManual = !historyOnly && status === 'waiting_manual';
+      const canStart = !historyOnly && status === 'queued';
+      const canOperate = !historyOnly && isActiveStatus(status);
       if (el.startBtn) {
         el.startBtn.disabled = !canStart;
-        el.startBtn.title = canStart ? '' : `Start is available only when status=queued (current=${task.status}).`;
+        if (historyOnly) {
+          el.startBtn.title = 'History task is read-only. Start is unavailable.';
+        } else {
+          el.startBtn.title = canStart ? '' : `Start is available only when status=queued (current=${task.status}).`;
+        }
       }
+      if (el.cancelBtn) el.cancelBtn.disabled = !canOperate;
+      if (el.forceFailBtn) el.forceFailBtn.disabled = !canOperate;
       if (el.approveQueueBtn) el.approveQueueBtn.disabled = !waitingManual;
       if (el.approveStartBtn) el.approveStartBtn.disabled = !waitingManual;
       if (el.rejectBtn) el.rejectBtn.disabled = !waitingManual;
@@ -4303,6 +4499,7 @@
           jump.textContent = 'Open task in Dialogue';
           jump.addEventListener('click', async () => {
             state.selectedTaskId = item.task_id;
+            persistSelectionPreference();
             renderTaskSelect();
             renderTaskSnapshot();
             await refreshConversation({ force: true });
@@ -4345,48 +4542,149 @@
       return 'system';
     }
 
-    function eventText(event) {
+    function stripControlLines(text) {
+      const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+      const out = [];
+      for (const raw of lines) {
+        const line = String(raw || '');
+        if (/^\s*(VERDICT|NEXT_ACTION)\s*:/i.test(line)) continue;
+        out.push(line);
+      }
+      return out.join('\n').trim();
+    }
+
+    function stripInternalNoise(text) {
+      const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+      const out = [];
+      const dropPatterns = [
+        /^\s*OpenAI Codex v/i,
+        /^\s*Reading prompt from stdin/i,
+        /^\s*[-]{4,}\s*$/,
+        /^\s*workdir\s*:/i,
+        /^\s*model\s*:/i,
+        /^\s*provider\s*:/i,
+        /^\s*approval\s*:/i,
+        /^\s*sandbox\s*:/i,
+        /^\s*reasoning effort\s*:/i,
+        /^\s*reasoning summaries\s*:/i,
+        /^\s*session id\s*:/i,
+        /^\s*tokens used\s*$/i,
+        /^\s*\d[\d,]*\s*$/,
+        /^\s*(user|codex|thinking)\s*$/i,
+        /^\s*mcp\s*:/i,
+        /using-superpowers/i,
+        /writing-plans/i,
+        /skills?\s*:/i,
+      ];
+      for (const raw of lines) {
+        const line = String(raw || '');
+        if (dropPatterns.some((pattern) => pattern.test(line))) {
+          continue;
+        }
+        out.push(line);
+      }
+      return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    function verdictLabel(verdict, lang) {
+      const v = String(verdict || '').trim().toLowerCase();
+      if (lang === 'zh') {
+        if (v === 'no_blocker') return '通过（可继续）';
+        if (v === 'blocker') return '不通过（需先修复）';
+        return '不确定（信息不足）';
+      }
+      if (v === 'no_blocker') return 'Pass (can continue)';
+      if (v === 'blocker') return 'Needs fixes (blocking)';
+      return 'Unclear (insufficient info)';
+    }
+
+    function eventText(event, task) {
       const payload = event.payload || {};
-      if (payload.output) return String(payload.output);
+      const plainMode = !!(task && task.plain_mode !== false);
+      const lang = String((task && task.conversation_language) || 'en').toLowerCase();
+
+      if (payload.output) {
+        const raw = String(payload.output || '');
+        if (plainMode) {
+          const cleaned = stripControlLines(stripInternalNoise(raw));
+          if (event.type === 'proposal_review' || event.type === 'proposal_precheck_review' || event.type === 'review') {
+            const verdict = verdictLabel(payload.verdict, lang);
+            if (lang === 'zh') {
+              return `判定: ${verdict}\n说明: ${cleaned || '无'}`;
+            }
+            return `Verdict: ${verdict}\nReason: ${cleaned || 'n/a'}`;
+          }
+          return cleaned || raw || (lang === 'zh' ? '暂无可读内容' : 'No readable content yet');
+        }
+        return raw;
+      }
       if (payload.chunk) {
-        const chunk = String(payload.chunk);
         const streamName = String(payload.stream || 'stdout').toLowerCase();
-        return streamName === 'stderr' ? `[stderr] ${chunk}` : chunk;
+        if (!state.showStreamDetails) return '';
+        const chunk = String(payload.chunk);
+        const cleaned = stripInternalNoise(chunk);
+        if (!cleaned) return '';
+        return streamName === 'stderr' ? `[stderr] ${cleaned}` : cleaned;
       }
       if (event.type === 'debate_started') {
         const count = Number(payload.reviewer_count || 0);
+        if (plainMode && lang === 'zh') return `进入评审优先讨论，评审人数: ${count}`;
         return `debate_started: reviewers=${count}`;
       }
-      if (event.type === 'debate_completed') return 'debate_completed';
+      if (event.type === 'debate_completed') {
+        if (plainMode && lang === 'zh') return '评审优先讨论阶段完成';
+        return 'debate_completed';
+      }
       if (event.type === 'debate_review_started' || event.type === 'debate_reply_started') {
         const participant = String(payload.participant || 'agent');
         const timeout = Number(payload.timeout_seconds || 0);
+        if (plainMode && lang === 'zh') return `正在处理评审意见: ${participant} (超时 ${timeout}s)`;
         return `${event.type}: participant=${participant} timeout=${timeout}s`;
       }
       if (event.type === 'proposal_precheck_review_started') {
         const participant = String(payload.participant || 'reviewer');
         const timeout = Number(payload.timeout_seconds || 0);
+        if (plainMode && lang === 'zh') return `预检查评审启动: ${participant} (超时 ${timeout}s)`;
         return `proposal_precheck_review_started: participant=${participant} timeout=${timeout}s`;
       }
       if (event.type === 'discussion_started' || event.type === 'implementation_started') {
         const provider = String(payload.provider || 'unknown');
         const timeout = Number(payload.timeout_seconds || 0);
+        if (plainMode && lang === 'zh') {
+          const phase = event.type === 'discussion_started' ? '方案讨论' : '代码实现';
+          return `${phase}启动: ${provider} (超时 ${timeout}s)`;
+        }
         return `${event.type}: provider=${provider} timeout=${timeout}s`;
       }
       if (event.type === 'review_started') {
         const participant = String(payload.participant || 'reviewer');
         const timeout = Number(payload.timeout_seconds || 0);
+        if (plainMode && lang === 'zh') return `代码评审启动: ${participant} (超时 ${timeout}s)`;
         return `review_started: participant=${participant} timeout=${timeout}s`;
       }
       if (event.type === 'verification_started') {
         const timeout = Number(payload.timeout_seconds || 0);
+        if (plainMode && lang === 'zh') return `测试与静态检查启动 (超时 ${timeout}s)`;
         return `verification_started: timeout=${timeout}s`;
       }
-      if (event.type === 'author_confirmation_required' && payload.summary) return String(payload.summary);
+      if (event.type === 'author_confirmation_required' && payload.summary) {
+        if (!plainMode) return String(payload.summary);
+        const cleanedSummary = stripInternalNoise(String(payload.summary || ''));
+        return cleanedSummary || String(payload.summary || '');
+      }
       if (event.type === 'author_decision' && payload.decision) {
+        if (plainMode && lang === 'zh') {
+          const d = String(payload.decision || '');
+          return d === 'approved' ? '作者已批准，继续执行。' : '作者已拒绝，任务停止。';
+        }
         return `decision=${payload.decision}${payload.note ? ` | note=${payload.note}` : ''}`;
       }
-      if (event.type === 'verification') return `tests_ok=${payload.tests_ok} lint_ok=${payload.lint_ok}`;
+      if (event.type === 'verification') {
+        if (plainMode && lang === 'zh') {
+          return `验证结果: 测试=${payload.tests_ok ? '通过' : '失败'}，Lint=${payload.lint_ok ? '通过' : '失败'}`;
+        }
+        return `tests_ok=${payload.tests_ok} lint_ok=${payload.lint_ok}`;
+      }
       if (payload.reason) return String(payload.reason);
       if (payload.status) return `status=${payload.status}`;
       const keys = Object.keys(payload);
@@ -4415,13 +4713,30 @@
       return 'system';
     }
 
+    function dialogueSignature(task, events, role) {
+      const taskId = task ? String(task.task_id || '') : 'none';
+      const list = Array.isArray(events) ? events : [];
+      const last = list.length ? list[list.length - 1] : null;
+      const lastSeq = last ? String(last.seq ?? '') : '';
+      const lastType = last ? String(last.type || '') : '';
+      const lastCreatedAt = last ? String(last.created_at || '') : '';
+      const streamMode = state.showStreamDetails ? 'stream-on' : 'stream-off';
+      return `${taskId}|${String(role || 'all')}|${streamMode}|${list.length}|${lastSeq}|${lastType}|${lastCreatedAt}`;
+    }
+
     function renderDialogue(events) {
       const task = selectedTask();
       const stream = Array.isArray(events) ? events : [];
       const filtered = stream.filter((event) => {
+        if (String(event.type || '') === 'participant_stream' && !state.showStreamDetails) return false;
         if (state.selectedRole === 'all') return true;
         return eventActor(event, task) === state.selectedRole;
       });
+      const signature = dialogueSignature(task, filtered, state.selectedRole);
+      if (state.lastDialogueSignature === signature) {
+        return;
+      }
+      state.lastDialogueSignature = signature;
 
       el.dialogue.innerHTML = '';
       if (!task) {
@@ -4467,7 +4782,7 @@
 
         const body = document.createElement('pre');
         body.className = 'msg-text';
-        const text = eventText(event) || '(no payload text)';
+        const text = eventText(event, task) || '(no payload text)';
         body.textContent = text;
 
         head.appendChild(actor);
@@ -4547,7 +4862,8 @@
         return;
       }
       try {
-        const events = await loadEvents(task.task_id, { force });
+        const liveTask = isActiveStatus(task.status);
+        const events = await loadEvents(task.task_id, { force: force || liveTask });
         renderDialogue(events);
       } catch (err) {
         renderDialogue([]);
@@ -4830,6 +5146,17 @@
       }
     }
 
+    function setStreamDetail(enabled) {
+      state.showStreamDetails = !!enabled;
+      if (el.streamDetailBtn) {
+        el.streamDetailBtn.textContent = `Stream Details: ${state.showStreamDetails ? 'ON' : 'OFF'}`;
+      }
+      try {
+        localStorage.setItem('awe-agentcheck-stream-detail', state.showStreamDetails ? '1' : '0');
+      } catch {
+      }
+    }
+
     function computeDefaultEvolveUntil() {
       const now = new Date();
       const target = new Date(now);
@@ -4856,6 +5183,12 @@
       await refreshConversation({ force: true });
     });
     document.getElementById('pollBtn').addEventListener('click', () => setPolling(!state.polling));
+    if (el.streamDetailBtn) {
+      el.streamDetailBtn.addEventListener('click', async () => {
+        setStreamDetail(!state.showStreamDetails);
+        await refreshConversation({ force: true });
+      });
+    }
     document.getElementById('startBtn').addEventListener('click', () => startSelectedTask());
     document.getElementById('approveQueueBtn').addEventListener('click', () => submitAuthorDecision(true, false));
     document.getElementById('approveStartBtn').addEventListener('click', () => submitAuthorDecision(true, true));
@@ -4912,9 +5245,11 @@
 
     initThemeSelector();
     setPolling(readPollPreference());
+    setStreamDetail(readStreamDetailPreference());
 
     el.taskSelect.addEventListener('change', async () => {
       state.selectedTaskId = el.taskSelect.value || null;
+      persistSelectionPreference();
       renderTaskSnapshot();
       renderProjectHistory();
       await refreshConversation({ force: true });
@@ -4945,6 +5280,7 @@
       const button = target.closest('button[data-role]');
       if (!button) return;
       state.selectedRole = button.getAttribute('data-role') || 'all';
+      persistSelectionPreference();
       renderRoles();
       await refreshConversation();
     });

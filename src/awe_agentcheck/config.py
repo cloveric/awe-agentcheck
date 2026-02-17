@@ -43,7 +43,7 @@ def load_settings() -> Settings:
     dry_run = os.getenv('AWE_DRY_RUN', '').strip().lower() in {'1', 'true', 'yes', 'on'}
     claude_command = os.getenv(
         'AWE_CLAUDE_COMMAND',
-        'claude -p --dangerously-skip-permissions --effort low --model claude-opus-4-6',
+        'claude -p --dangerously-skip-permissions --strict-mcp-config --effort low --model claude-opus-4-6',
     )
     codex_command = os.getenv(
         'AWE_CODEX_COMMAND',

@@ -43,7 +43,7 @@ class AdapterResult:
 
 
 DEFAULT_COMMANDS = {
-    'claude': 'claude -p --dangerously-skip-permissions --effort low --model claude-opus-4-6',
+    'claude': 'claude -p --dangerously-skip-permissions --strict-mcp-config --effort low --model claude-opus-4-6',
     'codex': 'codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh',
     'gemini': 'gemini --yolo',
 }
@@ -172,10 +172,14 @@ class ParticipantRunner:
         if self._is_provider_limit_output(output):
             raise RuntimeError(f'provider_limit provider={participant.provider} command={effective_command}')
 
+        verdict = parse_verdict(output)
+        next_action = parse_next_action(output)
+        normalized_output = self._normalize_output_for_provider(provider=participant.provider, output=output)
+
         return AdapterResult(
-            output=output,
-            verdict=parse_verdict(output),
-            next_action=parse_next_action(output),
+            output=normalized_output,
+            verdict=verdict,
+            next_action=next_action,
             returncode=completed.returncode,
             duration_seconds=elapsed,
         )
@@ -195,6 +199,39 @@ class ParticipantRunner:
         if not text:
             return False
         return any(pattern in text for pattern in _LIMIT_PATTERNS)
+
+    @staticmethod
+    def _normalize_output_for_provider(*, provider: str, output: str) -> str:
+        text = str(output or '').strip()
+        provider_text = str(provider or '').strip().lower()
+        if provider_text != 'codex':
+            return text
+        return ParticipantRunner._normalize_codex_exec_output(text)
+
+    @staticmethod
+    def _normalize_codex_exec_output(output: str) -> str:
+        text = str(output or '').replace('\r\n', '\n').strip()
+        if not text:
+            return text
+
+        # Prefer assistant final message section when Codex emits full transcript.
+        marker = '\ncodex\n'
+        if marker in text:
+            tail = text.rsplit(marker, 1)[-1]
+            if '\ntokens used' in tail:
+                tail = tail.split('\ntokens used', 1)[0]
+            cleaned = tail.strip()
+            if cleaned:
+                return cleaned
+
+        # Fallback: keep content before CLI metadata banner.
+        banner = '\nOpenAI Codex v'
+        if banner in text:
+            head = text.split(banner, 1)[0].strip()
+            if head:
+                return head
+
+        return text
 
     @staticmethod
     def _build_argv(

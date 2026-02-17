@@ -523,7 +523,91 @@ class OrchestratorService:
         }
 
     def list_events(self, task_id: str) -> list[dict]:
-        return self.repository.list_events(task_id)
+        try:
+            events = self.repository.list_events(task_id)
+        except KeyError as exc:
+            fallback = self._load_events_from_artifacts(task_id)
+            if fallback is not None:
+                return fallback
+            raise exc
+
+        if events:
+            return events
+
+        fallback = self._load_events_from_artifacts(task_id)
+        if fallback:
+            return fallback
+        return events
+
+    def _load_events_from_artifacts(self, task_id: str) -> list[dict] | None:
+        key = str(task_id or '').strip()
+        if not key:
+            return None
+        task_dir = self.artifact_store.root / 'threads' / key
+        if not task_dir.exists() or not task_dir.is_dir():
+            return None
+        raw_events = self._load_history_events(task_id=key, row={}, task_dir=task_dir)
+        return self._normalize_history_events(task_id=key, events=raw_events)
+
+    @staticmethod
+    def _normalize_history_events(*, task_id: str, events: list[dict]) -> list[dict]:
+        normalized: list[dict] = []
+        next_seq = 1
+        for raw in events:
+            if not isinstance(raw, dict):
+                continue
+
+            seq_raw = raw.get('seq')
+            try:
+                seq_value = int(seq_raw)
+            except Exception:
+                seq_value = next_seq
+            if seq_value < 1:
+                seq_value = next_seq
+
+            payload_raw = raw.get('payload') if isinstance(raw.get('payload'), dict) else {}
+            payload = dict(payload_raw) if isinstance(payload_raw, dict) else {}
+            for key in (
+                'output',
+                'reason',
+                'verdict',
+                'participant',
+                'provider',
+                'stage',
+                'mode',
+                'changed_files',
+                'copied_files',
+                'deleted_files',
+                'snapshot_path',
+                'changelog_path',
+                'merged_at',
+            ):
+                if key not in payload and key in raw:
+                    payload[key] = raw.get(key)
+
+            round_raw = raw.get('round')
+            try:
+                round_number = int(round_raw) if round_raw is not None else None
+            except Exception:
+                round_number = None
+
+            created_at = str(raw.get('created_at') or '').strip() or datetime.now().isoformat()
+            event_type = str(raw.get('type') or '').strip() or 'history_event'
+
+            normalized.append(
+                {
+                    'seq': seq_value,
+                    'task_id': str(raw.get('task_id') or task_id),
+                    'type': event_type,
+                    'round': round_number,
+                    'payload': payload,
+                    'created_at': created_at,
+                }
+            )
+            next_seq = max(next_seq + 1, seq_value + 1)
+
+        normalized.sort(key=lambda item: int(item.get('seq', 0)))
+        return normalized
 
     def _build_project_history_item(self, *, task_id: str, row: dict | None, task_dir: Path | None) -> dict | None:
         state = self._read_json_file(task_dir / 'state.json') if task_dir is not None else {}
@@ -1281,6 +1365,15 @@ class OrchestratorService:
 
             discussion_text = str(row.get('description') or '').strip()
             if runner is not None:
+                def emit_runtime_event(event: dict) -> None:
+                    self.repository.append_event(
+                        task_id,
+                        event_type=str(event.get('type', 'participant_stream')),
+                        payload=event,
+                        round_number=event.get('round'),
+                    )
+                    self.artifact_store.append_event(task_id, event)
+
                 def run_proposal_reviewer_pass(
                     source_text: str,
                     *,
@@ -1309,15 +1402,32 @@ class OrchestratorService:
                         try:
                             review = runner.run(
                                 participant=reviewer,
-                                prompt=self._proposal_review_prompt(config, merged_context),
+                                prompt=self._proposal_review_prompt(config, merged_context, stage=stage),
                                 cwd=config.cwd,
                                 timeout_seconds=timeout,
                                 model=(config.provider_models or {}).get(reviewer.provider),
                                 model_params=(config.provider_model_params or {}).get(reviewer.provider),
                                 claude_team_agents=bool(config.claude_team_agents),
+                                on_stream=(
+                                    WorkflowEngine._stream_emitter(
+                                        emit=emit_runtime_event,
+                                        round_no=round_no,
+                                        stage=stage,
+                                        participant=reviewer.participant_id,
+                                        provider=reviewer.provider,
+                                    )
+                                    if bool(config.stream_mode)
+                                    else None
+                                ),
                             )
                             verdict = WorkflowEngine._normalize_verdict(str(getattr(review, 'verdict', '') or ''))
                             review_text = str(getattr(review, 'output', '') or '').strip()
+                            verdict, review_text = self._normalize_proposal_reviewer_result(
+                                config=config,
+                                stage=stage,
+                                verdict=verdict,
+                                review_text=review_text,
+                            )
                         except Exception as exc:
                             reason = str(exc or 'review_failed').strip() or 'review_failed'
                             error_payload = {
@@ -1349,7 +1459,7 @@ class OrchestratorService:
                             task_id,
                             event_type='proposal_review',
                             payload=payload,
-                            round_number=1,
+                            round_number=round_no,
                         )
                         self.artifact_store.append_event(task_id, payload)
                         if review_text:
@@ -1369,7 +1479,7 @@ class OrchestratorService:
                 proposal_seed = discussion_text or str(row.get('title') or '').strip()
                 current_seed = proposal_seed
                 reviewer_first_mode = bool(config.debate_mode) and bool(reviewers)
-                max_alignment_attempts = 3
+                max_alignment_attempts = 1 if OrchestratorService._is_audit_intent(config) else 3
 
                 while consensus_rounds < target_rounds:
                     round_no = consensus_rounds + 1
@@ -1410,15 +1520,50 @@ class OrchestratorService:
                             if reviewer_first_mode
                             else WorkflowEngine._discussion_prompt(config, round_no, None)
                         )
-                        discussion = runner.run(
-                            participant=author,
-                            prompt=discussion_prompt,
-                            cwd=config.cwd,
-                            timeout_seconds=timeout,
-                            model=(config.provider_models or {}).get(author.provider),
-                            model_params=(config.provider_model_params or {}).get(author.provider),
-                            claude_team_agents=bool(config.claude_team_agents),
-                        )
+                        try:
+                            discussion = runner.run(
+                                participant=author,
+                                prompt=discussion_prompt,
+                                cwd=config.cwd,
+                                timeout_seconds=timeout,
+                                model=(config.provider_models or {}).get(author.provider),
+                                model_params=(config.provider_model_params or {}).get(author.provider),
+                                claude_team_agents=bool(config.claude_team_agents),
+                                on_stream=(
+                                    WorkflowEngine._stream_emitter(
+                                        emit=emit_runtime_event,
+                                        round_no=round_no,
+                                        stage='proposal_discussion',
+                                        participant=author.participant_id,
+                                        provider=author.provider,
+                                    )
+                                    if bool(config.stream_mode)
+                                    else None
+                                ),
+                            )
+                        except Exception as exc:
+                            reason = str(exc or 'discussion_failed').strip() or 'discussion_failed'
+                            error_payload = {
+                                'type': 'proposal_discussion_error',
+                                'round': round_no,
+                                'attempt': attempt,
+                                'participant': author.participant_id,
+                                'provider': author.provider,
+                                'reason': reason,
+                            }
+                            self.repository.append_event(
+                                task_id,
+                                event_type='proposal_discussion_error',
+                                payload=error_payload,
+                                round_number=round_no,
+                            )
+                            self.artifact_store.append_event(task_id, error_payload)
+                            current_seed = self._append_proposal_feedback_context(
+                                current_seed,
+                                reviewer_id='author',
+                                review_text=f'proposal_discussion_error attempt={attempt}: {reason}',
+                            )
+                            continue
                         discussion_text = str(discussion.output or '').strip() or current_seed
                         round_latest_proposal = discussion_text
                         if discussion_text:
@@ -1843,18 +1988,38 @@ class OrchestratorService:
                 shutil.copy2(src, dst)
 
     @staticmethod
-    def _proposal_review_prompt(config: RunConfig, discussion_output: str) -> str:
+    def _proposal_review_prompt(config: RunConfig, discussion_output: str, *, stage: str = 'proposal_review') -> str:
         clipped = WorkflowEngine._clip_text(discussion_output, max_chars=2500)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         plain_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
+        plain_review_format = WorkflowEngine._plain_review_format_instruction(
+            enabled=bool(config.plain_mode),
+            language=config.conversation_language,
+        )
+        stage_text = str(stage or 'proposal_review').strip().lower()
+        audit_intent = OrchestratorService._is_audit_intent(config)
+        stage_guidance = (
+            "Stage: precheck. First build an audit/review plan, then run quick checks in repository, "
+            "then summarize findings for author discussion."
+            if stage_text == 'proposal_precheck_review'
+            else "Stage: proposal review. Evaluate the updated proposal and unresolved risks."
+        )
+        audit_guidance = (
+            "Task mode is audit/discovery. Do NOT block only because user request is broad or no specific bug id is provided. "
+            "Convert broad request into concrete review scope, checks, and priorities."
+            if audit_intent
+            else "For non-audit tasks, require concrete scope before allowing implementation."
+        )
         return (
             f"Task: {config.title}\n"
             "You are reviewing a proposed implementation plan before code changes.\n"
             "Mark BLOCKER only for correctness, regression, security, or data-loss risks.\n"
             f"{language_instruction}\n"
             f"{plain_instruction}\n"
+            f"{stage_guidance}\n"
+            f"{audit_guidance}\n"
             "Output one line: VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN.\n"
-            "Then provide concise rationale and critical risks.\n"
+            f"{plain_review_format}\n"
             f"Plan:\n{clipped}\n"
         )
 
@@ -1866,6 +2031,12 @@ class OrchestratorService:
         no_blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value)
         blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.BLOCKER.value)
         unknown = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.UNKNOWN.value)
+        audit_author_guidance = (
+            "This is audit/discovery intent. Convert reviewer findings into a concrete execution plan: "
+            "scope(files/modules), checks/tests, expected outputs, and stop conditions."
+            if OrchestratorService._is_audit_intent(config)
+            else "Keep proposal concrete and implementation-ready."
+        )
         return (
             f"Task: {config.title}\n"
             "You are the author responding to reviewer-first proposal feedback.\n"
@@ -1874,9 +2045,117 @@ class OrchestratorService:
             f"Reviewer verdict snapshot: no_blocker={no_blocker}, blocker={blocker}, unknown={unknown}\n"
             "Produce an updated implementation proposal for manual approval.\n"
             "Address reviewer concerns explicitly and keep plan incremental.\n"
+            f"{audit_author_guidance}\n"
             "Do not ask follow-up questions.\n"
             f"Context:\n{clipped}\n"
         )
+
+    @staticmethod
+    def _is_audit_intent(config: RunConfig) -> bool:
+        text = f"{str(config.title or '')}\n{str(config.description or '')}".lower()
+        if not text.strip():
+            return False
+        keywords = (
+            'audit',
+            'review',
+            'inspect',
+            'scan',
+            'check',
+            'bug',
+            'bugs',
+            'vulnerability',
+            'vulnerabilities',
+            'security',
+            'hardening',
+            'improve',
+            'improvement',
+            'quality',
+            'refine',
+            '漏洞',
+            '缺陷',
+            '错误',
+            '检查',
+            '审查',
+            '评审',
+            '改进',
+            '优化',
+            '完善',
+            '风险',
+        )
+        return any(k in text for k in keywords)
+
+    @staticmethod
+    def _looks_like_scope_ambiguity(review_text: str) -> bool:
+        text = str(review_text or '').lower()
+        if not text:
+            return False
+        hints = (
+            'too vague',
+            'vague',
+            'unclear scope',
+            'not specific',
+            'no specific bug',
+            '缺少具体',
+            '太模糊',
+            '不明确',
+            '没有具体',
+            '先说明具体',
+            '无法判断改动',
+        )
+        return any(h in text for h in hints)
+
+    @staticmethod
+    def _looks_like_hard_risk(review_text: str) -> bool:
+        text = str(review_text or '').lower()
+        if not text:
+            return False
+        hints = (
+            'data loss',
+            'destructive',
+            'unsafe',
+            'critical',
+            'high risk',
+            'regression',
+            'security risk',
+            'sql injection',
+            'rce',
+            '权限',
+            '数据丢失',
+            '高风险',
+            '严重',
+            '回归',
+            '安全风险',
+        )
+        return any(h in text for h in hints)
+
+    @staticmethod
+    def _normalize_proposal_reviewer_result(
+        *,
+        config: RunConfig,
+        stage: str,
+        verdict: ReviewVerdict,
+        review_text: str,
+    ) -> tuple[ReviewVerdict, str]:
+        stage_text = str(stage or '').strip().lower()
+        if stage_text not in {'proposal_precheck_review', 'proposal_review'}:
+            return verdict, review_text
+        if not OrchestratorService._is_audit_intent(config):
+            return verdict, review_text
+        if verdict not in {ReviewVerdict.UNKNOWN, ReviewVerdict.BLOCKER}:
+            return verdict, review_text
+        if not OrchestratorService._looks_like_scope_ambiguity(review_text):
+            return verdict, review_text
+        if OrchestratorService._looks_like_hard_risk(review_text):
+            return verdict, review_text
+
+        guidance = (
+            "[system_note] Audit intent detected: scope-ambiguity is treated as non-blocking. "
+            "Reviewer should continue with concrete inspection scope (files/modules), checks, and priorities."
+        )
+        merged = str(review_text or '').strip()
+        if guidance not in merged:
+            merged = f"{merged}\n\n{guidance}".strip()
+        return ReviewVerdict.NO_BLOCKER, merged
 
     @staticmethod
     def _append_proposal_feedback_context(base_text: str, *, reviewer_id: str, review_text: str) -> str:

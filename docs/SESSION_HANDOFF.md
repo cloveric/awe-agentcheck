@@ -1,5 +1,28 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-18, overnight stability + plain-language monitor)
+
+1. Monitor verdict wording is now plain-language:
+   - `no_blocker` -> `通过（可继续）` / `Pass (can continue)`
+   - `blocker` -> `不通过（需先修复）` / `Needs fixes (blocking)`
+   - `unknown` -> `不确定（信息不足）` / `Unclear (insufficient info)`
+2. Conversation stream is now operator-friendly by default:
+   - added `Stream Details` toggle in dashboard (`OFF` by default).
+   - default view suppresses low-signal internal provider stream noise to avoid unreadable "log flood".
+3. Dialogue stability/readability improvements landed:
+   - selection persistence across refresh (`project/task/role`).
+   - reduced unnecessary conversation re-render/flicker via signature check.
+   - history-only tasks can still be selected/read when live task rows are missing.
+4. Event traceability hardened:
+   - `/api/tasks/{task_id}/events` now falls back to artifact history if repository row is absent.
+   - added API test for history fallback path in `tests/unit/test_api.py`.
+5. Reviewer-first proposal behavior for audit intent improved:
+   - audit/discovery tasks no longer fail solely due to broad initial scope wording.
+   - proposal reviewer normalization converts scope-ambiguity-only blocker/unknown to actionable non-blocking guidance under audit intent.
+6. Verification status:
+   - `py -m pytest -q` passed.
+   - `py -m ruff check .` passed.
+
 ## Update (2026-02-18, reviewer-first + consensus semantics sync)
 
 1. Reviewer-first workflow alignment completed:
