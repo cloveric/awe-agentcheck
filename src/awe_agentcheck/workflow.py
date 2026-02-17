@@ -64,7 +64,9 @@ class RunConfig:
     max_rounds: int
     test_command: str
     lint_command: str
+    conversation_language: str = 'en'
     provider_models: dict[str, str] | None = None
+    provider_model_params: dict[str, str] | None = None
     claude_team_agents: bool = False
 
 
@@ -106,6 +108,7 @@ class WorkflowEngine:
         previous_gate_reason: str | None = None
         deadline = self._parse_deadline(config.evolve_until)
         provider_models = self._normalize_provider_models(config.provider_models)
+        provider_model_params = self._normalize_provider_model_params(config.provider_model_params)
 
         for round_no in range(1, config.max_rounds + 1):
             if check_cancel():
@@ -126,6 +129,7 @@ class WorkflowEngine:
                     cwd=config.cwd,
                     timeout_seconds=self.participant_timeout_seconds,
                     model=provider_models.get(config.author.provider),
+                    model_params=provider_model_params.get(config.author.provider),
                     claude_team_agents=bool(config.claude_team_agents),
                 )
             emit({'type': 'discussion', 'round': round_no, 'provider': config.author.provider, 'output': discussion.output, 'duration_seconds': discussion.duration_seconds})
@@ -141,6 +145,7 @@ class WorkflowEngine:
                     cwd=config.cwd,
                     timeout_seconds=self.participant_timeout_seconds,
                     model=provider_models.get(config.author.provider),
+                    model_params=provider_model_params.get(config.author.provider),
                     claude_team_agents=bool(config.claude_team_agents),
                 )
             emit({'type': 'implementation', 'round': round_no, 'provider': config.author.provider, 'output': implementation.output, 'duration_seconds': implementation.duration_seconds})
@@ -158,6 +163,7 @@ class WorkflowEngine:
                         cwd=config.cwd,
                         timeout_seconds=self.participant_timeout_seconds,
                         model=provider_models.get(reviewer.provider),
+                        model_params=provider_model_params.get(reviewer.provider),
                         claude_team_agents=bool(config.claude_team_agents),
                     )
                 verdict = self._normalize_verdict(review.verdict)
@@ -259,11 +265,13 @@ class WorkflowEngine:
     @staticmethod
     def _discussion_prompt(config: RunConfig, round_no: int, previous_gate_reason: str | None = None) -> str:
         level = max(0, min(2, int(config.evolution_level)))
+        language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         base = (
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
             f"EvolutionLevel: {level}\n"
             f"Description: {config.description}\n"
+            f"{language_instruction}\n"
             "Produce a concise execution plan for this round.\n"
             "Do not ask follow-up questions. Keep response concise."
         )
@@ -286,6 +294,7 @@ class WorkflowEngine:
     def _implementation_prompt(config: RunConfig, round_no: int, discussion_output: str) -> str:
         clipped = WorkflowEngine._clip_text(discussion_output, max_chars=3000)
         level = max(0, min(2, int(config.evolution_level)))
+        language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         mode_guidance = "Focus on resolving blockers and reliability issues."
         if level == 1:
             mode_guidance = (
@@ -300,6 +309,7 @@ class WorkflowEngine:
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
             f"EvolutionLevel: {level}\n"
+            f"{language_instruction}\n"
             "Implement based on this plan and summarize what changed.\n"
             f"Plan:\n{clipped}\n"
             f"{mode_guidance}\n"
@@ -311,6 +321,7 @@ class WorkflowEngine:
     def _review_prompt(config: RunConfig, round_no: int, implementation_output: str) -> str:
         clipped = WorkflowEngine._clip_text(implementation_output, max_chars=3000)
         level = max(0, min(2, int(config.evolution_level)))
+        language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         mode_guidance = ''
         if level >= 1:
             mode_guidance = (
@@ -321,6 +332,7 @@ class WorkflowEngine:
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
             f"EvolutionLevel: {level}\n"
+            f"{language_instruction}\n"
             "Review the implementation summary and decide blocker status.\n"
             "Mark BLOCKER only for correctness, regression, security, or data-loss risks.\n"
             "Do not mark BLOCKER for style-only, process-only, or preference-only feedback.\n"
@@ -338,6 +350,13 @@ class WorkflowEngine:
         if v == 'blocker':
             return ReviewVerdict.BLOCKER
         return ReviewVerdict.UNKNOWN
+
+    @staticmethod
+    def _conversation_language_instruction(raw: str | None) -> str:
+        lang = str(raw or '').strip().lower()
+        if lang == 'zh':
+            return 'Language: respond in Simplified Chinese; keep control keywords (VERDICT/NEXT_ACTION) in English.'
+        return 'Language: respond in English.'
 
     @staticmethod
     def _parse_deadline(value: str | None) -> datetime | None:
@@ -358,4 +377,15 @@ class WorkflowEngine:
             if not provider or not model:
                 continue
             out[provider] = model
+        return out
+
+    @staticmethod
+    def _normalize_provider_model_params(value: dict[str, str] | None) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for key, raw in (value or {}).items():
+            provider = str(key or '').strip().lower()
+            params = str(raw or '').strip()
+            if not provider or not params:
+                continue
+            out[provider] = params
         return out

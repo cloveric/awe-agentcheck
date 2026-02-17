@@ -232,10 +232,15 @@ def test_api_create_task_accepts_provider_models_and_claude_team_agents(tmp_path
             'description': 'provider model routing',
             'author_participant': 'claude#author-A',
             'reviewer_participants': ['codex#review-B', 'gemini#review-C'],
+            'conversation_language': 'zh',
             'provider_models': {
                 'claude': 'claude-sonnet-4-5',
                 'codex': 'gpt-5-codex',
                 'gemini': 'gemini-2.5-pro',
+            },
+            'provider_model_params': {
+                'codex': '-c model_reasoning_effort=high',
+                'gemini': '--approval-mode yolo',
             },
             'claude_team_agents': True,
             'sandbox_mode': False,
@@ -248,6 +253,9 @@ def test_api_create_task_accepts_provider_models_and_claude_team_agents(tmp_path
     assert body['provider_models']['claude'] == 'claude-sonnet-4-5'
     assert body['provider_models']['codex'] == 'gpt-5-codex'
     assert body['provider_models']['gemini'] == 'gemini-2.5-pro'
+    assert body['provider_model_params']['codex'] == '-c model_reasoning_effort=high'
+    assert body['provider_model_params']['gemini'] == '--approval-mode yolo'
+    assert body['conversation_language'] == 'zh'
     assert body['claude_team_agents'] is True
 
 
@@ -267,6 +275,76 @@ def test_api_create_task_rejects_unknown_provider_model_key(tmp_path: Path):
         },
     )
     assert resp.status_code == 400
+
+
+def test_api_create_task_rejects_unknown_provider_model_param_key(tmp_path: Path):
+    client = build_client(tmp_path)
+    resp = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Task bad provider param key',
+            'description': 'provider model param validation',
+            'author_participant': 'claude#author-A',
+            'reviewer_participants': ['codex#review-B'],
+            'provider_model_params': {'unknown': '--foo bar'},
+            'sandbox_mode': False,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_api_create_task_rejects_invalid_conversation_language(tmp_path: Path):
+    client = build_client(tmp_path)
+    resp = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Task bad conversation language',
+            'description': 'language validation',
+            'author_participant': 'claude#author-A',
+            'reviewer_participants': ['codex#review-B'],
+            'conversation_language': 'jp',
+            'sandbox_mode': False,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_api_provider_models_endpoint_includes_defaults_and_observed_models(tmp_path: Path):
+    client = build_client(tmp_path)
+    created = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Task model catalog seed',
+            'description': 'seed observed models',
+            'author_participant': 'codex#author-A',
+            'reviewer_participants': ['gemini#review-B'],
+            'provider_models': {
+                'codex': 'gpt-5.3-codex',
+                'gemini': 'gemini-3-pro-preview',
+            },
+            'sandbox_mode': False,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    assert created.status_code == 201
+
+    resp = client.get('/api/provider-models')
+    assert resp.status_code == 200
+    body = resp.json()
+    providers = body.get('providers', {})
+    assert isinstance(providers, dict)
+    assert 'codex' in providers
+    assert 'gemini' in providers
+    assert 'claude' in providers
+    assert 'claude-opus-4-6' in providers['claude']
+    assert 'gpt-5.3-codex' in providers['codex']
+    assert 'gemini-3-pro-preview' in providers['gemini']
+    assert len(providers['claude']) >= 3
 
 
 def test_api_workspace_tree_lists_children(tmp_path: Path):

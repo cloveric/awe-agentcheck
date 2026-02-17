@@ -19,7 +19,9 @@ class TaskRepository(Protocol):
         reviewer_participants: list[str],
         evolution_level: int,
         evolve_until: str | None,
+        conversation_language: str,
         provider_models: dict[str, str],
+        provider_model_params: dict[str, str],
         claude_team_agents: bool,
         auto_merge: bool,
         merge_target_path: str | None,
@@ -103,7 +105,9 @@ class InMemoryTaskRepository:
         reviewer_participants: list[str],
         evolution_level: int,
         evolve_until: str | None,
+        conversation_language: str,
         provider_models: dict[str, str],
+        provider_model_params: dict[str, str],
         claude_team_agents: bool,
         auto_merge: bool,
         merge_target_path: str | None,
@@ -127,7 +131,9 @@ class InMemoryTaskRepository:
             'reviewer_participants': reviewer_participants,
             'evolution_level': int(max(0, min(2, int(evolution_level)))),
             'evolve_until': (str(evolve_until).strip() if evolve_until else None),
+            'conversation_language': str(conversation_language or 'en').strip().lower() or 'en',
             'provider_models': {str(k).strip().lower(): str(v).strip() for k, v in (provider_models or {}).items() if str(k).strip() and str(v).strip()},
+            'provider_model_params': {str(k).strip().lower(): str(v).strip() for k, v in (provider_model_params or {}).items() if str(k).strip() and str(v).strip()},
             'claude_team_agents': bool(claude_team_agents),
             'auto_merge': bool(auto_merge),
             'merge_target_path': (str(merge_target_path).strip() if merge_target_path else None),
@@ -251,6 +257,8 @@ def encode_reviewer_meta(
         evolution_level=evolution_level,
         evolve_until=evolve_until,
         provider_models={},
+        provider_model_params={},
+        conversation_language='en',
         claude_team_agents=False,
         auto_merge=True,
         merge_target_path=None,
@@ -269,6 +277,8 @@ def encode_task_meta(
     evolution_level: int,
     evolve_until: str | None,
     provider_models: dict[str, str],
+    provider_model_params: dict[str, str],
+    conversation_language: str,
     claude_team_agents: bool,
     auto_merge: bool,
     merge_target_path: str | None,
@@ -283,7 +293,9 @@ def encode_task_meta(
         'participants': [str(v) for v in reviewer_participants],
         'evolution_level': int(max(0, min(2, int(evolution_level)))),
         'evolve_until': (str(evolve_until).strip() if evolve_until else None),
+        'conversation_language': str(conversation_language or 'en').strip().lower() or 'en',
         'provider_models': {str(k).strip().lower(): str(v).strip() for k, v in (provider_models or {}).items() if str(k).strip() and str(v).strip()},
+        'provider_model_params': {str(k).strip().lower(): str(v).strip() for k, v in (provider_model_params or {}).items() if str(k).strip() and str(v).strip()},
         'claude_team_agents': bool(claude_team_agents),
         'auto_merge': bool(auto_merge),
         'merge_target_path': (str(merge_target_path).strip() if merge_target_path else None),
@@ -311,7 +323,9 @@ def decode_task_meta(raw: str) -> dict:
         'participants': [],
         'evolution_level': 0,
         'evolve_until': None,
+        'conversation_language': 'en',
         'provider_models': {},
+        'provider_model_params': {},
         'claude_team_agents': False,
         'auto_merge': True,
         'merge_target_path': None,
@@ -343,6 +357,9 @@ def decode_task_meta(raw: str) -> dict:
         level_int = max(0, min(2, level_int))
         evolve_until = parsed.get('evolve_until')
         evolve_until_text = (str(evolve_until).strip() if evolve_until else None)
+        conversation_language = str(parsed.get('conversation_language') or 'en').strip().lower() or 'en'
+        if conversation_language not in {'en', 'zh'}:
+            conversation_language = 'en'
         auto_merge = bool(parsed.get('auto_merge', True))
         provider_models = parsed.get('provider_models', {})
         if not isinstance(provider_models, dict):
@@ -353,6 +370,15 @@ def decode_task_meta(raw: str) -> dict:
             model = str(raw or '').strip()
             if provider and model:
                 provider_models_out[provider] = model
+        provider_model_params = parsed.get('provider_model_params', {})
+        if not isinstance(provider_model_params, dict):
+            provider_model_params = {}
+        provider_model_params_out: dict[str, str] = {}
+        for key, raw in provider_model_params.items():
+            provider = str(key or '').strip().lower()
+            params = str(raw or '').strip()
+            if provider and params:
+                provider_model_params_out[provider] = params
         claude_team_agents = bool(parsed.get('claude_team_agents', False))
         merge_target_path = parsed.get('merge_target_path')
         merge_target_text = (str(merge_target_path).strip() if merge_target_path else None)
@@ -373,7 +399,9 @@ def decode_task_meta(raw: str) -> dict:
         out['participants'] = [str(v) for v in participants]
         out['evolution_level'] = level_int
         out['evolve_until'] = evolve_until_text
+        out['conversation_language'] = conversation_language
         out['provider_models'] = provider_models_out
+        out['provider_model_params'] = provider_model_params_out
         out['claude_team_agents'] = claude_team_agents
         out['auto_merge'] = auto_merge
         out['merge_target_path'] = merge_target_text

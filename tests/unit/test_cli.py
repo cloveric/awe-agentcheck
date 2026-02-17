@@ -20,6 +20,8 @@ def test_cli_parser_run_subcommand_accepts_author_and_reviewers():
             '2',
             '--evolve-until',
             '2026-02-13 06:00',
+            '--conversation-language',
+            'zh',
             '--sandbox-mode',
             '1',
             '--sandbox-workspace-path',
@@ -30,6 +32,8 @@ def test_cli_parser_run_subcommand_accepts_author_and_reviewers():
             'claude=claude-sonnet-4-5',
             '--provider-model',
             'codex=gpt-5-codex',
+            '--provider-model-param',
+            'codex=-c model_reasoning_effort=high',
             '--claude-team-agents',
             '1',
             '--merge-target-path',
@@ -42,10 +46,12 @@ def test_cli_parser_run_subcommand_accepts_author_and_reviewers():
     assert args.reviewer == ['codex#review-B', 'claude#review-C']
     assert args.evolution_level == 2
     assert args.evolve_until == '2026-02-13 06:00'
+    assert args.conversation_language == 'zh'
     assert args.sandbox_mode == 1
     assert args.sandbox_workspace_path == 'C:/Users/hangw/awe-agentcheck-lab'
     assert args.self_loop_mode == 0
     assert args.provider_model == ['claude=claude-sonnet-4-5', 'codex=gpt-5-codex']
+    assert args.provider_model_param == ['codex=-c model_reasoning_effort=high']
     assert args.claude_team_agents == 1
     assert args.auto_merge is True
     assert args.merge_target_path == 'C:/Users/hangw/awe-agentcheck'

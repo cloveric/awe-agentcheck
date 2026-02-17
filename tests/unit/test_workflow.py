@@ -266,6 +266,27 @@ def test_review_prompt_includes_strict_blocker_criteria(tmp_path: Path):
     assert 'style-only' in prompt
 
 
+def test_prompts_include_language_instruction_for_chinese(tmp_path: Path):
+    cfg = RunConfig(
+        task_id='t6-zh',
+        title='Language test',
+        description='language',
+        author=parse_participant_id('claude#author-A'),
+        reviewers=[parse_participant_id('codex#review-B')],
+        evolution_level=0,
+        evolve_until=None,
+        cwd=tmp_path,
+        max_rounds=1,
+        test_command='py -m pytest -q',
+        lint_command='py -m ruff check .',
+        conversation_language='zh',
+    )
+    discussion_prompt = WorkflowEngine._discussion_prompt(cfg, 1, None)
+    review_prompt = WorkflowEngine._review_prompt(cfg, 1, 'impl summary')
+    assert 'Simplified Chinese' in discussion_prompt
+    assert 'VERDICT' in review_prompt
+
+
 def test_discussion_prompt_includes_evolution_guidance_for_level_2(tmp_path: Path):
     cfg = RunConfig(
         task_id='t7',
@@ -382,3 +403,36 @@ def test_workflow_passes_provider_models_and_claude_team_agents_to_runner(tmp_pa
     assert runner.call_options[1].get('model') == 'claude-sonnet-4-5'
     assert runner.call_options[2].get('model') == 'gpt-5-codex'
     assert runner.call_options[0].get('claude_team_agents') is True
+
+
+def test_workflow_passes_provider_model_params_to_runner(tmp_path: Path):
+    runner = FakeRunner([_ok_result(), _ok_result(), _ok_result()])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-model-params',
+            title='Provider model params propagation',
+            description='propagate provider model params',
+            author=parse_participant_id('codex#author-A'),
+            reviewers=[parse_participant_id('gemini#review-B')],
+            evolution_level=0,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+            provider_models={'codex': 'gpt-5.3-codex', 'gemini': 'gemini-3-pro-preview'},
+            provider_model_params={
+                'codex': '-c model_reasoning_effort=high',
+                'gemini': '--approval-mode yolo',
+            },
+        )
+    )
+
+    assert result.status == 'passed'
+    assert len(runner.call_options) == 3
+    assert runner.call_options[0].get('model_params') == '-c model_reasoning_effort=high'
+    assert runner.call_options[1].get('model_params') == '-c model_reasoning_effort=high'
+    assert runner.call_options[2].get('model_params') == '--approval-mode yolo'

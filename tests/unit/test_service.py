@@ -126,6 +126,70 @@ def test_service_create_task_accepts_provider_models_and_claude_team_agents(tmp_
     assert task.claude_team_agents is True
 
 
+def test_service_create_task_accepts_provider_model_params(tmp_path: Path):
+    svc = build_service(tmp_path)
+    task = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='Model params config',
+            description='provider model params',
+            author_participant='codex#author-A',
+            reviewer_participants=['gemini#review-B'],
+            provider_models={'codex': 'gpt-5.3-codex', 'gemini': 'gemini-3-pro-preview'},
+            provider_model_params={
+                'codex': '-c model_reasoning_effort=high',
+                'gemini': '--approval-mode yolo',
+            },
+        )
+    )
+    assert task.provider_model_params.get('codex') == '-c model_reasoning_effort=high'
+    assert task.provider_model_params.get('gemini') == '--approval-mode yolo'
+
+
+def test_service_create_task_accepts_conversation_language(tmp_path: Path):
+    svc = build_service(tmp_path)
+    task = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='Language config',
+            description='zh conversation',
+            author_participant='codex#author-A',
+            reviewer_participants=['gemini#review-B'],
+            conversation_language='zh',
+        )
+    )
+    assert task.conversation_language == 'zh'
+
+
+def test_service_create_task_rejects_invalid_conversation_language(tmp_path: Path):
+    svc = build_service(tmp_path)
+    with pytest.raises(ValueError, match='invalid conversation_language'):
+        svc.create_task(
+            CreateTaskInput(
+                sandbox_mode=False,
+                self_loop_mode=1,
+                title='Language invalid',
+                description='invalid language',
+                author_participant='codex#author-A',
+                reviewer_participants=['gemini#review-B'],
+                conversation_language='jp',
+            )
+        )
+
+
+def test_service_provider_model_catalog_has_multiple_defaults(tmp_path: Path):
+    svc = build_service(tmp_path)
+    catalog = svc.get_provider_models_catalog()
+    assert 'claude-opus-4-6' in catalog.get('claude', [])
+    assert 'gpt-5.3-codex' in catalog.get('codex', [])
+    assert 'gemini-3-pro-preview' in catalog.get('gemini', [])
+    assert len(catalog.get('claude', [])) >= 3
+    assert len(catalog.get('codex', [])) >= 3
+    assert len(catalog.get('gemini', [])) >= 3
+
+
 def test_service_create_task_rejects_unknown_provider_model_key(tmp_path: Path):
     svc = build_service(tmp_path)
     with pytest.raises(ValueError, match='invalid provider_models key'):
@@ -138,6 +202,22 @@ def test_service_create_task_rejects_unknown_provider_model_key(tmp_path: Path):
                 author_participant='claude#author-A',
                 reviewer_participants=['codex#review-B'],
                 provider_models={'unknown': 'model-x'},
+            )
+        )
+
+
+def test_service_create_task_rejects_unknown_provider_model_param_key(tmp_path: Path):
+    svc = build_service(tmp_path)
+    with pytest.raises(ValueError, match='invalid provider_model_params key'):
+        svc.create_task(
+            CreateTaskInput(
+                sandbox_mode=False,
+                self_loop_mode=1,
+                title='Bad provider model param key',
+                description='provider model param validation',
+                author_participant='claude#author-A',
+                reviewer_participants=['codex#review-B'],
+                provider_model_params={'unknown': '--foo bar'},
             )
         )
 
@@ -271,6 +351,8 @@ def test_service_start_task_waits_for_author_confirmation_when_self_loop_manual(
     assert waiting.status.value == 'waiting_manual'
     assert waiting.last_gate_reason == 'author_confirmation_required'
     assert engine.calls == 0
+    events = svc.list_events(task.task_id)
+    assert any(e['type'] == 'task_running' for e in events)
 
 
 def test_service_author_approve_requeues_and_can_run(tmp_path: Path):

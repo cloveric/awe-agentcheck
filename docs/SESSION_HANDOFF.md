@@ -1,5 +1,26 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-18, doc sync + runtime stability)
+
+1. Synced defaults to current runtime behavior:
+   - Claude default model: `claude-opus-4-6`
+   - Codex default reasoning: `model_reasoning_effort=xhigh`
+   - Gemini default command: `gemini --yolo`
+2. Added and documented task-level model controls:
+   - `provider_models` for provider -> model pinning
+   - `provider_model_params` for provider-specific extra args passthrough
+3. Added and documented task-level conversation language:
+   - `conversation_language` supports `en|zh` across API/CLI/workflow/UI.
+4. Added API lifecycle scripts for stable local operation on Windows:
+   - `scripts/start_api.ps1` (health-gated startup, PID tracking, startup log tail)
+   - `scripts/stop_api.ps1` (PID + port listener cleanup)
+5. Clarified `127.0.0.1:8000` refusal root cause and operator path:
+   - refusal indicates no active listener (or startup failure), not hidden auto-run.
+   - operator should use `start_api.ps1` then verify `/healthz`, and stop via `stop_api.ps1`.
+6. Verification rerun completed:
+   - `py -m ruff check .`
+   - `py -m pytest -q`
+
 ## Update (2026-02-17, provider model control + Claude team agents)
 
 1. Added per-provider model control end-to-end:
@@ -40,9 +61,9 @@
 
 1. Added first-class Gemini CLI participant support across runtime:
    - `provider#alias` parser now accepts `gemini` in addition to `claude` and `codex`.
-   - participant adapter default command includes `gemini -p --yolo`.
+   - participant adapter default command includes `gemini --yolo`.
 2. Added Gemini command wiring in app settings:
-   - new env var `AWE_GEMINI_COMMAND` (default `gemini -p --yolo`).
+   - new env var `AWE_GEMINI_COMMAND` (default `gemini --yolo`).
    - `main.build_app()` now injects Gemini command overrides into `ParticipantRunner`.
 3. Updated launcher automation for reliability with Gemini:
    - `scripts/start_overnight_until_7.ps1` resolves Gemini binary path.
@@ -111,7 +132,7 @@
    - stopped one active process: `PID 28840`
    - no remaining overnight python process (`overnight_autoevolve.py`)
    - lock cleared: `C:/Users/hangw/awe-agentcheck/.agents/overnight/overnight.lock` is missing
-   - API unreachable on `http://127.0.0.1:8000/api/health` (service not running)
+   - API unreachable on `http://127.0.0.1:8000/healthz` (service not running)
    - no relevant scheduled task found for auto-restart
 4. Resume command (after pause window only):
    - `pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -Until "2026-02-18 07:00"`
@@ -169,7 +190,7 @@ start_overnight_until_7.ps1
 10. Added consecutive system-failure cooldown in overnight driver.
 11. Tuned command profiles for unattended execution:
    - Claude: `--dangerously-skip-permissions --effort low`
-   - Codex: `--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=low`
+   - Codex: `--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh`
 12. Added workflow prompt clipping and anti-follow-up constraints to reduce long-turn stalls.
 13. Added round-to-round convergence signal: previous gate failure reason is injected into next-round discussion prompt.
 14. Extended observability stats:

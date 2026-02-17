@@ -46,14 +46,21 @@
 
 ## Latest Update (2026-02-17)
 
-1. Added first-class `gemini` participant support (`provider#alias`).
-2. Added `AWE_GEMINI_COMMAND` runtime config (default: `gemini -p --yolo`).
-3. Updated overnight launcher to resolve Gemini command path automatically.
-4. Added safety guard for overnight launch: `scripts/start_overnight_until_7.ps1` now requires explicit `-Until` to prevent accidental long runs.
-5. Added provider-level model override for task execution (`provider_models` in API/UI, `--provider-model provider=model` in CLI).
-6. Added Claude team-agents toggle (`claude_team_agents` in API/UI, `--claude-team-agents 1` in CLI).
-7. Participant adapter now appends provider-specific model flags automatically (`--model` for Claude, `-m` for Codex/Gemini) when not already configured in command template.
-8. Dashboard task snapshot now displays effective model pinning and Claude team-agents state.
+1. Default model profiles are now stronger and explicit:
+   - Claude default command pins `claude-opus-4-6`
+   - Codex default command uses `model_reasoning_effort=xhigh`
+   - Gemini default command is normalized to `gemini --yolo`
+2. Added provider model catalog endpoint (`GET /api/provider-models`) and expanded built-in model candidates so UI dropdowns are not single-option.
+3. Added per-task conversation language control (`conversation_language`: `en`/`zh`) in API, CLI, workflow prompts, and dashboard form.
+4. Added provider model parameter passthrough end-to-end (`provider_model_params` / `--provider-model-param provider=args`).
+5. Hardened Windows runtime execution:
+   - participant adapter resolves executables via `shutil.which(...)`
+   - fixed intermittent `command_not_found` for CLI shims.
+6. Added stable API lifecycle scripts:
+   - `scripts/start_api.ps1` (health-gated startup, PID file, failure log tail)
+   - `scripts/stop_api.ps1` (PID + port cleanup)
+7. Startup reliability improved:
+   - default PostgreSQL URL now includes `connect_timeout=2` for faster fallback when DB is unavailable.
 
 <br/>
 
@@ -226,7 +233,7 @@ The system needs to know where your tools are and how to connect. Set the follow
 $env:PYTHONPATH="src"
 
 # Optional: database connection (omit for in-memory mode)
-$env:AWE_DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/awe_agentcheck"
+$env:AWE_DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/awe_agentcheck?connect_timeout=2"
 
 # Optional: where task artifacts (logs, reports, events) are stored
 $env:AWE_ARTIFACT_ROOT=".agents"
@@ -238,11 +245,11 @@ $env:AWE_ARTIFACT_ROOT=".agents"
 | Variable | Default | Description |
 |:---|:---|:---|
 | `PYTHONPATH` | _(none)_ | Must include `src/` directory |
-| `AWE_DATABASE_URL` | `postgresql+psycopg://...` | PostgreSQL connection string. If DB is unavailable, falls back to in-memory |
+| `AWE_DATABASE_URL` | `postgresql+psycopg://...?...connect_timeout=2` | PostgreSQL connection string. If DB is unavailable, fallback is faster and then switches to in-memory |
 | `AWE_ARTIFACT_ROOT` | `.agents` | Directory for task artifacts (threads, events, reports) |
-| `AWE_CLAUDE_COMMAND` | `claude -p --dangerously-skip-permissions --effort low` | Command template for invoking Claude CLI |
-| `AWE_CODEX_COMMAND` | `codex exec --skip-git-repo-check ...` | Command template for invoking Codex CLI |
-| `AWE_GEMINI_COMMAND` | `gemini -p --yolo` | Command template for invoking Gemini CLI |
+| `AWE_CLAUDE_COMMAND` | `claude -p --dangerously-skip-permissions --effort low --model claude-opus-4-6` | Command template for invoking Claude CLI |
+| `AWE_CODEX_COMMAND` | `codex exec --skip-git-repo-check ... -c model_reasoning_effort=xhigh` | Command template for invoking Codex CLI |
+| `AWE_GEMINI_COMMAND` | `gemini --yolo` | Command template for invoking Gemini CLI |
 | `AWE_PARTICIPANT_TIMEOUT_SECONDS` | `240` | Max seconds a single participant (Claude/Codex/Gemini) can run per step |
 | `AWE_COMMAND_TIMEOUT_SECONDS` | `300` | Max seconds for test/lint commands |
 | `AWE_PARTICIPANT_TIMEOUT_RETRIES` | `1` | Retry count when a participant times out |
@@ -258,14 +265,25 @@ $env:AWE_ARTIFACT_ROOT=".agents"
 ### Step 3: Start the API Server
 
 ```powershell
-py -m uvicorn awe_agentcheck.main:app --reload --port 8000
+pwsh -NoProfile -ExecutionPolicy Bypass -File "scripts/start_api.ps1" -ForceRestart
 ```
 
-You should see:
+Health check:
 
+```powershell
+(Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:8000/healthz").Content
 ```
-INFO:     Uvicorn running on http://127.0.0.1:8000
-INFO:     Started reloader process
+
+Expected:
+
+```json
+{"status":"ok"}
+```
+
+Stop API safely:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File "scripts/stop_api.ps1"
 ```
 
 ### Step 4: Open the Web Monitor
@@ -345,10 +363,12 @@ If this is your first time, operate in this exact order:
 | `Workspace path` | Repository root path | Your actual project path |
 | `Author` | Implementing participant | `claude#author-A` / `codex#author-A` / `gemini#author-A` |
 | `Reviewers` | One or more reviewers, comma-separated | At least 1 reviewer |
-| `Provider Models` | Optional per-provider model pinning (`provider=model`, comma-separated) | Empty (inherits command defaults) |
+| `Claude Model / Codex Model / Gemini Model` | Per-provider model pinning (dropdown + editable) | Start from defaults (`claude-opus-4-6`, `gpt-5.3-codex`, `gemini-3-pro-preview`) |
+| `Claude/Codex/Gemini Model Params` | Optional extra args per provider | For Codex use `-c model_reasoning_effort=xhigh` |
 | `Claude Team Agents` | Enable/disable Claude `--agents` mode | `0` (disabled) |
 | `Evolution Level` | `0` fix-only, `1` guided evolve, `2` proactive evolve | Start with `0` |
 | `Evolve Until` | Optional deadline (`YYYY-MM-DD HH:MM`) | Empty unless running overnight |
+| `Conversation Language` | Prompt language for agent outputs (`en` / `zh`) | `English` for logs, `中文` for Chinese collaboration |
 | `Sandbox Mode` | `1` sandbox / `0` main workspace | Keep `1` for safety |
 | `Sandbox Workspace Path` | Optional custom sandbox path | Leave blank (auto per-task path) |
 | `Self Loop Mode` | `0` manual approval / `1` autonomous | Start with `0` |
@@ -385,6 +405,7 @@ py -m awe_agentcheck.cli run `
   --task "Fix the login validation bug" `
   --author "claude#author-A" `
   --reviewer "codex#review-B" `
+  --conversation-language en `
   --workspace-path "." `
   --auto-start
 ```
@@ -438,6 +459,7 @@ py -m awe_agentcheck.cli run `
   --author "claude#author-A" `
   --reviewer "codex#review-B" `
   --reviewer "claude#review-C" `
+  --conversation-language en `
   --sandbox-mode 1 `
   --self-loop-mode 0 `
   --auto-merge `
@@ -465,7 +487,9 @@ py -m awe_agentcheck.cli run `
 | `--lint-command` | No | `py -m ruff check .` | Command to run linter |
 | `--evolution-level` | No | `0` | `0` = fix-only, `1` = guided evolve, `2` = proactive evolve |
 | `--evolve-until` | No | — | Deadline for evolution (e.g. `2026-02-13 06:00`) |
+| `--conversation-language` | No | `en` | Agent output language (`en` or `zh`) |
 | `--provider-model` | No | — | Per-provider model override in `provider=model` format (repeatable) |
+| `--provider-model-param` | No | — | Per-provider extra args in `provider=args` format (repeatable) |
 | `--claude-team-agents` | No | `0` | `1` enables Claude `--agents` mode for Claude participants |
 | `--auto-start` | No | `false` | Start immediately after creation |
 
@@ -647,9 +671,13 @@ POST /api/tasks
   "description": "The email validator accepts invalid formats",
   "author_participant": "claude#author-A",
   "reviewer_participants": ["codex#review-B"],
+  "conversation_language": "en",
   "provider_models": {
-    "claude": "claude-sonnet-4-5",
-    "codex": "gpt-5-codex"
+    "claude": "claude-opus-4-6",
+    "codex": "gpt-5.3-codex"
+  },
+  "provider_model_params": {
+    "codex": "-c model_reasoning_effort=xhigh"
   },
   "claude_team_agents": false,
   "sandbox_mode": true,
@@ -694,6 +722,7 @@ POST /api/tasks
 | `POST` | `/api/tasks/{id}/author-decision` | Approve/reject in manual mode: `{"approve": true, "auto_start": true}` |
 | `GET` | `/api/tasks/{id}/events` | Get full event timeline |
 | `POST` | `/api/tasks/{id}/gate` | Submit manual gate result |
+| `GET` | `/api/provider-models` | Get provider model catalog for UI dropdowns |
 | `GET` | `/api/workspace-tree` | File tree (`?workspace_path=.&max_depth=4`) |
 | `GET` | `/api/stats` | Aggregated statistics (pass rates, durations, failure buckets) |
 | `GET` | `/healthz` | Health check |

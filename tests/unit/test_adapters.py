@@ -23,7 +23,17 @@ def test_parse_next_action_from_control_line():
 
 def test_default_commands_include_gemini_provider():
     assert 'gemini' in DEFAULT_COMMANDS
-    assert 'gemini -p' in DEFAULT_COMMANDS['gemini']
+    assert 'gemini --yolo' in DEFAULT_COMMANDS['gemini']
+
+
+def test_default_commands_set_codex_reasoning_to_xhigh():
+    assert 'codex' in DEFAULT_COMMANDS
+    assert 'model_reasoning_effort=xhigh' in DEFAULT_COMMANDS['codex']
+
+
+def test_default_commands_set_claude_model_to_opus_4_6():
+    assert 'claude' in DEFAULT_COMMANDS
+    assert '--model claude-opus-4-6' in DEFAULT_COMMANDS['claude']
 
 
 def test_participant_runner_dry_run_returns_simulated_output(tmp_path: Path):
@@ -166,3 +176,56 @@ def test_participant_runner_appends_claude_team_agents_flag_when_enabled(tmp_pat
 
     assert captured['argv'] is not None
     assert '--agents' in captured['argv']
+
+
+def test_participant_runner_appends_provider_model_params_tokens(tmp_path: Path, monkeypatch):
+    captured = {'argv': None}
+
+    def fake_run(argv, **kwargs):
+        captured['argv'] = list(argv)
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout='VERDICT: NO_BLOCKER', stderr='')
+
+    monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
+    runner = ParticipantRunner(command_overrides={'codex': 'codex exec'}, dry_run=False)
+    runner.run(
+        participant=parse_participant_id('codex#author-A'),
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=1,
+        model='gpt-5.3-codex',
+        model_params='-c model_reasoning_effort=high --temperature 0.1',
+    )
+
+    assert captured['argv'] is not None
+    assert '-m' in captured['argv']
+    assert 'gpt-5.3-codex' in captured['argv']
+    assert '-c' in captured['argv']
+    assert 'model_reasoning_effort=high' in captured['argv']
+    assert '--temperature' in captured['argv']
+    assert '0.1' in captured['argv']
+
+
+def test_participant_runner_resolves_executable_with_shutil_which(tmp_path: Path, monkeypatch):
+    captured = {'argv': None}
+
+    def fake_which(name: str):
+        if name == 'codex':
+            return r'C:\Users\hangw\AppData\Roaming\npm\codex.cmd'
+        return None
+
+    def fake_run(argv, **kwargs):
+        captured['argv'] = list(argv)
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout='VERDICT: NO_BLOCKER', stderr='')
+
+    monkeypatch.setattr('awe_agentcheck.adapters.shutil.which', fake_which)
+    monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
+    runner = ParticipantRunner(command_overrides={'codex': 'codex exec'}, dry_run=False)
+    runner.run(
+        participant=parse_participant_id('codex#author-A'),
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=1,
+    )
+
+    assert captured['argv'] is not None
+    assert captured['argv'][0].lower().endswith('codex.cmd')

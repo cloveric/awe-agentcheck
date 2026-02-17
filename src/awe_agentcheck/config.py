@@ -35,18 +35,21 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
 def load_settings() -> Settings:
     database_url = os.getenv(
         'AWE_DATABASE_URL',
-        'postgresql+psycopg://postgres:postgres@localhost:5432/awe_agentcheck',
+        'postgresql+psycopg://postgres:postgres@localhost:5432/awe_agentcheck?connect_timeout=2',
     )
     artifact_root = Path(os.getenv('AWE_ARTIFACT_ROOT', '.agents')).resolve()
     service_name = os.getenv('AWE_SERVICE_NAME', 'awe-agentcheck')
     otel_endpoint = os.getenv('AWE_OTEL_EXPORTER_OTLP_ENDPOINT')
     dry_run = os.getenv('AWE_DRY_RUN', '').strip().lower() in {'1', 'true', 'yes', 'on'}
-    claude_command = os.getenv('AWE_CLAUDE_COMMAND', 'claude -p --dangerously-skip-permissions --effort low')
+    claude_command = os.getenv(
+        'AWE_CLAUDE_COMMAND',
+        'claude -p --dangerously-skip-permissions --effort low --model claude-opus-4-6',
+    )
     codex_command = os.getenv(
         'AWE_CODEX_COMMAND',
-        'codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=low',
+        'codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh',
     )
-    gemini_command = os.getenv('AWE_GEMINI_COMMAND', 'gemini -p --yolo')
+    gemini_command = os.getenv('AWE_GEMINI_COMMAND', 'gemini --yolo')
     participant_timeout_seconds = _env_int('AWE_PARTICIPANT_TIMEOUT_SECONDS', 240, minimum=10)
     command_timeout_seconds = _env_int('AWE_COMMAND_TIMEOUT_SECONDS', 300, minimum=10)
     participant_timeout_retries = _env_int('AWE_PARTICIPANT_TIMEOUT_RETRIES', 1, minimum=0)

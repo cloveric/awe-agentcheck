@@ -118,20 +118,20 @@ if ($ForceRestart) {
 
 $claudePath = Resolve-CommandPath 'claude'
 if ($claudePath) {
-  $resolvedClaudeCommand = "`"$claudePath`" -p --dangerously-skip-permissions --effort low"
+  $resolvedClaudeCommand = "`"$claudePath`" -p --dangerously-skip-permissions --effort low --model claude-opus-4-6"
 } else {
-  $resolvedClaudeCommand = 'claude -p --dangerously-skip-permissions --effort low'
+  $resolvedClaudeCommand = 'claude -p --dangerously-skip-permissions --effort low --model claude-opus-4-6'
 }
 
 $codexPath = Resolve-CommandPath 'codex'
 if ($codexPath) {
   if ([System.IO.Path]::GetExtension($codexPath).ToLowerInvariant() -eq '.ps1') {
-    $resolvedCodexCommand = "pwsh -NoProfile -File `"$codexPath`" exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=low"
+    $resolvedCodexCommand = "pwsh -NoProfile -File `"$codexPath`" exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh"
   } else {
-    $resolvedCodexCommand = "`"$codexPath`" exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=low"
+    $resolvedCodexCommand = "`"$codexPath`" exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh"
   }
 } else {
-  $resolvedCodexCommand = 'codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=low'
+  $resolvedCodexCommand = 'codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh'
 }
 
 if (-not [string]::IsNullOrWhiteSpace($GeminiCommand)) {
@@ -140,12 +140,12 @@ if (-not [string]::IsNullOrWhiteSpace($GeminiCommand)) {
   $geminiPath = Resolve-CommandPath 'gemini'
   if ($geminiPath) {
     if ([System.IO.Path]::GetExtension($geminiPath).ToLowerInvariant() -eq '.ps1') {
-      $resolvedGeminiCommand = "pwsh -NoProfile -File `"$geminiPath`" -p --yolo"
+      $resolvedGeminiCommand = "pwsh -NoProfile -File `"$geminiPath`" --yolo"
     } else {
-      $resolvedGeminiCommand = "`"$geminiPath`" -p --yolo"
+      $resolvedGeminiCommand = "`"$geminiPath`" --yolo"
     }
   } else {
-    $resolvedGeminiCommand = 'gemini -p --yolo'
+    $resolvedGeminiCommand = 'gemini --yolo'
   }
 }
 

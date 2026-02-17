@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 import shlex
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -35,9 +36,9 @@ class AdapterResult:
 
 
 DEFAULT_COMMANDS = {
-    'claude': 'claude -p --dangerously-skip-permissions --effort low',
-    'codex': 'codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=low',
-    'gemini': 'gemini -p --yolo',
+    'claude': 'claude -p --dangerously-skip-permissions --effort low --model claude-opus-4-6',
+    'codex': 'codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh',
+    'gemini': 'gemini --yolo',
 }
 
 
@@ -79,6 +80,7 @@ class ParticipantRunner:
         cwd: Path,
         timeout_seconds: int = 900,
         model: str | None = None,
+        model_params: str | None = None,
         claude_team_agents: bool = False,
     ) -> AdapterResult:
         if self.dry_run:
@@ -104,8 +106,10 @@ class ParticipantRunner:
             command=command,
             provider=participant.provider,
             model=model,
+            model_params=model_params,
             claude_team_agents=claude_team_agents,
         )
+        argv = self._resolve_executable(argv)
         effective_command = self._format_command(argv)
         attempts = self.timeout_retries + 1
         current_prompt = prompt
@@ -176,6 +180,7 @@ class ParticipantRunner:
         command: str,
         provider: str,
         model: str | None,
+        model_params: str | None,
         claude_team_agents: bool,
     ) -> list[str]:
         argv = shlex.split(command, posix=False)
@@ -186,11 +191,25 @@ class ParticipantRunner:
             if flag:
                 argv.extend([flag, model_text])
 
+        extra = ParticipantRunner._split_extra_args(model_params)
+        if extra:
+            argv.extend(extra)
+
         if str(provider or '').strip().lower() == 'claude':
             if claude_team_agents and not ParticipantRunner._has_agents_flag(argv):
                 argv.extend(['--agents', '{}'])
 
         return argv
+
+    @staticmethod
+    def _split_extra_args(value: str | None) -> list[str]:
+        text = str(value or '').strip()
+        if not text:
+            return []
+        try:
+            return [str(v) for v in shlex.split(text, posix=False) if str(v).strip()]
+        except ValueError:
+            return [v for v in text.split() if v]
 
     @staticmethod
     def _has_model_flag(argv: list[str]) -> bool:
@@ -209,6 +228,20 @@ class ParticipantRunner:
             if text == '--agents' or text.startswith('--agents='):
                 return True
         return False
+
+    @staticmethod
+    def _resolve_executable(argv: list[str]) -> list[str]:
+        if not argv:
+            return argv
+        first = str(argv[0]).strip()
+        if not first:
+            return argv
+        resolved = shutil.which(first)
+        if not resolved:
+            return argv
+        patched = list(argv)
+        patched[0] = resolved
+        return patched
 
     @staticmethod
     def _format_command(argv: list[str]) -> str:

@@ -46,14 +46,21 @@
 
 ## 最新更新（2026-02-17）
 
-1. 新增一等公民 `gemini` 参与者支持（`provider#alias`）。
-2. 新增运行时配置 `AWE_GEMINI_COMMAND`（默认：`gemini -p --yolo`）。
-3. 夜间启动器已支持自动解析 Gemini 命令路径。
-4. 新增夜间启动安全保护：`scripts/start_overnight_until_7.ps1` 现在必须显式传入 `-Until`，避免误触后长时间持续运行。
-5. 新增按提供者指定模型能力（API/UI 使用 `provider_models`，CLI 使用 `--provider-model provider=model`）。
-6. 新增 Claude team agents 开关（API/UI 使用 `claude_team_agents`，CLI 使用 `--claude-team-agents 1`）。
-7. 参与者适配层会在未显式配置时自动追加提供者对应模型参数（Claude 用 `--model`，Codex/Gemini 用 `-m`）。
-8. 监控面板任务快照新增显示当前模型绑定与 Claude team agents 状态。
+1. 默认模型策略升级并显式化：
+   - Claude 默认命令固定 `claude-opus-4-6`
+   - Codex 默认命令使用 `model_reasoning_effort=xhigh`
+   - Gemini 默认命令统一为 `gemini --yolo`
+2. 新增模型目录接口 `GET /api/provider-models`，并扩充内置模型候选，避免下拉只有单一选项。
+3. 新增任务级对话语言控制（`conversation_language`: `en`/`zh`），已接入 API、CLI、工作流提示词和 Web 表单。
+4. 新增按提供者透传模型参数（`provider_model_params` / `--provider-model-param provider=args`）。
+5. Windows 运行稳定性增强：
+   - 参与者适配层通过 `shutil.which(...)` 解析可执行文件
+   - 修复偶发 `command_not_found`（CLI shim 场景）。
+6. 新增稳定 API 生命周期脚本：
+   - `scripts/start_api.ps1`（健康检查门控启动、PID 文件、失败日志回显）
+   - `scripts/stop_api.ps1`（按 PID + 端口双重清理）
+7. 启动可靠性增强：
+   - 默认 PostgreSQL 连接增加 `connect_timeout=2`，数据库不可用时更快降级内存模式。
 
 <br/>
 
@@ -226,7 +233,7 @@ pip install -e .[dev]
 $env:PYTHONPATH="src"
 
 # 可选：数据库连接（省略则使用内存模式）
-$env:AWE_DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/awe_agentcheck"
+$env:AWE_DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/awe_agentcheck?connect_timeout=2"
 
 # 可选：任务工件（日志、报告、事件）存储位置
 $env:AWE_ARTIFACT_ROOT=".agents"
@@ -238,11 +245,11 @@ $env:AWE_ARTIFACT_ROOT=".agents"
 | 变量 | 默认值 | 说明 |
 |:---|:---|:---|
 | `PYTHONPATH` | _(无)_ | 必须包含 `src/` 目录 |
-| `AWE_DATABASE_URL` | `postgresql+psycopg://...` | PostgreSQL 连接字符串。数据库不可用时自动降级为内存模式 |
+| `AWE_DATABASE_URL` | `postgresql+psycopg://...?...connect_timeout=2` | PostgreSQL 连接字符串。数据库不可用时更快回退并自动降级内存模式 |
 | `AWE_ARTIFACT_ROOT` | `.agents` | 任务工件目录（线程、事件、报告） |
-| `AWE_CLAUDE_COMMAND` | `claude -p --dangerously-skip-permissions --effort low` | Claude CLI 调用命令模板 |
-| `AWE_CODEX_COMMAND` | `codex exec --skip-git-repo-check ...` | Codex CLI 调用命令模板 |
-| `AWE_GEMINI_COMMAND` | `gemini -p --yolo` | Gemini CLI 调用命令模板 |
+| `AWE_CLAUDE_COMMAND` | `claude -p --dangerously-skip-permissions --effort low --model claude-opus-4-6` | Claude CLI 调用命令模板 |
+| `AWE_CODEX_COMMAND` | `codex exec --skip-git-repo-check ... -c model_reasoning_effort=xhigh` | Codex CLI 调用命令模板 |
+| `AWE_GEMINI_COMMAND` | `gemini --yolo` | Gemini CLI 调用命令模板 |
 | `AWE_PARTICIPANT_TIMEOUT_SECONDS` | `240` | 单个参与者（Claude/Codex/Gemini）每步最大运行秒数 |
 | `AWE_COMMAND_TIMEOUT_SECONDS` | `300` | 测试/lint 命令最大运行秒数 |
 | `AWE_PARTICIPANT_TIMEOUT_RETRIES` | `1` | 参与者超时后的重试次数 |
@@ -258,14 +265,25 @@ $env:AWE_ARTIFACT_ROOT=".agents"
 ### 第 3 步：启动 API 服务
 
 ```powershell
-py -m uvicorn awe_agentcheck.main:app --reload --port 8000
+pwsh -NoProfile -ExecutionPolicy Bypass -File "scripts/start_api.ps1" -ForceRestart
 ```
 
-你应该看到：
+健康检查：
 
+```powershell
+(Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:8000/healthz").Content
 ```
-INFO:     Uvicorn running on http://127.0.0.1:8000
-INFO:     Started reloader process
+
+期望输出：
+
+```json
+{"status":"ok"}
+```
+
+安全停止 API：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File "scripts/stop_api.ps1"
 ```
 
 ### 第 4 步：打开 Web 控制台
@@ -345,10 +363,12 @@ http://localhost:8000/
 | `Workspace path` | 仓库根目录路径 | 你的真实项目路径 |
 | `Author` | 负责实现的角色 | `claude#author-A` / `codex#author-A` / `gemini#author-A` |
 | `Reviewers` | 审阅者（逗号分隔） | 至少 1 个 |
-| `Provider Models` | 可选的按提供者模型绑定（`provider=model`，逗号分隔） | 留空（沿用命令默认模型） |
+| `Claude Model / Codex Model / Gemini Model` | 按提供者模型绑定（下拉可选 + 可编辑） | 建议从默认开始（`claude-opus-4-6`、`gpt-5.3-codex`、`gemini-3-pro-preview`） |
+| `Claude/Codex/Gemini Model Params` | 每个提供者的附加参数（可选） | Codex 建议 `-c model_reasoning_effort=xhigh` |
 | `Claude Team Agents` | 是否启用 Claude `--agents` 模式 | `0`（关闭） |
 | `Evolution Level` | `0`仅修复，`1`引导进化，`2`主动进化 | 先用 `0` |
 | `Evolve Until` | 可选截止时间（`YYYY-MM-DD HH:MM`） | 非夜跑可留空 |
+| `Conversation Language` | 对话输出语言（`en` / `zh`） | 英文日志优先选 `English`，中文协作选 `中文` |
 | `Sandbox Mode` | `1`沙盒 / `0`主仓 | 安全起见用 `1` |
 | `Sandbox Workspace Path` | 自定义沙盒路径 | 建议留空（自动每任务独立） |
 | `Self Loop Mode` | `0`手动审批 / `1`全自动 | 先用 `0` |
@@ -385,6 +405,7 @@ py -m awe_agentcheck.cli run `
   --task "修复登录验证的bug" `
   --author "claude#author-A" `
   --reviewer "codex#review-B" `
+  --conversation-language zh `
   --workspace-path "." `
   --auto-start
 ```
@@ -438,6 +459,7 @@ py -m awe_agentcheck.cli run `
   --author "claude#author-A" `
   --reviewer "codex#review-B" `
   --reviewer "claude#review-C" `
+  --conversation-language zh `
   --sandbox-mode 1 `
   --self-loop-mode 0 `
   --auto-merge `
@@ -465,7 +487,9 @@ py -m awe_agentcheck.cli run `
 | `--lint-command` | 否 | `py -m ruff check .` | 代码检查命令 |
 | `--evolution-level` | 否 | `0` | `0` = 仅修复，`1` = 引导进化，`2` = 主动进化 |
 | `--evolve-until` | 否 | — | 进化截止时间（如 `2026-02-13 06:00`） |
+| `--conversation-language` | 否 | `en` | 智能体输出语言（`en` 或 `zh`） |
 | `--provider-model` | 否 | — | 按提供者指定模型，格式 `provider=model`（可重复） |
+| `--provider-model-param` | 否 | — | 按提供者传递额外参数，格式 `provider=args`（可重复） |
 | `--claude-team-agents` | 否 | `0` | `1` 时为 Claude 参与者启用 `--agents` 模式 |
 | `--auto-start` | 否 | `false` | 创建后立即启动 |
 
@@ -647,9 +671,13 @@ POST /api/tasks
   "description": "邮箱验证器接受了无效格式",
   "author_participant": "claude#author-A",
   "reviewer_participants": ["codex#review-B"],
+  "conversation_language": "zh",
   "provider_models": {
-    "claude": "claude-sonnet-4-5",
-    "codex": "gpt-5-codex"
+    "claude": "claude-opus-4-6",
+    "codex": "gpt-5.3-codex"
+  },
+  "provider_model_params": {
+    "codex": "-c model_reasoning_effort=xhigh"
   },
   "claude_team_agents": false,
   "sandbox_mode": true,
@@ -694,6 +722,7 @@ POST /api/tasks
 | `POST` | `/api/tasks/{id}/author-decision` | 手动模式下批准/拒绝：`{"approve": true, "auto_start": true}` |
 | `GET` | `/api/tasks/{id}/events` | 获取完整事件时间线 |
 | `POST` | `/api/tasks/{id}/gate` | 提交手动门禁结果 |
+| `GET` | `/api/provider-models` | 获取提供者模型目录（供 UI 下拉使用） |
 | `GET` | `/api/workspace-tree` | 文件树（`?workspace_path=.&max_depth=4`） |
 | `GET` | `/api/stats` | 聚合统计（通过率、耗时、失败分桶） |
 | `GET` | `/healthz` | 健康检查 |

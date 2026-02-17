@@ -25,7 +25,7 @@ def test_build_app_wires_gemini_command_into_runner(monkeypatch):
             captured['timeout_retries'] = timeout_retries
 
     monkeypatch.setenv('AWE_DATABASE_URL', 'invalid+driver://bad')
-    monkeypatch.setenv('AWE_GEMINI_COMMAND', 'gemini -p --yolo --model gemini-2.5-pro')
+    monkeypatch.setenv('AWE_GEMINI_COMMAND', 'gemini --yolo --model gemini-2.5-pro')
     monkeypatch.setattr('awe_agentcheck.main.ParticipantRunner', FakeRunner)
 
     app = build_app()
@@ -35,4 +35,4 @@ def test_build_app_wires_gemini_command_into_runner(monkeypatch):
     assert resp.status_code == 200
     overrides = captured.get('command_overrides')
     assert isinstance(overrides, dict)
-    assert overrides.get('gemini') == 'gemini -p --yolo --model gemini-2.5-pro'
+    assert overrides.get('gemini') == 'gemini --yolo --model gemini-2.5-pro'

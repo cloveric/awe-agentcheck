@@ -1211,8 +1211,19 @@
           </div>
           <div class="controls-row">
             <div style="flex:1; min-width:220px;">
-              <label for="providerModels">Provider Models (optional, provider=model)</label>
-              <input id="providerModels" value="" placeholder="claude=claude-sonnet-4-5,codex=gpt-5-codex,gemini=gemini-2.5-pro" />
+              <label for="claudeModel">Claude Model</label>
+              <input id="claudeModel" list="claudeModelList" value="claude-opus-4-6" placeholder="claude-opus-4-6" />
+              <datalist id="claudeModelList"></datalist>
+            </div>
+            <div style="flex:1; min-width:220px;">
+              <label for="codexModel">Codex Model</label>
+              <input id="codexModel" list="codexModelList" value="gpt-5.3-codex" placeholder="gpt-5.3-codex" />
+              <datalist id="codexModelList"></datalist>
+            </div>
+            <div style="flex:1; min-width:220px;">
+              <label for="geminiModel">Gemini Model</label>
+              <input id="geminiModel" list="geminiModelList" value="gemini-3-pro-preview" placeholder="gemini-3-pro-preview" />
+              <datalist id="geminiModelList"></datalist>
             </div>
             <div style="flex:0 0 220px;">
               <label for="claudeTeamAgents">Claude Team Agents</label>
@@ -1220,6 +1231,20 @@
                 <option value="0">0 | disabled (default)</option>
                 <option value="1">1 | enabled (--agents)</option>
               </select>
+            </div>
+          </div>
+          <div class="controls-row">
+            <div style="flex:1; min-width:220px;">
+              <label for="claudeModelParams">Claude Model Params (optional)</label>
+              <input id="claudeModelParams" value="" placeholder="e.g. --temperature 0.2" />
+            </div>
+            <div style="flex:1; min-width:220px;">
+              <label for="codexModelParams">Codex Model Params (optional)</label>
+              <input id="codexModelParams" value="-c model_reasoning_effort=xhigh" placeholder="-c model_reasoning_effort=xhigh" />
+            </div>
+            <div style="flex:1; min-width:220px;">
+              <label for="geminiModelParams">Gemini Model Params (optional)</label>
+              <input id="geminiModelParams" value="--approval-mode yolo" placeholder="--approval-mode yolo" />
             </div>
           </div>
           <div class="controls-row">
@@ -1234,6 +1259,13 @@
             <div style="flex:1; min-width:220px;">
               <label for="evolveUntil">Evolve Until (optional)</label>
               <input id="evolveUntil" value="" placeholder="2026-02-13 06:00" />
+            </div>
+            <div style="flex:0 0 220px;">
+              <label for="conversationLanguage">Conversation Language</label>
+              <select id="conversationLanguage">
+                <option value="en">English (default)</option>
+                <option value="zh">中文</option>
+              </select>
             </div>
           </div>
           <div class="controls-row">
@@ -1289,6 +1321,7 @@
     const state = {
       tasks: [],
       stats: null,
+      providerModelCatalog: { claude: [], codex: [], gemini: [] },
       selectedProject: null,
       selectedRole: 'all',
       selectedTaskId: null,
@@ -1323,6 +1356,15 @@
       approveQueueBtn: document.getElementById('approveQueueBtn'),
       approveStartBtn: document.getElementById('approveStartBtn'),
       rejectBtn: document.getElementById('rejectBtn'),
+      claudeModel: document.getElementById('claudeModel'),
+      codexModel: document.getElementById('codexModel'),
+      geminiModel: document.getElementById('geminiModel'),
+      claudeModelList: document.getElementById('claudeModelList'),
+      codexModelList: document.getElementById('codexModelList'),
+      geminiModelList: document.getElementById('geminiModelList'),
+      claudeModelParams: document.getElementById('claudeModelParams'),
+      codexModelParams: document.getElementById('codexModelParams'),
+      geminiModelParams: document.getElementById('geminiModelParams'),
     };
 
     const THEME_OPTIONS = [
@@ -1474,21 +1516,52 @@
       return text.split('#')[0];
     }
 
-    function parseProviderModelsInput(raw) {
+    function readProviderModelsFromForm() {
       const out = {};
-      const text = String(raw || '').trim();
-      if (!text) return out;
-      for (const piece of text.split(',')) {
-        const part = String(piece || '').trim();
-        if (!part) continue;
-        const idx = part.indexOf('=');
-        if (idx <= 0) continue;
-        const provider = part.slice(0, idx).trim().toLowerCase();
-        const model = part.slice(idx + 1).trim();
-        if (!provider || !model) continue;
-        out[provider] = model;
+      const fields = [
+        ['claude', el.claudeModel],
+        ['codex', el.codexModel],
+        ['gemini', el.geminiModel],
+      ];
+      for (const [provider, input] of fields) {
+        const model = String(input && input.value || '').trim();
+        if (model) out[provider] = model;
       }
       return out;
+    }
+
+    function readProviderModelParamsFromForm() {
+      const out = {};
+      const fields = [
+        ['claude', el.claudeModelParams],
+        ['codex', el.codexModelParams],
+        ['gemini', el.geminiModelParams],
+      ];
+      for (const [provider, input] of fields) {
+        const params = String(input && input.value || '').trim();
+        if (params) out[provider] = params;
+      }
+      return out;
+    }
+
+    function renderModelDatalist(elm, values) {
+      if (!elm) return;
+      elm.innerHTML = '';
+      const list = Array.isArray(values) ? values : [];
+      for (const raw of list) {
+        const value = String(raw || '').trim();
+        if (!value) continue;
+        const option = document.createElement('option');
+        option.value = value;
+        elm.appendChild(option);
+      }
+    }
+
+    function renderProviderModelOptions() {
+      const catalog = state.providerModelCatalog || {};
+      renderModelDatalist(el.claudeModelList, catalog.claude || []);
+      renderModelDatalist(el.codexModelList, catalog.codex || []);
+      renderModelDatalist(el.geminiModelList, catalog.gemini || []);
     }
 
     function formatProviderModels(value) {
@@ -1498,6 +1571,15 @@
         .filter(([provider, model]) => provider && model);
       if (!entries.length) return 'n/a';
       return entries.map(([provider, model]) => `${provider}=${model}`).join(', ');
+    }
+
+    function formatProviderModelParams(value) {
+      const obj = value && typeof value === 'object' ? value : {};
+      const entries = Object.entries(obj)
+        .map(([provider, params]) => [String(provider || '').trim(), String(params || '').trim()])
+        .filter(([provider, params]) => provider && params);
+      if (!entries.length) return 'n/a';
+      return entries.map(([provider, params]) => `${provider}=${params}`).join(' | ');
     }
 
     function hashText(text) {
@@ -1762,6 +1844,43 @@
       });
     }
 
+    function participantInTask(task, roleId) {
+      const id = String(roleId || '').trim();
+      if (!id) return false;
+      if (String(task.author_participant || '') === id) return true;
+      const reviewers = Array.isArray(task.reviewer_participants) ? task.reviewer_participants : [];
+      return reviewers.some((v) => String(v || '').trim() === id);
+    }
+
+    function resolveRoleModelInfo(roleId, provider) {
+      const providerKey = String(provider || '').trim().toLowerCase();
+      const selected = selectedTask();
+      if (selected && participantInTask(selected, roleId)) {
+        const selectedModels = selected.provider_models || {};
+        const selectedParams = selected.provider_model_params || {};
+        const model = String(selectedModels[providerKey] || '').trim();
+        const params = String(selectedParams[providerKey] || '').trim();
+        if (model || params) {
+          return { model, params };
+        }
+      }
+
+      for (const task of state.tasks) {
+        if (!participantInTask(task, roleId)) continue;
+        const models = task.provider_models || {};
+        const paramsMap = task.provider_model_params || {};
+        const model = String(models[providerKey] || '').trim();
+        const params = String(paramsMap[providerKey] || '').trim();
+        if (model || params) {
+          return { model, params };
+        }
+      }
+
+      const catalog = state.providerModelCatalog || {};
+      const fallback = Array.isArray(catalog[providerKey]) ? catalog[providerKey] : [];
+      return { model: fallback.length ? String(fallback[0]) : '', params: '' };
+    }
+
     function roleGroups() {
       const map = new Map();
       for (const task of state.tasks) {
@@ -1777,6 +1896,11 @@
           role.tasks += 1;
           if (isActiveStatus(task.status)) role.active += 1;
         }
+      }
+      for (const role of map.values()) {
+        const info = resolveRoleModelInfo(role.id, role.provider);
+        role.model = info.model || '';
+        role.modelParams = info.params || '';
       }
       return Array.from(map.values()).sort((a, b) => {
         if (b.active !== a.active) return b.active - a.active;
@@ -2045,6 +2169,7 @@
           <div class="item-meta">
             <span>tasks: ${role.tasks}</span>
             <span>active: ${role.active}</span>
+            <span>model: ${escapeHtml(role.model || 'n/a')}</span>
           </div>
         `;
         el.roleList.appendChild(button);
@@ -2094,12 +2219,14 @@
         { label: 'Status', value: task.status, html: statusPill(task.status) },
         { label: 'Project', value: task.project_path || project },
         { label: 'Workspace', value: project },
+        { label: 'ConversationLang', value: String(task.conversation_language || 'en') },
         { label: 'Sandbox', value: String(task.sandbox_mode ? 1 : 0) },
         { label: 'SandboxPath', value: task.sandbox_workspace_path || 'n/a' },
         { label: 'SelfLoop', value: String(task.self_loop_mode ?? 1) },
         { label: 'Evolution', value: String(task.evolution_level ?? 0) },
         { label: 'EvolveUntil', value: task.evolve_until || 'n/a' },
         { label: 'ProviderModels', value: formatProviderModels(task.provider_models) },
+        { label: 'ProviderModelParams', value: formatProviderModelParams(task.provider_model_params) },
         { label: 'ClaudeAgents', value: String(task.claude_team_agents ? 1 : 0) },
         { label: 'AutoMerge', value: String(task.auto_merge !== false ? 1 : 0) },
         { label: 'MergeTarget', value: task.merge_target_path || 'in-place' },
@@ -2300,9 +2427,10 @@
     }
 
     async function loadData({ forceEvents = false } = {}) {
-      const [tasksResult, statsResult] = await Promise.allSettled([
+      const [tasksResult, statsResult, modelsResult] = await Promise.allSettled([
         api('/api/tasks?limit=200'),
         api('/api/stats'),
+        api('/api/provider-models'),
       ]);
 
       let updated = false;
@@ -2314,14 +2442,24 @@
         state.stats = statsResult.value || null;
         updated = true;
       }
+      if (modelsResult.status === 'fulfilled') {
+        const providers = (modelsResult.value && modelsResult.value.providers) || {};
+        state.providerModelCatalog = {
+          claude: Array.isArray(providers.claude) ? providers.claude : [],
+          codex: Array.isArray(providers.codex) ? providers.codex : [],
+          gemini: Array.isArray(providers.gemini) ? providers.gemini : [],
+        };
+        updated = true;
+      }
       if (!updated) {
         const reason = tasksResult.status === 'rejected'
           ? String(tasksResult.reason || '')
-          : String(statsResult.reason || '');
+          : (statsResult.status === 'rejected' ? String(statsResult.reason || '') : String(modelsResult.reason || ''));
         throw new Error(`all data requests failed: ${reason}`);
       }
 
       ensureSelections();
+      renderProviderModelOptions();
       renderStats();
       renderProjectSelector();
       renderRoles();
@@ -2409,7 +2547,6 @@
       const evolveUntilRaw = String(document.getElementById('evolveUntil').value || '').trim();
       const sandboxPathRaw = String(document.getElementById('sandboxWorkspacePath').value || '').trim();
       const mergeTargetRaw = String(document.getElementById('mergeTargetPath').value || '').trim();
-      const providerModelsRaw = String(document.getElementById('providerModels').value || '').trim();
       const payload = {
         title: document.getElementById('title').value,
         description: document.getElementById('description').value,
@@ -2417,7 +2554,9 @@
         reviewer_participants: document.getElementById('reviewers').value.split(',').map((v) => v.trim()).filter(Boolean),
         evolution_level: Number(document.getElementById('evolutionLevel').value || 0),
         evolve_until: (evolveUntilRaw || null),
-        provider_models: parseProviderModelsInput(providerModelsRaw),
+        conversation_language: String(document.getElementById('conversationLanguage').value || 'en').trim().toLowerCase() || 'en',
+        provider_models: readProviderModelsFromForm(),
+        provider_model_params: readProviderModelParamsFromForm(),
         claude_team_agents: Number(document.getElementById('claudeTeamAgents').value || 0) === 1,
         sandbox_mode: Number(document.getElementById('sandboxMode').value || 1) === 1,
         sandbox_workspace_path: (sandboxPathRaw || null),

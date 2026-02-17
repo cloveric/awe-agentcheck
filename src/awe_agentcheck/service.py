@@ -5,6 +5,7 @@ from datetime import datetime
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 from uuid import uuid4
@@ -30,7 +31,9 @@ class CreateTaskInput:
     reviewer_participants: list[str]
     evolution_level: int = 0
     evolve_until: str | None = None
+    conversation_language: str = 'en'
     provider_models: dict[str, str] | None = None
+    provider_model_params: dict[str, str] | None = None
     claude_team_agents: bool = False
     sandbox_mode: bool = True
     sandbox_workspace_path: str | None = None
@@ -60,7 +63,9 @@ class TaskView:
     reviewer_participants: list[str]
     evolution_level: int
     evolve_until: str | None
+    conversation_language: str
     provider_models: dict[str, str]
+    provider_model_params: dict[str, str]
     claude_team_agents: bool
     sandbox_mode: bool
     sandbox_workspace_path: str | None
@@ -101,6 +106,30 @@ _TERMINAL_STATUSES = {
     TaskStatus.FAILED_SYSTEM.value,
     TaskStatus.CANCELED.value,
 }
+_DEFAULT_PROVIDER_MODELS = {
+    'claude': [
+        'claude-opus-4-6',
+        'claude-opus-4-1',
+        'claude-sonnet-4-5',
+        'claude-3-7-sonnet',
+        'claude-3-5-sonnet-latest',
+    ],
+    'codex': [
+        'gpt-5.3-codex',
+        'gpt-5-codex',
+        'gpt-5',
+        'gpt-5-mini',
+        'gpt-4.1',
+    ],
+    'gemini': [
+        'gemini-3-pro-preview',
+        'gemini-2.5-pro',
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+    ],
+}
+
+_SUPPORTED_CONVERSATION_LANGUAGES = {'en', 'zh'}
 
 
 def _reason_bucket(reason: str | None) -> str | None:
@@ -174,7 +203,12 @@ class OrchestratorService:
             raise ValueError(f'workspace_path must be an existing directory: {payload.workspace_path}')
         evolution_level = max(0, min(2, int(payload.evolution_level)))
         evolve_until = self._normalize_evolve_until(payload.evolve_until)
+        conversation_language = self._normalize_conversation_language(
+            payload.conversation_language,
+            strict=True,
+        )
         provider_models = self._normalize_provider_models(payload.provider_models)
+        provider_model_params = self._normalize_provider_model_params(payload.provider_model_params)
         claude_team_agents = bool(payload.claude_team_agents)
         sandbox_mode = bool(payload.sandbox_mode)
         self_loop_mode = max(0, min(1, int(payload.self_loop_mode)))
@@ -212,7 +246,9 @@ class OrchestratorService:
             reviewer_participants=payload.reviewer_participants,
             evolution_level=evolution_level,
             evolve_until=evolve_until,
+            conversation_language=conversation_language,
             provider_models=provider_models,
+            provider_model_params=provider_model_params,
             claude_team_agents=claude_team_agents,
             sandbox_mode=sandbox_mode,
             sandbox_workspace_path=sandbox_workspace_path,
@@ -234,7 +270,9 @@ class OrchestratorService:
                 'status': row['status'],
                 'rounds_completed': row.get('rounds_completed', 0),
                 'cancel_requested': row.get('cancel_requested', False),
+                'conversation_language': str(row.get('conversation_language') or 'en'),
                 'provider_models': dict(row.get('provider_models', {})),
+                'provider_model_params': dict(row.get('provider_model_params', {})),
                 'claude_team_agents': bool(row.get('claude_team_agents', False)),
                 'sandbox_mode': bool(row.get('sandbox_mode', False)),
                 'sandbox_workspace_path': row.get('sandbox_workspace_path'),
@@ -314,6 +352,46 @@ class OrchestratorService:
             failed_system_rate_50=failed_system_rate_50,
             mean_task_duration_seconds_50=mean_task_duration_seconds_50,
         )
+
+    def get_provider_models_catalog(self) -> dict[str, list[str]]:
+        catalog: dict[str, list[str]] = {
+            provider: list(_DEFAULT_PROVIDER_MODELS.get(provider, []))
+            for provider in sorted(SUPPORTED_PROVIDERS)
+        }
+
+        def add_model(provider: str, model: str) -> None:
+            provider_key = str(provider or '').strip().lower()
+            model_name = str(model or '').strip()
+            if provider_key not in SUPPORTED_PROVIDERS or not model_name:
+                return
+            bucket = catalog.setdefault(provider_key, [])
+            if model_name not in bucket:
+                bucket.append(model_name)
+
+        runner = getattr(self.workflow_engine, 'runner', None)
+        commands = getattr(runner, 'commands', {}) if runner is not None else {}
+        if isinstance(commands, dict):
+            for raw_provider, raw_command in commands.items():
+                provider = str(raw_provider or '').strip().lower()
+                if provider not in SUPPORTED_PROVIDERS:
+                    continue
+                detected = self._extract_model_from_command(str(raw_command or ''))
+                if detected:
+                    add_model(provider, detected)
+
+        for row in self.repository.list_tasks(limit=10_000):
+            models = row.get('provider_models', {})
+            if not isinstance(models, dict):
+                continue
+            for raw_provider, raw_model in models.items():
+                provider = str(raw_provider or '').strip().lower()
+                model = str(raw_model or '').strip()
+                add_model(provider, model)
+
+        out: dict[str, list[str]] = {}
+        for provider in sorted(SUPPORTED_PROVIDERS):
+            out[provider] = [str(v) for v in catalog.get(provider, []) if str(v).strip()]
+        return out
 
     def list_events(self, task_id: str) -> list[dict]:
         return self.repository.list_events(task_id)
@@ -438,6 +516,14 @@ class OrchestratorService:
             return self._to_view(row)
 
         if int(row.get('self_loop_mode', 0)) == 0 and str(row.get('last_gate_reason') or '') != 'author_approved':
+            row = self.repository.update_task_status(
+                task_id,
+                status=TaskStatus.RUNNING.value,
+                reason=None,
+                rounds_completed=row.get('rounds_completed', 0),
+            )
+            self.repository.append_event(task_id, event_type='task_running', payload={'status': 'running'}, round_number=None)
+            self.artifact_store.update_state(task_id, {'status': 'running'})
             return self._prepare_author_confirmation(task_id, row)
 
         if self.max_concurrent_running_tasks > 0:
@@ -514,7 +600,9 @@ class OrchestratorService:
                     reviewers=reviewers,
                     evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
                     evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
+                    conversation_language=self._normalize_conversation_language(row.get('conversation_language')),
                     provider_models=dict(row.get('provider_models', {})),
+                    provider_model_params=dict(row.get('provider_model_params', {})),
                     claude_team_agents=bool(row.get('claude_team_agents', False)),
                     cwd=Path(str(row.get('workspace_path') or Path.cwd())),
                     max_rounds=int(row['max_rounds']),
@@ -718,7 +806,9 @@ class OrchestratorService:
                 reviewers=reviewers,
                 evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
                 evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
+                conversation_language=self._normalize_conversation_language(row.get('conversation_language')),
                 provider_models=dict(row.get('provider_models', {})),
+                provider_model_params=dict(row.get('provider_model_params', {})),
                 claude_team_agents=bool(row.get('claude_team_agents', False)),
                 cwd=Path(str(row.get('workspace_path') or Path.cwd())),
                 max_rounds=int(row.get('max_rounds', 3)),
@@ -734,6 +824,7 @@ class OrchestratorService:
                     cwd=config.cwd,
                     timeout_seconds=timeout,
                     model=(config.provider_models or {}).get(author.provider),
+                    model_params=(config.provider_model_params or {}).get(author.provider),
                     claude_team_agents=bool(config.claude_team_agents),
                 )
                 discussion_text = str(discussion.output or '').strip() or discussion_text
@@ -765,6 +856,7 @@ class OrchestratorService:
                         cwd=config.cwd,
                         timeout_seconds=timeout,
                         model=(config.provider_models or {}).get(reviewer.provider),
+                        model_params=(config.provider_model_params or {}).get(reviewer.provider),
                         claude_team_agents=bool(config.claude_team_agents),
                     )
                     verdict = WorkflowEngine._normalize_verdict(str(getattr(review, 'verdict', '') or ''))
@@ -886,6 +978,28 @@ class OrchestratorService:
         return str(Path(text))
 
     @staticmethod
+    def _normalize_conversation_language(value: str | None, *, strict: bool = False) -> str:
+        text = str(value or '').strip().lower()
+        if not text:
+            return 'en'
+        aliases = {
+            'en': 'en',
+            'english': 'en',
+            'eng': 'en',
+            'zh': 'zh',
+            'zh-cn': 'zh',
+            'cn': 'zh',
+            'chinese': 'zh',
+            '中文': 'zh',
+        }
+        normalized = aliases.get(text, text)
+        if normalized not in _SUPPORTED_CONVERSATION_LANGUAGES:
+            if strict:
+                raise ValueError(f'invalid conversation_language: {text}')
+            return 'en'
+        return normalized
+
+    @staticmethod
     def _normalize_provider_models(value: dict[str, str] | None) -> dict[str, str]:
         if not value:
             return {}
@@ -901,6 +1015,46 @@ class OrchestratorService:
             if not model:
                 raise ValueError(f'provider_models[{provider}] cannot be empty')
             out[provider] = model
+        return out
+
+    @staticmethod
+    def _extract_model_from_command(command: str) -> str | None:
+        text = str(command or '').strip()
+        if not text:
+            return None
+        try:
+            argv = shlex.split(text, posix=False)
+        except ValueError:
+            argv = text.split()
+        i = 0
+        while i < len(argv):
+            token = str(argv[i]).strip()
+            if token in {'-m', '--model'}:
+                if i + 1 < len(argv):
+                    value = str(argv[i + 1]).strip()
+                    return value or None
+            if token.startswith('--model='):
+                value = token.split('=', 1)[1].strip()
+                return value or None
+            i += 1
+        return None
+
+    @staticmethod
+    def _normalize_provider_model_params(value: dict[str, str] | None) -> dict[str, str]:
+        if not value:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError('provider_model_params must be an object')
+
+        out: dict[str, str] = {}
+        for raw_provider, raw_params in value.items():
+            provider = str(raw_provider or '').strip().lower()
+            params = str(raw_params or '').strip()
+            if provider not in SUPPORTED_PROVIDERS:
+                raise ValueError(f'invalid provider_model_params key: {provider}')
+            if not params:
+                raise ValueError(f'provider_model_params[{provider}] cannot be empty')
+            out[provider] = params
         return out
 
     @staticmethod
@@ -1009,10 +1163,12 @@ class OrchestratorService:
     @staticmethod
     def _proposal_review_prompt(config: RunConfig, discussion_output: str) -> str:
         clipped = WorkflowEngine._clip_text(discussion_output, max_chars=2500)
+        language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         return (
             f"Task: {config.title}\n"
             "You are reviewing a proposed implementation plan before code changes.\n"
             "Mark BLOCKER only for correctness, regression, security, or data-loss risks.\n"
+            f"{language_instruction}\n"
             "Output one line: VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN.\n"
             "Then provide concise rationale and critical risks.\n"
             f"Plan:\n{clipped}\n"
@@ -1035,7 +1191,9 @@ class OrchestratorService:
             reviewer_participants=[str(v) for v in row.get('reviewer_participants', [])],
             evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
             evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
+            conversation_language=OrchestratorService._normalize_conversation_language(row.get('conversation_language')),
             provider_models={str(k): str(v) for k, v in dict(row.get('provider_models', {})).items()},
+            provider_model_params={str(k): str(v) for k, v in dict(row.get('provider_model_params', {})).items()},
             claude_team_agents=bool(row.get('claude_team_agents', False)),
             sandbox_mode=bool(row.get('sandbox_mode', False)),
             sandbox_workspace_path=(str(row.get('sandbox_workspace_path')).strip() if row.get('sandbox_workspace_path') else None),

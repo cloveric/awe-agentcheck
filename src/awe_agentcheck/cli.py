@@ -22,10 +22,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument('--reviewer', action='append', required=True, help='Reviewer participant id (repeatable)')
     run.add_argument('--evolution-level', type=int, default=0, choices=[0, 1, 2], help='0=fix-only, 1=guided evolve, 2=proactive evolve')
     run.add_argument('--evolve-until', default='', help='Optional local datetime deadline, e.g. 2026-02-13 06:00')
+    run.add_argument('--conversation-language', default='en', choices=['en', 'zh'], help='Conversation output language: en or zh')
     run.add_argument('--sandbox-mode', type=int, default=1, choices=[0, 1], help='1=run in sandbox workspace (default), 0=run in main workspace')
     run.add_argument('--sandbox-workspace-path', default='', help='Optional sandbox path override (default: <workspace>-lab)')
     run.add_argument('--self-loop-mode', type=int, default=0, choices=[0, 1], help='0=manual author confirmation (default), 1=autonomous loop')
     run.add_argument('--provider-model', action='append', default=[], help='Provider model override in provider=model format (repeatable)')
+    run.add_argument('--provider-model-param', action='append', default=[], help='Provider model params in provider=args format (repeatable)')
     run.add_argument('--claude-team-agents', type=int, default=0, choices=[0, 1], help='Enable Claude --agents mode for Claude participants')
     run.add_argument('--auto-merge', action=argparse.BooleanOptionalAction, default=True, help='Enable auto-fusion/changelog/snapshot after passed (default: on)')
     run.add_argument('--merge-target-path', default='', help='Optional path to receive auto-merged changes')
@@ -100,6 +102,25 @@ def _parse_provider_models(values: list[str] | None) -> dict[str, str]:
     return out
 
 
+def _parse_provider_model_params(values: list[str] | None) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw in values or []:
+        text = str(raw or '').strip()
+        if not text:
+            continue
+        if '=' not in text:
+            raise ValueError(f'invalid --provider-model-param value: {text} (expected provider=args)')
+        provider_raw, params_raw = text.split('=', 1)
+        provider = provider_raw.strip().lower()
+        params = params_raw.strip()
+        if provider not in SUPPORTED_PROVIDERS:
+            raise ValueError(f'invalid --provider-model-param provider: {provider}')
+        if not params:
+            raise ValueError(f'invalid --provider-model-param params for provider: {provider}')
+        out[provider] = params
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -109,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == 'run':
             try:
                 provider_models = _parse_provider_models(args.provider_model)
+                provider_model_params = _parse_provider_model_params(args.provider_model_param)
             except ValueError as exc:
                 parser.error(str(exc))
                 return 2
@@ -121,7 +143,9 @@ def main(argv: list[str] | None = None) -> int:
                     'reviewer_participants': args.reviewer,
                     'evolution_level': int(args.evolution_level),
                     'evolve_until': (args.evolve_until.strip() or None),
+                    'conversation_language': str(args.conversation_language).strip().lower() or 'en',
                     'provider_models': provider_models,
+                    'provider_model_params': provider_model_params,
                     'claude_team_agents': int(args.claude_team_agents) == 1,
                     'sandbox_mode': int(args.sandbox_mode) == 1,
                     'sandbox_workspace_path': (args.sandbox_workspace_path.strip() or None),
