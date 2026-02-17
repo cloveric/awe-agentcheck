@@ -1,5 +1,16 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-18, docs + repo metadata sync)
+
+1. Synced architecture doc to current runtime:
+   - added `/api/project-history` ledger surface and monitor history panel layout.
+   - clarified `evolve_until` vs `max_rounds` precedence.
+   - documented persistent SQLite default path for restart-safe history.
+2. Synced GitHub repository description to highlight:
+   - multi-agent CLI orchestration
+   - cross-review + bug fixing
+   - project history ledger + continuous evolution.
+
 ## Update (2026-02-18, history traceability + persistence)
 
 1. Root cause of empty `Project` dropdown clarified:

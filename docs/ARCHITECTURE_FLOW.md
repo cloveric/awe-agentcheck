@@ -1,13 +1,13 @@
 # Architecture Flow
 
-Date: 2026-02-12
+Date: 2026-02-18
 
 ## 1) Control Plane
 
 ```text
 Operator / Script
     |
-    |  REST (create/start/cancel/force-fail/query/tree)
+    |  REST (create/start/cancel/force-fail/query/tree/history)
     v
 FastAPI (awe_agentcheck.api)
     |
@@ -44,6 +44,9 @@ Task-level strategy controls:
   - `1` guided evolution
   - `2` proactive evolution
 - `evolve_until`: optional discussion/evolution wall-clock deadline (reaches deadline -> graceful cancel with `deadline_reached`)
+- precedence rule:
+  - if `evolve_until` is set, deadline is primary stop condition
+  - if `evolve_until` is empty, `max_rounds` is used
 - `sandbox_mode`:
   - `1` execute in sandbox workspace (default `<project>-lab`)
   - `0` execute directly in project workspace
@@ -100,6 +103,11 @@ start_overnight_until_7.ps1
   - `provider_error_counts`
   - recent terminal rates and mean duration
 - API: `/api/workspace-tree` for project file structure
+- API: `/api/project-history` for project-level historical ledger:
+  - `core_findings`
+  - `revisions`
+  - `disputes`
+  - `next_steps`
 - API: `/api/tasks/{task_id}/author-decision` for manual approve/reject in waiting state
 - Web console: `http://127.0.0.1:8000/`
 - Artifacts per task: `.agents/threads/<task_id>/`
@@ -115,5 +123,12 @@ Left column
 Right column
   top    -> scope + task controls
   middle -> dialogue stream
+  lower  -> project history ledger
   bottom -> task creation
 ```
+
+## 8) Persistence Defaults
+
+- If `AWE_DATABASE_URL` is unset, startup scripts default to local SQLite:
+  - `.agents/runtime/awe-agentcheck.sqlite3`
+- This keeps project/task history across API restarts.
