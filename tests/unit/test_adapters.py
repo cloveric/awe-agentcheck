@@ -107,3 +107,62 @@ def test_participant_runner_raises_provider_limit_when_cli_reports_quota_message
             cwd=tmp_path,
             timeout_seconds=1,
         )
+
+
+@pytest.mark.parametrize(
+    ('participant_id', 'base_command', 'model', 'expected_flag'),
+    [
+        ('claude#author-A', 'claude -p', 'claude-sonnet-4-5', '--model'),
+        ('codex#review-B', 'codex exec', 'gpt-5-codex', '-m'),
+        ('gemini#review-C', 'gemini -p', 'gemini-2.5-pro', '-m'),
+    ],
+)
+def test_participant_runner_appends_model_flag_per_provider(
+    tmp_path: Path,
+    monkeypatch,
+    participant_id: str,
+    base_command: str,
+    model: str,
+    expected_flag: str,
+):
+    captured = {'argv': None}
+
+    def fake_run(argv, **kwargs):
+        captured['argv'] = list(argv)
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout='VERDICT: NO_BLOCKER', stderr='')
+
+    monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
+    participant = parse_participant_id(participant_id)
+    runner = ParticipantRunner(command_overrides={participant.provider: base_command}, dry_run=False)
+    runner.run(
+        participant=participant,
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=1,
+        model=model,
+    )
+
+    assert captured['argv'] is not None
+    assert expected_flag in captured['argv']
+    assert model in captured['argv']
+
+
+def test_participant_runner_appends_claude_team_agents_flag_when_enabled(tmp_path: Path, monkeypatch):
+    captured = {'argv': None}
+
+    def fake_run(argv, **kwargs):
+        captured['argv'] = list(argv)
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout='VERDICT: NO_BLOCKER', stderr='')
+
+    monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
+    runner = ParticipantRunner(command_overrides={'claude': 'claude -p'}, dry_run=False)
+    runner.run(
+        participant=parse_participant_id('claude#author-A'),
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=1,
+        claude_team_agents=True,
+    )
+
+    assert captured['argv'] is not None
+    assert '--agents' in captured['argv']

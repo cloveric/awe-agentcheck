@@ -18,6 +18,11 @@ _LIMIT_PATTERNS = (
     'quota exceeded',
     'insufficient_quota',
 )
+_MODEL_FLAG_BY_PROVIDER = {
+    'claude': '--model',
+    'codex': '-m',
+    'gemini': '-m',
+}
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,8 @@ class ParticipantRunner:
         prompt: str,
         cwd: Path,
         timeout_seconds: int = 900,
+        model: str | None = None,
+        claude_team_agents: bool = False,
     ) -> AdapterResult:
         if self.dry_run:
             simulated = (
@@ -93,7 +100,13 @@ class ParticipantRunner:
         if not command:
             raise ValueError(f'no command configured for provider: {participant.provider}')
 
-        argv = shlex.split(command, posix=False)
+        argv = self._build_argv(
+            command=command,
+            provider=participant.provider,
+            model=model,
+            claude_team_agents=claude_team_agents,
+        )
+        effective_command = self._format_command(argv)
         attempts = self.timeout_retries + 1
         current_prompt = prompt
         started = time.monotonic()
@@ -113,12 +126,12 @@ class ParticipantRunner:
                 break
             except FileNotFoundError as exc:
                 raise RuntimeError(
-                    f'command_not_found provider={participant.provider} command={command}'
+                    f'command_not_found provider={participant.provider} command={effective_command}'
                 ) from exc
             except subprocess.TimeoutExpired as exc:
                 if attempt >= attempts:
                     raise RuntimeError(
-                        f'command_timeout provider={participant.provider} command={command} '
+                        f'command_timeout provider={participant.provider} command={effective_command} '
                         f'timeout_seconds={timeout_seconds} attempts={attempts}'
                     ) from exc
                 current_prompt = self._clip_prompt_for_retry(current_prompt)
@@ -131,7 +144,7 @@ class ParticipantRunner:
             output = '\n'.join([p for p in [output, stderr] if p]).strip()
 
         if self._is_provider_limit_output(output):
-            raise RuntimeError(f'provider_limit provider={participant.provider} command={command}')
+            raise RuntimeError(f'provider_limit provider={participant.provider} command={effective_command}')
 
         return AdapterResult(
             output=output,
@@ -156,3 +169,47 @@ class ParticipantRunner:
         if not text:
             return False
         return any(pattern in text for pattern in _LIMIT_PATTERNS)
+
+    @staticmethod
+    def _build_argv(
+        *,
+        command: str,
+        provider: str,
+        model: str | None,
+        claude_team_agents: bool,
+    ) -> list[str]:
+        argv = shlex.split(command, posix=False)
+
+        model_text = str(model or '').strip()
+        if model_text and not ParticipantRunner._has_model_flag(argv):
+            flag = _MODEL_FLAG_BY_PROVIDER.get(str(provider or '').strip().lower())
+            if flag:
+                argv.extend([flag, model_text])
+
+        if str(provider or '').strip().lower() == 'claude':
+            if claude_team_agents and not ParticipantRunner._has_agents_flag(argv):
+                argv.extend(['--agents', '{}'])
+
+        return argv
+
+    @staticmethod
+    def _has_model_flag(argv: list[str]) -> bool:
+        for token in argv:
+            text = str(token).strip()
+            if text in {'--model', '-m'}:
+                return True
+            if text.startswith('--model='):
+                return True
+        return False
+
+    @staticmethod
+    def _has_agents_flag(argv: list[str]) -> bool:
+        for token in argv:
+            text = str(token).strip()
+            if text == '--agents' or text.startswith('--agents='):
+                return True
+        return False
+
+    @staticmethod
+    def _format_command(argv: list[str]) -> str:
+        return ' '.join(str(v) for v in argv)

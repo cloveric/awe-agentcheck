@@ -106,6 +106,42 @@ def test_service_create_task_accepts_evolution_fields(tmp_path: Path):
     assert task.evolve_until == '2026-02-13T06:00:00'
 
 
+def test_service_create_task_accepts_provider_models_and_claude_team_agents(tmp_path: Path):
+    svc = build_service(tmp_path)
+    task = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='Model config',
+            description='provider model and team agents',
+            author_participant='claude#author-A',
+            reviewer_participants=['codex#review-B', 'gemini#review-C'],
+            provider_models={'claude': 'claude-sonnet-4-5', 'codex': 'gpt-5-codex', 'gemini': 'gemini-2.5-pro'},
+            claude_team_agents=True,
+        )
+    )
+    assert task.provider_models.get('claude') == 'claude-sonnet-4-5'
+    assert task.provider_models.get('codex') == 'gpt-5-codex'
+    assert task.provider_models.get('gemini') == 'gemini-2.5-pro'
+    assert task.claude_team_agents is True
+
+
+def test_service_create_task_rejects_unknown_provider_model_key(tmp_path: Path):
+    svc = build_service(tmp_path)
+    with pytest.raises(ValueError, match='invalid provider_models key'):
+        svc.create_task(
+            CreateTaskInput(
+                sandbox_mode=False,
+                self_loop_mode=1,
+                title='Bad provider model key',
+                description='provider model validation',
+                author_participant='claude#author-A',
+                reviewer_participants=['codex#review-B'],
+                provider_models={'unknown': 'model-x'},
+            )
+        )
+
+
 def test_service_create_task_defaults_to_sandbox_workspace(tmp_path: Path):
     project = tmp_path / 'proj'
     project.mkdir()
@@ -931,4 +967,3 @@ def test_create_task_rejects_invalid_reviewer_participant(tmp_path: Path):
                 workspace_path=str(tmp_path),
             )
         )
-

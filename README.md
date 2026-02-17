@@ -50,6 +50,10 @@
 2. Added `AWE_GEMINI_COMMAND` runtime config (default: `gemini -p --yolo`).
 3. Updated overnight launcher to resolve Gemini command path automatically.
 4. Added safety guard for overnight launch: `scripts/start_overnight_until_7.ps1` now requires explicit `-Until` to prevent accidental long runs.
+5. Added provider-level model override for task execution (`provider_models` in API/UI, `--provider-model provider=model` in CLI).
+6. Added Claude team-agents toggle (`claude_team_agents` in API/UI, `--claude-team-agents 1` in CLI).
+7. Participant adapter now appends provider-specific model flags automatically (`--model` for Claude, `-m` for Codex/Gemini) when not already configured in command template.
+8. Dashboard task snapshot now displays effective model pinning and Claude team-agents state.
 
 <br/>
 
@@ -341,6 +345,8 @@ If this is your first time, operate in this exact order:
 | `Workspace path` | Repository root path | Your actual project path |
 | `Author` | Implementing participant | `claude#author-A` / `codex#author-A` / `gemini#author-A` |
 | `Reviewers` | One or more reviewers, comma-separated | At least 1 reviewer |
+| `Provider Models` | Optional per-provider model pinning (`provider=model`, comma-separated) | Empty (inherits command defaults) |
+| `Claude Team Agents` | Enable/disable Claude `--agents` mode | `0` (disabled) |
 | `Evolution Level` | `0` fix-only, `1` guided evolve, `2` proactive evolve | Start with `0` |
 | `Evolve Until` | Optional deadline (`YYYY-MM-DD HH:MM`) | Empty unless running overnight |
 | `Sandbox Mode` | `1` sandbox / `0` main workspace | Keep `1` for safety |
@@ -459,6 +465,8 @@ py -m awe_agentcheck.cli run `
 | `--lint-command` | No | `py -m ruff check .` | Command to run linter |
 | `--evolution-level` | No | `0` | `0` = fix-only, `1` = guided evolve, `2` = proactive evolve |
 | `--evolve-until` | No | — | Deadline for evolution (e.g. `2026-02-13 06:00`) |
+| `--provider-model` | No | — | Per-provider model override in `provider=model` format (repeatable) |
+| `--claude-team-agents` | No | `0` | `1` enables Claude `--agents` mode for Claude participants |
 | `--auto-start` | No | `false` | Start immediately after creation |
 
 ### `decide` — Submit Author Decision
@@ -639,6 +647,11 @@ POST /api/tasks
   "description": "The email validator accepts invalid formats",
   "author_participant": "claude#author-A",
   "reviewer_participants": ["codex#review-B"],
+  "provider_models": {
+    "claude": "claude-sonnet-4-5",
+    "codex": "gpt-5-codex"
+  },
+  "claude_team_agents": false,
   "sandbox_mode": true,
   "self_loop_mode": 0,
   "auto_merge": true,
@@ -695,6 +708,8 @@ POST /api/tasks
 | **Author-approval gate** | Default `self_loop_mode=0`, enters `waiting_manual` before implementation | `GA` |
 | **Autonomous self-loop** | `self_loop_mode=1` for unattended operation | `GA` |
 | **Auto fusion** | On pass: merge + `CHANGELOG.auto.md` + snapshot | `GA` |
+| **Provider model pinning** | Set model per provider (`claude` / `codex` / `gemini`) per task | `GA` |
+| **Claude team-agents mode** | Per-task toggle to enable Claude `--agents` behavior | `GA` |
 | **Multi-provider role model** | `provider#alias` participants (cross-provider or same-provider multi-session) | `GA` |
 | **Web monitor console** | Project tree, roles/sessions, avatar-based chat, task controls, drag-and-drop | `GA` |
 | **Multi-theme UI** | Neon Grid, Terminal Pixel, Executive Glass | `GA` |

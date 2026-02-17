@@ -21,6 +21,8 @@ class CreateTaskRequest(BaseModel):
     reviewer_participants: list[str] = Field(min_length=1)
     evolution_level: int = Field(default=0, ge=0, le=2)
     evolve_until: str | None = Field(default=None, max_length=64)
+    provider_models: dict[str, str] = Field(default_factory=dict)
+    claude_team_agents: bool = Field(default=False)
     sandbox_mode: bool = Field(default=True)
     sandbox_workspace_path: str | None = Field(default=None, max_length=400)
     sandbox_cleanup_on_pass: bool = Field(default=True)
@@ -62,6 +64,8 @@ class TaskResponse(BaseModel):
     reviewer_participants: list[str]
     evolution_level: int
     evolve_until: str | None
+    provider_models: dict[str, str]
+    claude_team_agents: bool
     sandbox_mode: bool
     sandbox_workspace_path: str | None
     sandbox_generated: bool
@@ -134,6 +138,8 @@ def _to_task_response(task) -> TaskResponse:
         reviewer_participants=task.reviewer_participants,
         evolution_level=task.evolution_level,
         evolve_until=task.evolve_until,
+        provider_models=task.provider_models,
+        claude_team_agents=task.claude_team_agents,
         sandbox_mode=task.sandbox_mode,
         sandbox_workspace_path=task.sandbox_workspace_path,
         sandbox_generated=task.sandbox_generated,
@@ -202,6 +208,8 @@ def create_app(
                     reviewer_participants=payload.reviewer_participants,
                     evolution_level=payload.evolution_level,
                     evolve_until=payload.evolve_until,
+                    provider_models=payload.provider_models,
+                    claude_team_agents=payload.claude_team_agents,
                     sandbox_mode=payload.sandbox_mode,
                     sandbox_workspace_path=payload.sandbox_workspace_path,
                     sandbox_cleanup_on_pass=payload.sandbox_cleanup_on_pass,

@@ -223,6 +223,52 @@ def test_api_create_task_accepts_evolution_fields(tmp_path: Path):
     assert body['merge_target_path'] == str(tmp_path)
 
 
+def test_api_create_task_accepts_provider_models_and_claude_team_agents(tmp_path: Path):
+    client = build_client(tmp_path)
+    resp = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Task models',
+            'description': 'provider model routing',
+            'author_participant': 'claude#author-A',
+            'reviewer_participants': ['codex#review-B', 'gemini#review-C'],
+            'provider_models': {
+                'claude': 'claude-sonnet-4-5',
+                'codex': 'gpt-5-codex',
+                'gemini': 'gemini-2.5-pro',
+            },
+            'claude_team_agents': True,
+            'sandbox_mode': False,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body['provider_models']['claude'] == 'claude-sonnet-4-5'
+    assert body['provider_models']['codex'] == 'gpt-5-codex'
+    assert body['provider_models']['gemini'] == 'gemini-2.5-pro'
+    assert body['claude_team_agents'] is True
+
+
+def test_api_create_task_rejects_unknown_provider_model_key(tmp_path: Path):
+    client = build_client(tmp_path)
+    resp = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Task bad provider key',
+            'description': 'provider model validation',
+            'author_participant': 'claude#author-A',
+            'reviewer_participants': ['codex#review-B'],
+            'provider_models': {'unknown': 'model-x'},
+            'sandbox_mode': False,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    assert resp.status_code == 400
+
+
 def test_api_workspace_tree_lists_children(tmp_path: Path):
     root = tmp_path / 'repo'
     root.mkdir()

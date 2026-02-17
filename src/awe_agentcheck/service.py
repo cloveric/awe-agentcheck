@@ -14,7 +14,7 @@ from awe_agentcheck.domain.gate import evaluate_medium_gate
 from awe_agentcheck.domain.models import ReviewVerdict, TaskStatus
 from awe_agentcheck.fusion import AutoFusionManager
 from awe_agentcheck.observability import get_logger, set_task_context
-from awe_agentcheck.participants import parse_participant_id
+from awe_agentcheck.participants import SUPPORTED_PROVIDERS, parse_participant_id
 from awe_agentcheck.repository import TaskRepository
 from awe_agentcheck.storage.artifacts import ArtifactStore
 from awe_agentcheck.workflow import RunConfig, ShellCommandExecutor, WorkflowEngine
@@ -30,6 +30,8 @@ class CreateTaskInput:
     reviewer_participants: list[str]
     evolution_level: int = 0
     evolve_until: str | None = None
+    provider_models: dict[str, str] | None = None
+    claude_team_agents: bool = False
     sandbox_mode: bool = True
     sandbox_workspace_path: str | None = None
     sandbox_cleanup_on_pass: bool = True
@@ -58,6 +60,8 @@ class TaskView:
     reviewer_participants: list[str]
     evolution_level: int
     evolve_until: str | None
+    provider_models: dict[str, str]
+    claude_team_agents: bool
     sandbox_mode: bool
     sandbox_workspace_path: str | None
     sandbox_generated: bool
@@ -170,6 +174,8 @@ class OrchestratorService:
             raise ValueError(f'workspace_path must be an existing directory: {payload.workspace_path}')
         evolution_level = max(0, min(2, int(payload.evolution_level)))
         evolve_until = self._normalize_evolve_until(payload.evolve_until)
+        provider_models = self._normalize_provider_models(payload.provider_models)
+        claude_team_agents = bool(payload.claude_team_agents)
         sandbox_mode = bool(payload.sandbox_mode)
         self_loop_mode = max(0, min(1, int(payload.self_loop_mode)))
         sandbox_cleanup_on_pass = bool(payload.sandbox_cleanup_on_pass)
@@ -206,6 +212,8 @@ class OrchestratorService:
             reviewer_participants=payload.reviewer_participants,
             evolution_level=evolution_level,
             evolve_until=evolve_until,
+            provider_models=provider_models,
+            claude_team_agents=claude_team_agents,
             sandbox_mode=sandbox_mode,
             sandbox_workspace_path=sandbox_workspace_path,
             sandbox_generated=sandbox_generated,
@@ -226,6 +234,8 @@ class OrchestratorService:
                 'status': row['status'],
                 'rounds_completed': row.get('rounds_completed', 0),
                 'cancel_requested': row.get('cancel_requested', False),
+                'provider_models': dict(row.get('provider_models', {})),
+                'claude_team_agents': bool(row.get('claude_team_agents', False)),
                 'sandbox_mode': bool(row.get('sandbox_mode', False)),
                 'sandbox_workspace_path': row.get('sandbox_workspace_path'),
                 'sandbox_generated': bool(row.get('sandbox_generated', False)),
@@ -504,6 +514,8 @@ class OrchestratorService:
                     reviewers=reviewers,
                     evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
                     evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
+                    provider_models=dict(row.get('provider_models', {})),
+                    claude_team_agents=bool(row.get('claude_team_agents', False)),
                     cwd=Path(str(row.get('workspace_path') or Path.cwd())),
                     max_rounds=int(row['max_rounds']),
                     test_command=row['test_command'],
@@ -706,6 +718,8 @@ class OrchestratorService:
                 reviewers=reviewers,
                 evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
                 evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
+                provider_models=dict(row.get('provider_models', {})),
+                claude_team_agents=bool(row.get('claude_team_agents', False)),
                 cwd=Path(str(row.get('workspace_path') or Path.cwd())),
                 max_rounds=int(row.get('max_rounds', 3)),
                 test_command=str(row.get('test_command', 'py -m pytest -q')),
@@ -719,6 +733,8 @@ class OrchestratorService:
                     prompt=WorkflowEngine._discussion_prompt(config, 1, None),
                     cwd=config.cwd,
                     timeout_seconds=timeout,
+                    model=(config.provider_models or {}).get(author.provider),
+                    claude_team_agents=bool(config.claude_team_agents),
                 )
                 discussion_text = str(discussion.output or '').strip() or discussion_text
                 if discussion_text:
@@ -748,6 +764,8 @@ class OrchestratorService:
                         prompt=self._proposal_review_prompt(config, discussion_text),
                         cwd=config.cwd,
                         timeout_seconds=timeout,
+                        model=(config.provider_models or {}).get(reviewer.provider),
+                        claude_team_agents=bool(config.claude_team_agents),
                     )
                     verdict = WorkflowEngine._normalize_verdict(str(getattr(review, 'verdict', '') or ''))
                     review_text = str(getattr(review, 'output', '') or '').strip()
@@ -866,6 +884,24 @@ class OrchestratorService:
         if not text:
             return None
         return str(Path(text))
+
+    @staticmethod
+    def _normalize_provider_models(value: dict[str, str] | None) -> dict[str, str]:
+        if not value:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError('provider_models must be an object')
+
+        out: dict[str, str] = {}
+        for raw_provider, raw_model in value.items():
+            provider = str(raw_provider or '').strip().lower()
+            model = str(raw_model or '').strip()
+            if provider not in SUPPORTED_PROVIDERS:
+                raise ValueError(f'invalid provider_models key: {provider}')
+            if not model:
+                raise ValueError(f'provider_models[{provider}] cannot be empty')
+            out[provider] = model
+        return out
 
     @staticmethod
     def _default_sandbox_path(project_root: Path) -> str:
@@ -999,6 +1035,8 @@ class OrchestratorService:
             reviewer_participants=[str(v) for v in row.get('reviewer_participants', [])],
             evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
             evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
+            provider_models={str(k): str(v) for k, v in dict(row.get('provider_models', {})).items()},
+            claude_team_agents=bool(row.get('claude_team_agents', False)),
             sandbox_mode=bool(row.get('sandbox_mode', False)),
             sandbox_workspace_path=(str(row.get('sandbox_workspace_path')).strip() if row.get('sandbox_workspace_path') else None),
             sandbox_generated=bool(row.get('sandbox_generated', False)),

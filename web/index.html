@@ -1210,6 +1210,19 @@
             </div>
           </div>
           <div class="controls-row">
+            <div style="flex:1; min-width:220px;">
+              <label for="providerModels">Provider Models (optional, provider=model)</label>
+              <input id="providerModels" value="" placeholder="claude=claude-sonnet-4-5,codex=gpt-5-codex,gemini=gemini-2.5-pro" />
+            </div>
+            <div style="flex:0 0 220px;">
+              <label for="claudeTeamAgents">Claude Team Agents</label>
+              <select id="claudeTeamAgents">
+                <option value="0">0 | disabled (default)</option>
+                <option value="1">1 | enabled (--agents)</option>
+              </select>
+            </div>
+          </div>
+          <div class="controls-row">
             <div style="flex:1; min-width:160px;">
               <label for="evolutionLevel">Evolution Level</label>
               <select id="evolutionLevel">
@@ -1459,6 +1472,32 @@
       const text = String(participantId || '');
       if (!text.includes('#')) return text || 'unknown';
       return text.split('#')[0];
+    }
+
+    function parseProviderModelsInput(raw) {
+      const out = {};
+      const text = String(raw || '').trim();
+      if (!text) return out;
+      for (const piece of text.split(',')) {
+        const part = String(piece || '').trim();
+        if (!part) continue;
+        const idx = part.indexOf('=');
+        if (idx <= 0) continue;
+        const provider = part.slice(0, idx).trim().toLowerCase();
+        const model = part.slice(idx + 1).trim();
+        if (!provider || !model) continue;
+        out[provider] = model;
+      }
+      return out;
+    }
+
+    function formatProviderModels(value) {
+      const obj = value && typeof value === 'object' ? value : {};
+      const entries = Object.entries(obj)
+        .map(([provider, model]) => [String(provider || '').trim(), String(model || '').trim()])
+        .filter(([provider, model]) => provider && model);
+      if (!entries.length) return 'n/a';
+      return entries.map(([provider, model]) => `${provider}=${model}`).join(', ');
     }
 
     function hashText(text) {
@@ -2060,6 +2099,8 @@
         { label: 'SelfLoop', value: String(task.self_loop_mode ?? 1) },
         { label: 'Evolution', value: String(task.evolution_level ?? 0) },
         { label: 'EvolveUntil', value: task.evolve_until || 'n/a' },
+        { label: 'ProviderModels', value: formatProviderModels(task.provider_models) },
+        { label: 'ClaudeAgents', value: String(task.claude_team_agents ? 1 : 0) },
         { label: 'AutoMerge', value: String(task.auto_merge !== false ? 1 : 0) },
         { label: 'MergeTarget', value: task.merge_target_path || 'in-place' },
         { label: 'Author', value: task.author_participant },
@@ -2368,6 +2409,7 @@
       const evolveUntilRaw = String(document.getElementById('evolveUntil').value || '').trim();
       const sandboxPathRaw = String(document.getElementById('sandboxWorkspacePath').value || '').trim();
       const mergeTargetRaw = String(document.getElementById('mergeTargetPath').value || '').trim();
+      const providerModelsRaw = String(document.getElementById('providerModels').value || '').trim();
       const payload = {
         title: document.getElementById('title').value,
         description: document.getElementById('description').value,
@@ -2375,6 +2417,8 @@
         reviewer_participants: document.getElementById('reviewers').value.split(',').map((v) => v.trim()).filter(Boolean),
         evolution_level: Number(document.getElementById('evolutionLevel').value || 0),
         evolve_until: (evolveUntilRaw || null),
+        provider_models: parseProviderModelsInput(providerModelsRaw),
+        claude_team_agents: Number(document.getElementById('claudeTeamAgents').value || 0) === 1,
         sandbox_mode: Number(document.getElementById('sandboxMode').value || 1) === 1,
         sandbox_workspace_path: (sandboxPathRaw || null),
         self_loop_mode: Number(document.getElementById('selfLoopMode').value || 0),

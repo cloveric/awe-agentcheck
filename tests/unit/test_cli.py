@@ -26,6 +26,12 @@ def test_cli_parser_run_subcommand_accepts_author_and_reviewers():
             'C:/Users/hangw/awe-agentcheck-lab',
             '--self-loop-mode',
             '0',
+            '--provider-model',
+            'claude=claude-sonnet-4-5',
+            '--provider-model',
+            'codex=gpt-5-codex',
+            '--claude-team-agents',
+            '1',
             '--merge-target-path',
             'C:/Users/hangw/awe-agentcheck',
         ]
@@ -39,6 +45,8 @@ def test_cli_parser_run_subcommand_accepts_author_and_reviewers():
     assert args.sandbox_mode == 1
     assert args.sandbox_workspace_path == 'C:/Users/hangw/awe-agentcheck-lab'
     assert args.self_loop_mode == 0
+    assert args.provider_model == ['claude=claude-sonnet-4-5', 'codex=gpt-5-codex']
+    assert args.claude_team_agents == 1
     assert args.auto_merge is True
     assert args.merge_target_path == 'C:/Users/hangw/awe-agentcheck'
 

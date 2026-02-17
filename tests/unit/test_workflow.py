@@ -14,12 +14,14 @@ class FakeRunner:
         self.calls = 0
         self.timeouts: list[int] = []
         self.prompts: list[str] = []
+        self.call_options: list[dict] = []
 
-    def run(self, *, participant, prompt, cwd, timeout_seconds=900):
+    def run(self, *, participant, prompt, cwd, timeout_seconds=900, **kwargs):
         idx = min(self.calls, len(self.outputs) - 1)
         self.calls += 1
         self.timeouts.append(timeout_seconds)
         self.prompts.append(prompt)
+        self.call_options.append(dict(kwargs))
         return self.outputs[idx]
 
 
@@ -349,3 +351,34 @@ def test_workflow_cancels_mid_phase_after_discussion(tmp_path: Path):
     event_types = [e['type'] for e in sink.events]
     assert 'discussion' in event_types
     assert 'implementation' not in event_types
+
+
+def test_workflow_passes_provider_models_and_claude_team_agents_to_runner(tmp_path: Path):
+    runner = FakeRunner([_ok_result(), _ok_result(), _ok_result()])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-model',
+            title='Provider model propagation',
+            description='propagate provider model config',
+            author=parse_participant_id('claude#author-A'),
+            reviewers=[parse_participant_id('codex#review-B')],
+            evolution_level=0,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+            provider_models={'claude': 'claude-sonnet-4-5', 'codex': 'gpt-5-codex'},
+            claude_team_agents=True,
+        )
+    )
+
+    assert result.status == 'passed'
+    assert len(runner.call_options) == 3
+    assert runner.call_options[0].get('model') == 'claude-sonnet-4-5'
+    assert runner.call_options[1].get('model') == 'claude-sonnet-4-5'
+    assert runner.call_options[2].get('model') == 'gpt-5-codex'
+    assert runner.call_options[0].get('claude_team_agents') is True

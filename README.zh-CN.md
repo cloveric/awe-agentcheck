@@ -50,6 +50,10 @@
 2. 新增运行时配置 `AWE_GEMINI_COMMAND`（默认：`gemini -p --yolo`）。
 3. 夜间启动器已支持自动解析 Gemini 命令路径。
 4. 新增夜间启动安全保护：`scripts/start_overnight_until_7.ps1` 现在必须显式传入 `-Until`，避免误触后长时间持续运行。
+5. 新增按提供者指定模型能力（API/UI 使用 `provider_models`，CLI 使用 `--provider-model provider=model`）。
+6. 新增 Claude team agents 开关（API/UI 使用 `claude_team_agents`，CLI 使用 `--claude-team-agents 1`）。
+7. 参与者适配层会在未显式配置时自动追加提供者对应模型参数（Claude 用 `--model`，Codex/Gemini 用 `-m`）。
+8. 监控面板任务快照新增显示当前模型绑定与 Claude team agents 状态。
 
 <br/>
 
@@ -341,6 +345,8 @@ http://localhost:8000/
 | `Workspace path` | 仓库根目录路径 | 你的真实项目路径 |
 | `Author` | 负责实现的角色 | `claude#author-A` / `codex#author-A` / `gemini#author-A` |
 | `Reviewers` | 审阅者（逗号分隔） | 至少 1 个 |
+| `Provider Models` | 可选的按提供者模型绑定（`provider=model`，逗号分隔） | 留空（沿用命令默认模型） |
+| `Claude Team Agents` | 是否启用 Claude `--agents` 模式 | `0`（关闭） |
 | `Evolution Level` | `0`仅修复，`1`引导进化，`2`主动进化 | 先用 `0` |
 | `Evolve Until` | 可选截止时间（`YYYY-MM-DD HH:MM`） | 非夜跑可留空 |
 | `Sandbox Mode` | `1`沙盒 / `0`主仓 | 安全起见用 `1` |
@@ -459,6 +465,8 @@ py -m awe_agentcheck.cli run `
 | `--lint-command` | 否 | `py -m ruff check .` | 代码检查命令 |
 | `--evolution-level` | 否 | `0` | `0` = 仅修复，`1` = 引导进化，`2` = 主动进化 |
 | `--evolve-until` | 否 | — | 进化截止时间（如 `2026-02-13 06:00`） |
+| `--provider-model` | 否 | — | 按提供者指定模型，格式 `provider=model`（可重复） |
+| `--claude-team-agents` | 否 | `0` | `1` 时为 Claude 参与者启用 `--agents` 模式 |
 | `--auto-start` | 否 | `false` | 创建后立即启动 |
 
 ### `decide` — 提交作者决定
@@ -639,6 +647,11 @@ POST /api/tasks
   "description": "邮箱验证器接受了无效格式",
   "author_participant": "claude#author-A",
   "reviewer_participants": ["codex#review-B"],
+  "provider_models": {
+    "claude": "claude-sonnet-4-5",
+    "codex": "gpt-5-codex"
+  },
+  "claude_team_agents": false,
   "sandbox_mode": true,
   "self_loop_mode": 0,
   "auto_merge": true,
@@ -695,6 +708,8 @@ POST /api/tasks
 | **作者确认门** | 默认 `self_loop_mode=0`，实现前进入 `waiting_manual` | `GA` |
 | **全自动自循环** | `self_loop_mode=1`，适合无人值守运行 | `GA` |
 | **自动融合** | 通过后：合并 + `CHANGELOG.auto.md` + 快照 | `GA` |
+| **提供者模型绑定** | 每任务按 `claude` / `codex` / `gemini` 指定模型 | `GA` |
+| **Claude Team Agents 模式** | 每任务开关 Claude `--agents` 行为 | `GA` |
 | **多角色模型** | `provider#alias` 参与者（跨模型或同模型多会话） | `GA` |
 | **Web 监控控制台** | 项目树、角色区、头像化对话、任务控制、拖放 | `GA` |
 | **多主题 UI** | Neon Grid、Terminal Pixel、Executive Glass | `GA` |

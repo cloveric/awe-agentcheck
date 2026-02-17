@@ -1,5 +1,30 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-17, provider model control + Claude team agents)
+
+1. Added per-provider model control end-to-end:
+   - API/UI payload key: `provider_models` (map: provider -> model).
+   - CLI support: repeatable `--provider-model provider=model`.
+   - Service validates allowed providers (`claude`, `codex`, `gemini`) and non-empty model values.
+2. Added Claude team-agents toggle end-to-end:
+   - API/UI payload key: `claude_team_agents` (bool).
+   - CLI support: `--claude-team-agents 0|1`.
+3. Participant runner now applies provider-specific model flags when model override is present and command template has no model flag:
+   - Claude: `--model`
+   - Codex/Gemini: `-m`
+   - Claude optional `--agents {}` is appended when `claude_team_agents=true`.
+4. Monitor UI updates:
+   - Create-task form now sends `provider_models` and `claude_team_agents`.
+   - Task snapshot now displays `ProviderModels` and `ClaudeAgents`.
+5. Test coverage added:
+   - adapter/model-flag + claude-team-agents behavior
+   - workflow forwarding of model/team options
+   - service/API input acceptance and validation
+   - CLI parser and payload wiring
+6. Verification:
+   - `py -m ruff check .` passed.
+   - `py -m pytest -q` passed.
+
 ## Update (2026-02-17, safety guard)
 
 1. Added accidental-launch protection for overnight runner:

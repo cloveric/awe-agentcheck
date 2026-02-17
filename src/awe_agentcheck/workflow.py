@@ -64,6 +64,8 @@ class RunConfig:
     max_rounds: int
     test_command: str
     lint_command: str
+    provider_models: dict[str, str] | None = None
+    claude_team_agents: bool = False
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,7 @@ class WorkflowEngine:
         tracer = self._get_tracer()
         previous_gate_reason: str | None = None
         deadline = self._parse_deadline(config.evolve_until)
+        provider_models = self._normalize_provider_models(config.provider_models)
 
         for round_no in range(1, config.max_rounds + 1):
             if check_cancel():
@@ -122,6 +125,8 @@ class WorkflowEngine:
                     prompt=self._discussion_prompt(config, round_no, previous_gate_reason),
                     cwd=config.cwd,
                     timeout_seconds=self.participant_timeout_seconds,
+                    model=provider_models.get(config.author.provider),
+                    claude_team_agents=bool(config.claude_team_agents),
                 )
             emit({'type': 'discussion', 'round': round_no, 'provider': config.author.provider, 'output': discussion.output, 'duration_seconds': discussion.duration_seconds})
 
@@ -135,6 +140,8 @@ class WorkflowEngine:
                     prompt=self._implementation_prompt(config, round_no, discussion.output),
                     cwd=config.cwd,
                     timeout_seconds=self.participant_timeout_seconds,
+                    model=provider_models.get(config.author.provider),
+                    claude_team_agents=bool(config.claude_team_agents),
                 )
             emit({'type': 'implementation', 'round': round_no, 'provider': config.author.provider, 'output': implementation.output, 'duration_seconds': implementation.duration_seconds})
 
@@ -150,6 +157,8 @@ class WorkflowEngine:
                         prompt=self._review_prompt(config, round_no, implementation.output),
                         cwd=config.cwd,
                         timeout_seconds=self.participant_timeout_seconds,
+                        model=provider_models.get(reviewer.provider),
+                        claude_team_agents=bool(config.claude_team_agents),
                     )
                 verdict = self._normalize_verdict(review.verdict)
                 verdicts.append(verdict)
@@ -339,3 +348,14 @@ class WorkflowEngine:
             return datetime.fromisoformat(text.replace(' ', 'T'))
         except ValueError:
             return None
+
+    @staticmethod
+    def _normalize_provider_models(value: dict[str, str] | None) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for key, raw in (value or {}).items():
+            provider = str(key or '').strip().lower()
+            model = str(raw or '').strip()
+            if not provider or not model:
+                continue
+            out[provider] = model
+        return out

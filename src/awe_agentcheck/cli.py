@@ -6,6 +6,8 @@ import sys
 
 import httpx
 
+from awe_agentcheck.participants import SUPPORTED_PROVIDERS
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='awe-agentcheck', description='Run multi-CLI orchestration tasks')
@@ -23,6 +25,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument('--sandbox-mode', type=int, default=1, choices=[0, 1], help='1=run in sandbox workspace (default), 0=run in main workspace')
     run.add_argument('--sandbox-workspace-path', default='', help='Optional sandbox path override (default: <workspace>-lab)')
     run.add_argument('--self-loop-mode', type=int, default=0, choices=[0, 1], help='0=manual author confirmation (default), 1=autonomous loop')
+    run.add_argument('--provider-model', action='append', default=[], help='Provider model override in provider=model format (repeatable)')
+    run.add_argument('--claude-team-agents', type=int, default=0, choices=[0, 1], help='Enable Claude --agents mode for Claude participants')
     run.add_argument('--auto-merge', action=argparse.BooleanOptionalAction, default=True, help='Enable auto-fusion/changelog/snapshot after passed (default: on)')
     run.add_argument('--merge-target-path', default='', help='Optional path to receive auto-merged changes')
     run.add_argument('--workspace-path', default='.', help='Target repository/workspace path')
@@ -77,6 +81,25 @@ def _print_json(payload) -> None:
     print(json.dumps(payload, ensure_ascii=True, indent=2))
 
 
+def _parse_provider_models(values: list[str] | None) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw in values or []:
+        text = str(raw or '').strip()
+        if not text:
+            continue
+        if '=' not in text:
+            raise ValueError(f'invalid --provider-model value: {text} (expected provider=model)')
+        provider_raw, model_raw = text.split('=', 1)
+        provider = provider_raw.strip().lower()
+        model = model_raw.strip()
+        if provider not in SUPPORTED_PROVIDERS:
+            raise ValueError(f'invalid --provider-model provider: {provider}')
+        if not model:
+            raise ValueError(f'invalid --provider-model model for provider: {provider}')
+        out[provider] = model
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -84,6 +107,11 @@ def main(argv: list[str] | None = None) -> int:
 
     with httpx.Client(timeout=60) as client:
         if args.command == 'run':
+            try:
+                provider_models = _parse_provider_models(args.provider_model)
+            except ValueError as exc:
+                parser.error(str(exc))
+                return 2
             response = client.post(
                 f'{base}/api/tasks',
                 json={
@@ -93,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
                     'reviewer_participants': args.reviewer,
                     'evolution_level': int(args.evolution_level),
                     'evolve_until': (args.evolve_until.strip() or None),
+                    'provider_models': provider_models,
+                    'claude_team_agents': int(args.claude_team_agents) == 1,
                     'sandbox_mode': int(args.sandbox_mode) == 1,
                     'sandbox_workspace_path': (args.sandbox_workspace_path.strip() or None),
                     'self_loop_mode': int(args.self_loop_mode),

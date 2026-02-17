@@ -19,6 +19,8 @@ class TaskRepository(Protocol):
         reviewer_participants: list[str],
         evolution_level: int,
         evolve_until: str | None,
+        provider_models: dict[str, str],
+        claude_team_agents: bool,
         auto_merge: bool,
         merge_target_path: str | None,
         sandbox_mode: bool,
@@ -101,6 +103,8 @@ class InMemoryTaskRepository:
         reviewer_participants: list[str],
         evolution_level: int,
         evolve_until: str | None,
+        provider_models: dict[str, str],
+        claude_team_agents: bool,
         auto_merge: bool,
         merge_target_path: str | None,
         sandbox_mode: bool,
@@ -123,6 +127,8 @@ class InMemoryTaskRepository:
             'reviewer_participants': reviewer_participants,
             'evolution_level': int(max(0, min(2, int(evolution_level)))),
             'evolve_until': (str(evolve_until).strip() if evolve_until else None),
+            'provider_models': {str(k).strip().lower(): str(v).strip() for k, v in (provider_models or {}).items() if str(k).strip() and str(v).strip()},
+            'claude_team_agents': bool(claude_team_agents),
             'auto_merge': bool(auto_merge),
             'merge_target_path': (str(merge_target_path).strip() if merge_target_path else None),
             'sandbox_mode': bool(sandbox_mode),
@@ -244,6 +250,8 @@ def encode_reviewer_meta(
         reviewer_participants=reviewer_participants,
         evolution_level=evolution_level,
         evolve_until=evolve_until,
+        provider_models={},
+        claude_team_agents=False,
         auto_merge=True,
         merge_target_path=None,
         sandbox_mode=False,
@@ -260,6 +268,8 @@ def encode_task_meta(
     reviewer_participants: list[str],
     evolution_level: int,
     evolve_until: str | None,
+    provider_models: dict[str, str],
+    claude_team_agents: bool,
     auto_merge: bool,
     merge_target_path: str | None,
     sandbox_mode: bool,
@@ -273,6 +283,8 @@ def encode_task_meta(
         'participants': [str(v) for v in reviewer_participants],
         'evolution_level': int(max(0, min(2, int(evolution_level)))),
         'evolve_until': (str(evolve_until).strip() if evolve_until else None),
+        'provider_models': {str(k).strip().lower(): str(v).strip() for k, v in (provider_models or {}).items() if str(k).strip() and str(v).strip()},
+        'claude_team_agents': bool(claude_team_agents),
         'auto_merge': bool(auto_merge),
         'merge_target_path': (str(merge_target_path).strip() if merge_target_path else None),
         'sandbox_mode': bool(sandbox_mode),
@@ -299,6 +311,8 @@ def decode_task_meta(raw: str) -> dict:
         'participants': [],
         'evolution_level': 0,
         'evolve_until': None,
+        'provider_models': {},
+        'claude_team_agents': False,
         'auto_merge': True,
         'merge_target_path': None,
         'sandbox_mode': False,
@@ -330,6 +344,16 @@ def decode_task_meta(raw: str) -> dict:
         evolve_until = parsed.get('evolve_until')
         evolve_until_text = (str(evolve_until).strip() if evolve_until else None)
         auto_merge = bool(parsed.get('auto_merge', True))
+        provider_models = parsed.get('provider_models', {})
+        if not isinstance(provider_models, dict):
+            provider_models = {}
+        provider_models_out: dict[str, str] = {}
+        for key, raw in provider_models.items():
+            provider = str(key or '').strip().lower()
+            model = str(raw or '').strip()
+            if provider and model:
+                provider_models_out[provider] = model
+        claude_team_agents = bool(parsed.get('claude_team_agents', False))
         merge_target_path = parsed.get('merge_target_path')
         merge_target_text = (str(merge_target_path).strip() if merge_target_path else None)
         sandbox_mode = bool(parsed.get('sandbox_mode', False))
@@ -349,6 +373,8 @@ def decode_task_meta(raw: str) -> dict:
         out['participants'] = [str(v) for v in participants]
         out['evolution_level'] = level_int
         out['evolve_until'] = evolve_until_text
+        out['provider_models'] = provider_models_out
+        out['claude_team_agents'] = claude_team_agents
         out['auto_merge'] = auto_merge
         out['merge_target_path'] = merge_target_text
         out['sandbox_mode'] = sandbox_mode

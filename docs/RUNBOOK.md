@@ -44,6 +44,9 @@ py -m awe_agentcheck.cli run `
   --author "claude#author-A" `
   --reviewer "codex#review-B" `
   --reviewer "gemini#review-C" `
+  --provider-model "claude=claude-sonnet-4-5" `
+  --provider-model "codex=gpt-5-codex" `
+  --claude-team-agents 1 `
   --evolution-level 1 `
   --sandbox-mode 1 `
   --self-loop-mode 0 `
@@ -64,6 +67,8 @@ Default policy:
 5. `self_loop_mode=0` enters `waiting_manual` after discussion/proposal review.
 6. Author must approve before implementation starts.
 7. `auto_merge=1` is enabled by default; disable per task with CLI `--no-auto-merge`, API `auto_merge=false`, or Web `Auto Merge=0`.
+8. Optional model pinning via `--provider-model provider=model` applies per provider for this task.
+9. Optional Claude `--agents` behavior via `--claude-team-agents 1` applies to Claude participants only.
 
 ## 4) Inspect status and timeline
 
@@ -97,7 +102,7 @@ Capabilities:
 4. Right: conversation stream in chat-bubble style with role avatars and role filtering.
 5. Start/cancel/force-fail actions for selected task.
 6. Author controls for `waiting_manual`: `Approve + Queue`, `Approve + Start`, `Reject`.
-7. Create task includes `sandbox_mode`, `sandbox_workspace_path`, `self_loop_mode`, `evolution_level`, optional `evolve_until`.
+7. Create task includes `sandbox_mode`, `sandbox_workspace_path`, `self_loop_mode`, `evolution_level`, optional `evolve_until`, `provider_models`, and `claude_team_agents`.
 8. Auto polling and extended stats with reason/provider breakdown.
 
 ## 7) Artifacts
