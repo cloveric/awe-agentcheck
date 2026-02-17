@@ -367,7 +367,9 @@ If this is your first time, operate in this exact order:
 | `Claude/Codex/Gemini Model Params` | Optional extra args per provider | For Codex use `-c model_reasoning_effort=xhigh` |
 | `Claude Team Agents` | Enable/disable Claude `--agents` mode | `0` (disabled) |
 | `Evolution Level` | `0` fix-only, `1` guided evolve, `2` proactive evolve | Start with `0` |
+| `Max Rounds` | Round cap fallback when no deadline is provided | `3` |
 | `Evolve Until` | Optional deadline (`YYYY-MM-DD HH:MM`) | Empty unless running overnight |
+| `Max Rounds` + `Evolve Until` | Priority rule | If `Evolve Until` is set, deadline wins; if empty, `Max Rounds` is used |
 | `Conversation Language` | Prompt language for agent outputs (`en` / `zh`) | `English` for logs, `中文` for Chinese collaboration |
 | `Sandbox Mode` | `1` sandbox / `0` main workspace | Keep `1` for safety |
 | `Sandbox Workspace Path` | Optional custom sandbox path | Leave blank (auto per-task path) |
@@ -375,6 +377,8 @@ If this is your first time, operate in this exact order:
 | `Auto Merge` | `1` auto-fusion on pass / `0` disable | Keep `1` initially |
 | `Merge Target Path` | Where pass results are merged | Project root |
 | `Description` | Detailed requirement text | Include acceptance criteria |
+
+UI policy note: when `Sandbox Mode = 0`, the dashboard forces `Auto Merge = 0` and locks that selector.
 
 ### Create Buttons
 
@@ -764,7 +768,7 @@ This is the recommended mode for most use cases:
 5. **Full workflow** runs: Discussion → Implementation → Review → Verify (test + lint) → Gate Decision
 6. **Gate result**:
    - **Pass** → `passed` → Auto Fusion (merge + changelog + snapshot + sandbox cleanup)
-   - **Fail** → retry next round (up to `max_rounds`), then `failed_gate`
+   - **Fail** → retry next round; limit by `Evolve Until` when set, otherwise by `max_rounds`, then `failed_gate`
 
 ### Autonomous Mode (`self_loop_mode=1`)
 
@@ -775,7 +779,7 @@ For unattended operation:
 3. **Round 1..N**: Discussion → Implementation → Review → Verify → Gate
 4. **Gate result**:
    - **Pass** → `passed` → Auto Fusion
-   - **Fail** → retry until `max_rounds` exhausted → `failed_gate`
+   - **Fail** → retry until deadline (`Evolve Until`) or `max_rounds` (when no deadline), then `failed_gate`
 
 ### Auto-Fusion Details
 

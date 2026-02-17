@@ -1,5 +1,18 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-18, deadline priority + UI policy coupling)
+
+1. Added round/deadline precedence rule:
+   - if `evolve_until` is set, workflow uses deadline as the primary stop condition.
+   - if `evolve_until` is empty, workflow uses `max_rounds`.
+2. Added dashboard `Max Rounds` input (1..20) to task create form.
+3. Added dashboard policy coupling:
+   - when `Sandbox Mode = 0`, UI forces `Auto Merge = 0` and locks the selector.
+   - merge target input is disabled when `Auto Merge = 0`.
+4. Added UI hinting:
+   - when `Evolve Until` has a value, `Max Rounds` input is disabled (deadline precedence).
+5. Documentation synced in EN/CN README and RUNBOOK with precedence/policy notes.
+
 ## Update (2026-02-18, doc sync + runtime stability)
 
 1. Synced defaults to current runtime behavior:

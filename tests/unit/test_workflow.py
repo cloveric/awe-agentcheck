@@ -332,6 +332,39 @@ def test_workflow_stops_when_deadline_reached(tmp_path: Path):
     assert result.gate_reason == 'deadline_reached'
 
 
+def test_workflow_deadline_takes_priority_over_max_rounds(tmp_path: Path):
+    runner = FakeRunner([
+        _ok_result(),              # round1 discussion
+        _ok_result(),              # round1 implementation
+        _ok_result('blocker'),     # round1 review -> gate fail
+        _ok_result(),              # round2 discussion
+        _ok_result(),              # round2 implementation
+        _ok_result('no_blocker'),  # round2 review -> gate pass
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+    future = (datetime.now() + timedelta(minutes=5)).replace(microsecond=0).isoformat()
+
+    result = engine.run(
+        RunConfig(
+            task_id='t8b',
+            title='Deadline over rounds',
+            description='deadline priority',
+            author=parse_participant_id('claude#author-A'),
+            reviewers=[parse_participant_id('codex#review-B')],
+            evolution_level=0,
+            evolve_until=future,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        )
+    )
+
+    assert result.status == 'passed'
+    assert result.rounds == 2
+
+
 def test_workflow_cancels_mid_phase_after_discussion(tmp_path: Path):
     """Cancel fires after discussion completes, before implementation starts."""
     runner = FakeRunner([_ok_result(), _ok_result(), _ok_result()])

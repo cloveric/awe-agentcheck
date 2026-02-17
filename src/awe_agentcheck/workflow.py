@@ -109,8 +109,10 @@ class WorkflowEngine:
         deadline = self._parse_deadline(config.evolve_until)
         provider_models = self._normalize_provider_models(config.provider_models)
         provider_model_params = self._normalize_provider_model_params(config.provider_model_params)
-
-        for round_no in range(1, config.max_rounds + 1):
+        deadline_mode = deadline is not None
+        round_no = 0
+        while True:
+            round_no += 1
             if check_cancel():
                 emit({'type': 'canceled', 'round': round_no})
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
@@ -222,10 +224,10 @@ class WorkflowEngine:
             _log.warning('gate_failed round=%d reason=%s', round_no, gate.reason)
             emit({'type': 'gate_failed', 'round': round_no, 'reason': gate.reason})
             previous_gate_reason = gate.reason
-            if round_no >= config.max_rounds:
+            # Deadline takes priority over round cap. If a deadline is set,
+            # keep iterating until deadline/cancel/pass.
+            if not deadline_mode and round_no >= config.max_rounds:
                 return RunResult(status='failed_gate', rounds=round_no, gate_reason=gate.reason)
-
-        return RunResult(status='failed_gate', rounds=config.max_rounds, gate_reason='max_rounds_exhausted')
 
     @staticmethod
     def _get_tracer():

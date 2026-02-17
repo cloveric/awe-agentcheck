@@ -367,7 +367,9 @@ http://localhost:8000/
 | `Claude/Codex/Gemini Model Params` | 每个提供者的附加参数（可选） | Codex 建议 `-c model_reasoning_effort=xhigh` |
 | `Claude Team Agents` | 是否启用 Claude `--agents` 模式 | `0`（关闭） |
 | `Evolution Level` | `0`仅修复，`1`引导进化，`2`主动进化 | 先用 `0` |
+| `Max Rounds` | 未设置截止时间时的轮次上限兜底 | `3` |
 | `Evolve Until` | 可选截止时间（`YYYY-MM-DD HH:MM`） | 非夜跑可留空 |
+| `Max Rounds` + `Evolve Until` | 优先级规则 | 若设置了 `Evolve Until`，以截止时间为准；为空时才使用 `Max Rounds` |
 | `Conversation Language` | 对话输出语言（`en` / `zh`） | 英文日志优先选 `English`，中文协作选 `中文` |
 | `Sandbox Mode` | `1`沙盒 / `0`主仓 | 安全起见用 `1` |
 | `Sandbox Workspace Path` | 自定义沙盒路径 | 建议留空（自动每任务独立） |
@@ -375,6 +377,8 @@ http://localhost:8000/
 | `Auto Merge` | `1`通过后自动融合 / `0`关闭 | 建议先用 `1` |
 | `Merge Target Path` | 通过后融合到哪里 | 项目根目录 |
 | `Description` | 任务详细要求 | 写清验收标准 |
+
+UI 策略说明：当 `Sandbox Mode = 0` 时，面板会强制 `Auto Merge = 0` 并锁定该选项。
 
 ### 创建按钮
 
@@ -764,7 +768,7 @@ POST /api/tasks
 5. **完整工作流** 运行：讨论 → 实现 → 审查 → 验证（测试 + lint）→ 门禁决定
 6. **门禁结果**：
    - **通过** → `passed` → 自动融合（合并 + 变更日志 + 快照 + 沙盒清理）
-   - **失败** → 重试下一轮（最多 `max_rounds` 轮），然后 `failed_gate`
+   - **失败** → 重试下一轮；若设置 `Evolve Until` 则由截止时间控制，否则由 `max_rounds` 控制，最终 `failed_gate`
 
 ### 自动模式（`self_loop_mode=1`）
 
@@ -775,7 +779,7 @@ POST /api/tasks
 3. **第 1..N 轮**：讨论 → 实现 → 审查 → 验证 → 门禁
 4. **门禁结果**：
    - **通过** → `passed` → 自动融合
-   - **失败** → 重试至 `max_rounds` 耗尽 → `failed_gate`
+   - **失败** → 持续重试，直到达到 `Evolve Until`（若设置）或 `max_rounds`（未设置截止时间）→ `failed_gate`
 
 ### 自动融合细节
 

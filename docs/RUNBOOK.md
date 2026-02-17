@@ -96,6 +96,7 @@ Default policy:
 9. Optional per-provider args via `--provider-model-param provider=args` are forwarded as-is.
 10. Optional language control via `--conversation-language en|zh` influences prompt output language.
 11. Optional Claude `--agents` behavior via `--claude-team-agents 1` applies to Claude participants only.
+12. `max_rounds` is used only when `evolve_until` is empty; if `evolve_until` is set, deadline takes priority.
 
 ## 4) Inspect status and timeline
 

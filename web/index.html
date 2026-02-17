@@ -1256,6 +1256,10 @@
                 <option value="2">2 | proactive evolve</option>
               </select>
             </div>
+            <div style="flex:0 0 180px;">
+              <label for="maxRounds">Max Rounds (fallback)</label>
+              <input id="maxRounds" type="number" min="1" max="20" value="3" />
+            </div>
             <div style="flex:1; min-width:220px;">
               <label for="evolveUntil">Evolve Until (optional)</label>
               <input id="evolveUntil" value="" placeholder="2026-02-13 06:00" />
@@ -1365,6 +1369,11 @@
       claudeModelParams: document.getElementById('claudeModelParams'),
       codexModelParams: document.getElementById('codexModelParams'),
       geminiModelParams: document.getElementById('geminiModelParams'),
+      sandboxMode: document.getElementById('sandboxMode'),
+      autoMerge: document.getElementById('autoMerge'),
+      mergeTargetPath: document.getElementById('mergeTargetPath'),
+      evolveUntil: document.getElementById('evolveUntil'),
+      maxRounds: document.getElementById('maxRounds'),
     };
 
     const THEME_OPTIONS = [
@@ -2565,6 +2574,7 @@
         merge_target_path: (mergeTargetRaw || null),
         workspace_path: document.getElementById('workspacePath').value,
         auto_start: !!autoStart,
+        max_rounds: Math.max(1, Math.min(20, Number(document.getElementById('maxRounds').value || 3))),
       };
 
       try {
@@ -2580,6 +2590,40 @@
         await loadData({ forceEvents: true });
       } catch (err) {
         el.createStatus.textContent = `Create failed: ${String(err)}`;
+      }
+    }
+
+    function syncCreateTaskPolicyControls() {
+      const sandboxMode = Number((el.sandboxMode && el.sandboxMode.value) || 1);
+      if (el.autoMerge) {
+        if (sandboxMode === 0) {
+          el.autoMerge.value = '0';
+          el.autoMerge.disabled = true;
+          el.autoMerge.title = 'Auto Merge is available only when Sandbox Mode = 1.';
+        } else {
+          el.autoMerge.disabled = false;
+          el.autoMerge.title = '';
+        }
+      }
+
+      const autoMergeEnabled = Number((el.autoMerge && el.autoMerge.value) || 0) === 1;
+      if (el.mergeTargetPath) {
+        const disableMergeTarget = !autoMergeEnabled;
+        el.mergeTargetPath.disabled = disableMergeTarget;
+        if (disableMergeTarget) {
+          el.mergeTargetPath.value = '';
+          el.mergeTargetPath.placeholder = 'disabled when Auto Merge = 0';
+        } else {
+          el.mergeTargetPath.placeholder = 'leave blank to merge in-place';
+        }
+      }
+
+      const hasEvolveUntil = String((el.evolveUntil && el.evolveUntil.value) || '').trim().length > 0;
+      if (el.maxRounds) {
+        el.maxRounds.disabled = hasEvolveUntil;
+        el.maxRounds.title = hasEvolveUntil
+          ? 'Ignored when Evolve Until is set (deadline takes priority).'
+          : '';
       }
     }
 
@@ -2641,10 +2685,19 @@
       el.collapseTreeBtn.addEventListener('click', () => setTreeExpansion(false));
     }
 
-    const evolveUntilInput = document.getElementById('evolveUntil');
-    if (evolveUntilInput && !String(evolveUntilInput.value || '').trim()) {
-      evolveUntilInput.value = computeDefaultEvolveUntil();
+    if (el.evolveUntil && !String(el.evolveUntil.value || '').trim()) {
+      el.evolveUntil.value = computeDefaultEvolveUntil();
     }
+    if (el.sandboxMode) {
+      el.sandboxMode.addEventListener('change', syncCreateTaskPolicyControls);
+    }
+    if (el.autoMerge) {
+      el.autoMerge.addEventListener('change', syncCreateTaskPolicyControls);
+    }
+    if (el.evolveUntil) {
+      el.evolveUntil.addEventListener('input', syncCreateTaskPolicyControls);
+    }
+    syncCreateTaskPolicyControls();
 
     initThemeSelector();
 
