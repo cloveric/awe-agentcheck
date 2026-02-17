@@ -1333,7 +1333,7 @@
       eventsByTask: new Map(),
       treeByProject: new Map(),
       treeOpenByProject: new Map(),
-      polling: false,
+      polling: true,
       timer: null,
       apiHealthy: false,
       apiFailureCount: 0,
@@ -1352,6 +1352,7 @@
       taskSnapshot: document.getElementById('taskSnapshot'),
       createStatus: document.getElementById('createStatus'),
       pollBtn: document.getElementById('pollBtn'),
+      startBtn: document.getElementById('startBtn'),
       forceReason: document.getElementById('forceReason'),
       connBadge: document.getElementById('connBadge'),
       themeSelect: document.getElementById('themeSelect'),
@@ -1397,6 +1398,16 @@
       } catch {
         return 'neon';
       }
+    }
+
+    function readPollPreference() {
+      try {
+        const raw = String(localStorage.getItem('awe-agentcheck-poll') || '').trim();
+        if (raw === '0') return false;
+        if (raw === '1') return true;
+      } catch {
+      }
+      return true;
     }
 
     function applyTheme(themeId, { persist = true } = {}) {
@@ -2213,6 +2224,7 @@
       const task = selectedTask();
       if (!task) {
         el.taskSnapshot.innerHTML = '<div class="empty">No task selected.</div>';
+        if (el.startBtn) el.startBtn.disabled = true;
         if (el.approveQueueBtn) el.approveQueueBtn.disabled = true;
         if (el.approveStartBtn) el.approveStartBtn.disabled = true;
         if (el.rejectBtn) el.rejectBtn.disabled = true;
@@ -2252,6 +2264,11 @@
       }
 
       const waitingManual = String(task.status) === 'waiting_manual';
+      const canStart = String(task.status) === 'queued';
+      if (el.startBtn) {
+        el.startBtn.disabled = !canStart;
+        el.startBtn.title = canStart ? '' : `Start is available only when status=queued (current=${task.status}).`;
+      }
       if (el.approveQueueBtn) el.approveQueueBtn.disabled = !waitingManual;
       if (el.approveStartBtn) el.approveStartBtn.disabled = !waitingManual;
       if (el.rejectBtn) el.rejectBtn.disabled = !waitingManual;
@@ -2274,6 +2291,20 @@
     function eventText(event) {
       const payload = event.payload || {};
       if (payload.output) return String(payload.output);
+      if (event.type === 'discussion_started' || event.type === 'implementation_started') {
+        const provider = String(payload.provider || 'unknown');
+        const timeout = Number(payload.timeout_seconds || 0);
+        return `${event.type}: provider=${provider} timeout=${timeout}s`;
+      }
+      if (event.type === 'review_started') {
+        const participant = String(payload.participant || 'reviewer');
+        const timeout = Number(payload.timeout_seconds || 0);
+        return `review_started: participant=${participant} timeout=${timeout}s`;
+      }
+      if (event.type === 'verification_started') {
+        const timeout = Number(payload.timeout_seconds || 0);
+        return `verification_started: timeout=${timeout}s`;
+      }
       if (event.type === 'author_confirmation_required' && payload.summary) return String(payload.summary);
       if (event.type === 'author_decision' && payload.decision) {
         return `decision=${payload.decision}${payload.note ? ` | note=${payload.note}` : ''}`;
@@ -2488,12 +2519,22 @@
       const task = selectedTask();
       if (!task) return;
       try {
-        await api(`/api/tasks/${task.task_id}/start`, {
+        const beforeStatus = String(task.status || '');
+        const updated = await api(`/api/tasks/${task.task_id}/start`, {
           method: 'POST',
           body: JSON.stringify({ background: true }),
         });
         state.eventsByTask.delete(task.task_id);
-        el.actionStatus.textContent = `Started ${task.task_id}`;
+        const afterStatus = String((updated && updated.status) || beforeStatus || 'unknown');
+        if (beforeStatus === 'running' && afterStatus === 'running') {
+          el.actionStatus.textContent = `${task.task_id} already running; wait for next event or keep Auto Poll ON.`;
+        } else if (beforeStatus === 'waiting_manual') {
+          el.actionStatus.textContent = `${task.task_id} is waiting manual decision; use Approve/Reject buttons.`;
+        } else if (afterStatus === 'queued' && String((updated && updated.last_gate_reason) || '') === 'concurrency_limit') {
+          el.actionStatus.textContent = `${task.task_id} deferred by concurrency limit; will retry when slot is available.`;
+        } else {
+          el.actionStatus.textContent = `Start requested for ${task.task_id} (status=${afterStatus})`;
+        }
         await loadData({ forceEvents: true });
       } catch (err) {
         el.actionStatus.textContent = `Start failed: ${String(err)}`;
@@ -2630,6 +2671,10 @@
     function setPolling(enabled) {
       state.polling = enabled;
       el.pollBtn.textContent = `Auto Poll: ${enabled ? 'ON' : 'OFF'}`;
+      try {
+        localStorage.setItem('awe-agentcheck-poll', enabled ? '1' : '0');
+      } catch {
+      }
       if (state.timer) {
         clearInterval(state.timer);
         state.timer = null;
@@ -2700,6 +2745,7 @@
     syncCreateTaskPolicyControls();
 
     initThemeSelector();
+    setPolling(readPollPreference());
 
     el.taskSelect.addEventListener('change', async () => {
       state.selectedTaskId = el.taskSelect.value || null;

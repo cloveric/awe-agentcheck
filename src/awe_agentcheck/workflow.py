@@ -125,6 +125,14 @@ class WorkflowEngine:
             emit({'type': 'round_started', 'round': round_no})
 
             with self._span(tracer, 'workflow.discussion', {'task.id': config.task_id, 'round': round_no}):
+                emit(
+                    {
+                        'type': 'discussion_started',
+                        'round': round_no,
+                        'provider': config.author.provider,
+                        'timeout_seconds': self.participant_timeout_seconds,
+                    }
+                )
                 discussion = self.runner.run(
                     participant=config.author,
                     prompt=self._discussion_prompt(config, round_no, previous_gate_reason),
@@ -141,6 +149,14 @@ class WorkflowEngine:
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
 
             with self._span(tracer, 'workflow.implementation', {'task.id': config.task_id, 'round': round_no}):
+                emit(
+                    {
+                        'type': 'implementation_started',
+                        'round': round_no,
+                        'provider': config.author.provider,
+                        'timeout_seconds': self.participant_timeout_seconds,
+                    }
+                )
                 implementation = self.runner.run(
                     participant=config.author,
                     prompt=self._implementation_prompt(config, round_no, discussion.output),
@@ -159,6 +175,14 @@ class WorkflowEngine:
             verdicts: list[ReviewVerdict] = []
             for reviewer in config.reviewers:
                 with self._span(tracer, 'workflow.review', {'task.id': config.task_id, 'round': round_no, 'participant': reviewer.participant_id}):
+                    emit(
+                        {
+                            'type': 'review_started',
+                            'round': round_no,
+                            'participant': reviewer.participant_id,
+                            'timeout_seconds': self.participant_timeout_seconds,
+                        }
+                    )
                     review = self.runner.run(
                         participant=reviewer,
                         prompt=self._review_prompt(config, round_no, implementation.output),
@@ -186,6 +210,15 @@ class WorkflowEngine:
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
 
             with self._span(tracer, 'workflow.verify', {'task.id': config.task_id, 'round': round_no}):
+                emit(
+                    {
+                        'type': 'verification_started',
+                        'round': round_no,
+                        'test_command': config.test_command,
+                        'lint_command': config.lint_command,
+                        'timeout_seconds': self.command_timeout_seconds,
+                    }
+                )
                 test_result = self.command_executor.run(
                     config.test_command,
                     cwd=config.cwd,

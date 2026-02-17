@@ -82,6 +82,10 @@ def test_workflow_passes_on_first_round(tmp_path: Path):
     assert result.status == 'passed'
     assert result.rounds == 1
     assert any(e['type'] == 'gate_passed' for e in sink.events)
+    assert any(e['type'] == 'discussion_started' for e in sink.events)
+    assert any(e['type'] == 'implementation_started' for e in sink.events)
+    assert any(e['type'] == 'review_started' for e in sink.events)
+    assert any(e['type'] == 'verification_started' for e in sink.events)
 
 
 def test_workflow_retries_then_passes(tmp_path: Path):
