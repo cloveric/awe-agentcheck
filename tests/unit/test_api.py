@@ -55,6 +55,10 @@ def test_api_create_start_and_get_task_roundtrip(tmp_path: Path):
     assert body['merge_target_path'] == body['project_path']
     assert body['evolution_level'] == 0
     assert body['evolve_until'] is None
+    assert body['plain_mode'] is True
+    assert body['stream_mode'] is True
+    assert body['debate_mode'] is True
+    assert body['repair_mode'] == 'balanced'
     assert body['auto_merge'] is True
     assert body['sandbox_workspace_path']
 
@@ -106,6 +110,8 @@ def test_api_events_and_cancel(tmp_path: Path):
     assert events.status_code == 200
     rows = events.json()
     assert len(rows) >= 3
+    assert isinstance(rows[0].get('created_at'), str)
+    assert ('+' in rows[0]['created_at']) or rows[0]['created_at'].endswith('Z')
 
     canceled = client.post(f"/api/tasks/{task_id}/cancel")
     assert canceled.status_code == 200
@@ -257,6 +263,84 @@ def test_api_create_task_accepts_provider_models_and_claude_team_agents(tmp_path
     assert body['provider_model_params']['gemini'] == '--approval-mode yolo'
     assert body['conversation_language'] == 'zh'
     assert body['claude_team_agents'] is True
+
+
+def test_api_create_task_accepts_repair_mode(tmp_path: Path):
+    client = build_client(tmp_path)
+    resp = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Task repair mode',
+            'description': 'repair mode validation',
+            'author_participant': 'claude#author-A',
+            'reviewer_participants': ['codex#review-B'],
+            'repair_mode': 'structural',
+            'sandbox_mode': False,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()['repair_mode'] == 'structural'
+
+
+def test_api_create_task_accepts_plain_mode_disabled(tmp_path: Path):
+    client = build_client(tmp_path)
+    resp = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Task plain mode',
+            'description': 'plain mode validation',
+            'author_participant': 'claude#author-A',
+            'reviewer_participants': ['codex#review-B'],
+            'plain_mode': False,
+            'sandbox_mode': False,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()['plain_mode'] is False
+
+
+def test_api_create_task_accepts_stream_and_debate_mode_disabled(tmp_path: Path):
+    client = build_client(tmp_path)
+    resp = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Task stream debate mode',
+            'description': 'stream/debate validation',
+            'author_participant': 'claude#author-A',
+            'reviewer_participants': ['codex#review-B'],
+            'stream_mode': False,
+            'debate_mode': False,
+            'sandbox_mode': False,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body['stream_mode'] is False
+    assert body['debate_mode'] is False
+
+
+def test_api_create_task_rejects_invalid_repair_mode(tmp_path: Path):
+    client = build_client(tmp_path)
+    resp = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Task bad repair mode',
+            'description': 'repair mode validation',
+            'author_participant': 'claude#author-A',
+            'reviewer_participants': ['codex#review-B'],
+            'repair_mode': 'aggressive',
+            'sandbox_mode': False,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    assert resp.status_code == 400
 
 
 def test_api_create_task_rejects_unknown_provider_model_key(tmp_path: Path):

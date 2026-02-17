@@ -25,6 +25,10 @@ class CreateTaskRequest(BaseModel):
     provider_models: dict[str, str] = Field(default_factory=dict)
     provider_model_params: dict[str, str] = Field(default_factory=dict)
     claude_team_agents: bool = Field(default=False)
+    repair_mode: str = Field(default='balanced', min_length=3, max_length=32)
+    plain_mode: bool = Field(default=True)
+    stream_mode: bool = Field(default=True)
+    debate_mode: bool = Field(default=True)
     sandbox_mode: bool = Field(default=True)
     sandbox_workspace_path: str | None = Field(default=None, max_length=400)
     sandbox_cleanup_on_pass: bool = Field(default=True)
@@ -70,6 +74,10 @@ class TaskResponse(BaseModel):
     provider_models: dict[str, str]
     provider_model_params: dict[str, str]
     claude_team_agents: bool
+    repair_mode: str
+    plain_mode: bool
+    stream_mode: bool
+    debate_mode: bool
     sandbox_mode: bool
     sandbox_workspace_path: str | None
     sandbox_generated: bool
@@ -187,6 +195,10 @@ def _to_task_response(task) -> TaskResponse:
         provider_models=task.provider_models,
         provider_model_params=task.provider_model_params,
         claude_team_agents=task.claude_team_agents,
+        repair_mode=task.repair_mode,
+        plain_mode=task.plain_mode,
+        stream_mode=task.stream_mode,
+        debate_mode=task.debate_mode,
         sandbox_mode=task.sandbox_mode,
         sandbox_workspace_path=task.sandbox_workspace_path,
         sandbox_generated=task.sandbox_generated,
@@ -259,6 +271,10 @@ def create_app(
                     provider_models=payload.provider_models,
                     provider_model_params=payload.provider_model_params,
                     claude_team_agents=payload.claude_team_agents,
+                    repair_mode=payload.repair_mode,
+                    plain_mode=payload.plain_mode,
+                    stream_mode=payload.stream_mode,
+                    debate_mode=payload.debate_mode,
                     sandbox_mode=payload.sandbox_mode,
                     sandbox_workspace_path=payload.sandbox_workspace_path,
                     sandbox_cleanup_on_pass=payload.sandbox_cleanup_on_pass,

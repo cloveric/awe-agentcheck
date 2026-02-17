@@ -68,6 +68,10 @@ class RunConfig:
     provider_models: dict[str, str] | None = None
     provider_model_params: dict[str, str] | None = None
     claude_team_agents: bool = False
+    repair_mode: str = 'balanced'
+    plain_mode: bool = True
+    stream_mode: bool = False
+    debate_mode: bool = False
 
 
 @dataclass(frozen=True)
@@ -109,11 +113,13 @@ class WorkflowEngine:
         deadline = self._parse_deadline(config.evolve_until)
         provider_models = self._normalize_provider_models(config.provider_models)
         provider_model_params = self._normalize_provider_model_params(config.provider_model_params)
+        stream_mode = bool(config.stream_mode)
+        debate_mode = bool(config.debate_mode) and bool(config.reviewers)
         deadline_mode = deadline is not None
         round_no = 0
         while True:
             round_no += 1
-            if check_cancel():
+            if debate_mode and check_cancel():
                 emit({'type': 'canceled', 'round': round_no})
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
             if deadline is not None and datetime.now() >= deadline:
@@ -124,25 +130,133 @@ class WorkflowEngine:
             _log.info('round_started round=%d', round_no)
             emit({'type': 'round_started', 'round': round_no})
 
+            implementation_context = self._debate_seed_context(config, round_no, previous_gate_reason)
+            if debate_mode:
+                emit(
+                    {
+                        'type': 'debate_started',
+                        'round': round_no,
+                        'mode': 'reviewer_first',
+                        'reviewer_count': len(config.reviewers),
+                    }
+                )
+                for reviewer in config.reviewers:
+                    if check_cancel():
+                        emit({'type': 'canceled', 'round': round_no})
+                        return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
+
+                    emit(
+                        {
+                            'type': 'debate_review_started',
+                            'round': round_no,
+                            'participant': reviewer.participant_id,
+                            'provider': reviewer.provider,
+                            'timeout_seconds': self.participant_timeout_seconds,
+                        }
+                    )
+                    try:
+                        debate_review = self.runner.run(
+                            participant=reviewer,
+                            prompt=self._debate_review_prompt(config, round_no, implementation_context, reviewer.participant_id),
+                            cwd=config.cwd,
+                            timeout_seconds=self.participant_timeout_seconds,
+                            model=provider_models.get(reviewer.provider),
+                            model_params=provider_model_params.get(reviewer.provider),
+                            claude_team_agents=bool(config.claude_team_agents),
+                            on_stream=(
+                                self._stream_emitter(
+                                    emit=emit,
+                                    round_no=round_no,
+                                    stage='debate_review',
+                                    participant=reviewer.participant_id,
+                                    provider=reviewer.provider,
+                                )
+                                if stream_mode
+                                else None
+                            ),
+                        )
+                        review_text = str(debate_review.output or '').strip()
+                    except Exception as exc:
+                        review_text = f'[debate_review_error] {str(exc or "review_failed").strip() or "review_failed"}'
+                        emit(
+                            {
+                                'type': 'debate_review_error',
+                                'round': round_no,
+                                'participant': reviewer.participant_id,
+                                'provider': reviewer.provider,
+                                'output': review_text,
+                            }
+                        )
+
+                    emit(
+                        {
+                            'type': 'debate_review',
+                            'round': round_no,
+                            'participant': reviewer.participant_id,
+                            'provider': reviewer.provider,
+                            'output': review_text,
+                        }
+                    )
+                    implementation_context = self._append_debate_line(
+                        implementation_context,
+                        speaker=reviewer.participant_id,
+                        text=review_text,
+                    )
+
+                emit({'type': 'debate_completed', 'round': round_no})
+
+            if check_cancel():
+                emit({'type': 'canceled', 'round': round_no})
+                return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
+
             with self._span(tracer, 'workflow.discussion', {'task.id': config.task_id, 'round': round_no}):
                 emit(
                     {
                         'type': 'discussion_started',
                         'round': round_no,
+                        'participant': config.author.participant_id,
                         'provider': config.author.provider,
                         'timeout_seconds': self.participant_timeout_seconds,
                     }
                 )
+                discussion_prompt = (
+                    self._discussion_after_reviewer_prompt(config, round_no, implementation_context)
+                    if debate_mode
+                    else self._discussion_prompt(config, round_no, previous_gate_reason)
+                )
                 discussion = self.runner.run(
                     participant=config.author,
-                    prompt=self._discussion_prompt(config, round_no, previous_gate_reason),
+                    prompt=discussion_prompt,
                     cwd=config.cwd,
                     timeout_seconds=self.participant_timeout_seconds,
                     model=provider_models.get(config.author.provider),
                     model_params=provider_model_params.get(config.author.provider),
                     claude_team_agents=bool(config.claude_team_agents),
+                    on_stream=(
+                        self._stream_emitter(
+                            emit=emit,
+                            round_no=round_no,
+                            stage='discussion',
+                            participant=config.author.participant_id,
+                            provider=config.author.provider,
+                        )
+                        if stream_mode
+                        else None
+                    ),
                 )
-            emit({'type': 'discussion', 'round': round_no, 'provider': config.author.provider, 'output': discussion.output, 'duration_seconds': discussion.duration_seconds})
+            emit(
+                {
+                    'type': 'discussion',
+                    'round': round_no,
+                    'participant': config.author.participant_id,
+                    'provider': config.author.provider,
+                    'output': discussion.output,
+                    'duration_seconds': discussion.duration_seconds,
+                }
+            )
+            discussion_output = str(discussion.output or '').strip()
+            if discussion_output:
+                implementation_context = discussion_output
 
             if check_cancel():
                 emit({'type': 'canceled', 'round': round_no})
@@ -153,20 +267,41 @@ class WorkflowEngine:
                     {
                         'type': 'implementation_started',
                         'round': round_no,
+                        'participant': config.author.participant_id,
                         'provider': config.author.provider,
                         'timeout_seconds': self.participant_timeout_seconds,
                     }
                 )
                 implementation = self.runner.run(
                     participant=config.author,
-                    prompt=self._implementation_prompt(config, round_no, discussion.output),
+                    prompt=self._implementation_prompt(config, round_no, implementation_context),
                     cwd=config.cwd,
                     timeout_seconds=self.participant_timeout_seconds,
                     model=provider_models.get(config.author.provider),
                     model_params=provider_model_params.get(config.author.provider),
                     claude_team_agents=bool(config.claude_team_agents),
+                    on_stream=(
+                        self._stream_emitter(
+                            emit=emit,
+                            round_no=round_no,
+                            stage='implementation',
+                            participant=config.author.participant_id,
+                            provider=config.author.provider,
+                        )
+                        if stream_mode
+                        else None
+                    ),
                 )
-            emit({'type': 'implementation', 'round': round_no, 'provider': config.author.provider, 'output': implementation.output, 'duration_seconds': implementation.duration_seconds})
+            emit(
+                {
+                    'type': 'implementation',
+                    'round': round_no,
+                    'participant': config.author.participant_id,
+                    'provider': config.author.provider,
+                    'output': implementation.output,
+                    'duration_seconds': implementation.duration_seconds,
+                }
+            )
 
             if check_cancel():
                 emit({'type': 'canceled', 'round': round_no})
@@ -183,15 +318,50 @@ class WorkflowEngine:
                             'timeout_seconds': self.participant_timeout_seconds,
                         }
                     )
-                    review = self.runner.run(
-                        participant=reviewer,
-                        prompt=self._review_prompt(config, round_no, implementation.output),
-                        cwd=config.cwd,
-                        timeout_seconds=self.participant_timeout_seconds,
-                        model=provider_models.get(reviewer.provider),
-                        model_params=provider_model_params.get(reviewer.provider),
-                        claude_team_agents=bool(config.claude_team_agents),
-                    )
+                    try:
+                        review = self.runner.run(
+                            participant=reviewer,
+                            prompt=self._review_prompt(config, round_no, implementation.output),
+                            cwd=config.cwd,
+                            timeout_seconds=self.participant_timeout_seconds,
+                            model=provider_models.get(reviewer.provider),
+                            model_params=provider_model_params.get(reviewer.provider),
+                            claude_team_agents=bool(config.claude_team_agents),
+                            on_stream=(
+                                self._stream_emitter(
+                                    emit=emit,
+                                    round_no=round_no,
+                                    stage='review',
+                                    participant=reviewer.participant_id,
+                                    provider=reviewer.provider,
+                                )
+                                if stream_mode
+                                else None
+                            ),
+                        )
+                    except Exception as exc:
+                        reason = str(exc or 'review_failed').strip() or 'review_failed'
+                        emit(
+                            {
+                                'type': 'review_error',
+                                'round': round_no,
+                                'participant': reviewer.participant_id,
+                                'reason': reason,
+                            }
+                        )
+                        verdict = ReviewVerdict.UNKNOWN
+                        verdicts.append(verdict)
+                        emit(
+                            {
+                                'type': 'review',
+                                'round': round_no,
+                                'participant': reviewer.participant_id,
+                                'verdict': verdict.value,
+                                'output': f'[review_error] {reason}',
+                                'duration_seconds': 0.0,
+                            }
+                        )
+                        continue
                 verdict = self._normalize_verdict(review.verdict)
                 verdicts.append(verdict)
                 emit(
@@ -199,6 +369,7 @@ class WorkflowEngine:
                         'type': 'review',
                         'round': round_no,
                         'participant': reviewer.participant_id,
+                        'provider': reviewer.provider,
                         'verdict': verdict.value,
                         'output': review.output,
                         'duration_seconds': review.duration_seconds,
@@ -298,15 +469,56 @@ class WorkflowEngine:
         return source[:max_chars] + f'\n...[truncated {dropped} chars]'
 
     @staticmethod
+    def _stream_emitter(
+        *,
+        emit: Callable[[dict], None],
+        round_no: int,
+        stage: str,
+        participant: str,
+        provider: str,
+    ) -> Callable[[str, str], None]:
+        def _callback(stream_name: str, chunk: str) -> None:
+            text = str(chunk or '')
+            if not text:
+                return
+            emit(
+                {
+                    'type': 'participant_stream',
+                    'round': round_no,
+                    'stage': stage,
+                    'stream': str(stream_name or 'stdout'),
+                    'participant': participant,
+                    'provider': provider,
+                    'chunk': text,
+                }
+            )
+
+        return _callback
+
+    @staticmethod
+    def _append_debate_line(base: str, *, speaker: str, text: str) -> str:
+        payload = str(text or '').strip()
+        if not payload:
+            return base
+        merged = f'{str(base or "").rstrip()}\n\n[{speaker}]\n{payload}'.strip()
+        return WorkflowEngine._clip_text(merged, max_chars=5000)
+
+    @staticmethod
     def _discussion_prompt(config: RunConfig, round_no: int, previous_gate_reason: str | None = None) -> str:
         level = max(0, min(2, int(config.evolution_level)))
+        repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
+        repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
+        plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
         base = (
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
             f"EvolutionLevel: {level}\n"
+            f"RepairMode: {repair_mode}\n"
             f"Description: {config.description}\n"
             f"{language_instruction}\n"
+            f"{repair_guidance}\n"
+            f"{plain_mode_instruction}\n"
             "Produce a concise execution plan for this round.\n"
             "Do not ask follow-up questions. Keep response concise."
         )
@@ -326,10 +538,57 @@ class WorkflowEngine:
         return base
 
     @staticmethod
+    def _debate_seed_context(config: RunConfig, round_no: int, previous_gate_reason: str | None = None) -> str:
+        level = max(0, min(2, int(config.evolution_level)))
+        repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
+        language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
+        repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
+        plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
+        base = (
+            f"Task: {config.title}\n"
+            f"Round: {round_no}\n"
+            f"EvolutionLevel: {level}\n"
+            f"RepairMode: {repair_mode}\n"
+            f"Description: {config.description}\n"
+            f"{language_instruction}\n"
+            f"{repair_guidance}\n"
+            f"{plain_mode_instruction}\n"
+            "Reviewer-first precheck context."
+        )
+        if round_no > 1 and previous_gate_reason:
+            base += f"\nPrevious gate failure reason: {previous_gate_reason}"
+        return base
+
+    @staticmethod
+    def _discussion_after_reviewer_prompt(config: RunConfig, round_no: int, reviewer_context: str) -> str:
+        clipped = WorkflowEngine._clip_text(reviewer_context, max_chars=3200)
+        level = max(0, min(2, int(config.evolution_level)))
+        repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
+        language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
+        repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
+        plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
+        return (
+            f"Task: {config.title}\n"
+            f"Round: {round_no}\n"
+            f"EvolutionLevel: {level}\n"
+            f"RepairMode: {repair_mode}\n"
+            f"{language_instruction}\n"
+            f"{repair_guidance}\n"
+            f"{plain_mode_instruction}\n"
+            "Reviewer-first mode: reviewers have provided pre-implementation findings.\n"
+            "Produce the author execution plan for this round and explicitly address reviewer concerns.\n"
+            "Do not ask follow-up questions. Keep response concise.\n"
+            f"Reviewer context:\n{clipped}\n"
+        )
+
+    @staticmethod
     def _implementation_prompt(config: RunConfig, round_no: int, discussion_output: str) -> str:
         clipped = WorkflowEngine._clip_text(discussion_output, max_chars=3000)
         level = max(0, min(2, int(config.evolution_level)))
+        repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
+        repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
+        plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
         mode_guidance = "Focus on resolving blockers and reliability issues."
         if level == 1:
             mode_guidance = (
@@ -344,7 +603,10 @@ class WorkflowEngine:
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
             f"EvolutionLevel: {level}\n"
+            f"RepairMode: {repair_mode}\n"
             f"{language_instruction}\n"
+            f"{repair_guidance}\n"
+            f"{plain_mode_instruction}\n"
             "Implement based on this plan and summarize what changed.\n"
             f"Plan:\n{clipped}\n"
             f"{mode_guidance}\n"
@@ -353,10 +615,61 @@ class WorkflowEngine:
         )
 
     @staticmethod
+    def _debate_review_prompt(
+        config: RunConfig,
+        round_no: int,
+        discussion_context: str,
+        reviewer_id: str,
+    ) -> str:
+        clipped = WorkflowEngine._clip_text(discussion_context, max_chars=3200)
+        language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
+        plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
+        return (
+            f"Task: {config.title}\n"
+            f"Round: {round_no}\n"
+            f"Reviewer: {reviewer_id}\n"
+            f"{language_instruction}\n"
+            f"{plain_mode_instruction}\n"
+            "Debate mode step: review the current plan/context and provide concise, concrete concerns.\n"
+            "Focus on correctness, regression risk, reliability, security, and test gaps.\n"
+            "Do not output VERDICT/NEXT_ACTION lines in this step.\n"
+            "Provide plain text only: findings first, then suggested fixes.\n"
+            f"Current context:\n{clipped}\n"
+        )
+
+    @staticmethod
+    def _debate_reply_prompt(
+        config: RunConfig,
+        round_no: int,
+        discussion_context: str,
+        reviewer_id: str,
+        reviewer_feedback: str,
+    ) -> str:
+        clipped_context = WorkflowEngine._clip_text(discussion_context, max_chars=2600)
+        clipped_feedback = WorkflowEngine._clip_text(reviewer_feedback, max_chars=1400)
+        language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
+        plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
+        return (
+            f"Task: {config.title}\n"
+            f"Round: {round_no}\n"
+            f"{language_instruction}\n"
+            f"{plain_mode_instruction}\n"
+            f"Debate mode step: respond to reviewer feedback from {reviewer_id}.\n"
+            "Update the execution direction with explicit decisions.\n"
+            "Format: accepted points, rejected points(with reason), and revised implementation focus.\n"
+            "Do not output VERDICT/NEXT_ACTION lines.\n"
+            f"Current context:\n{clipped_context}\n"
+            f"Reviewer feedback:\n{clipped_feedback}\n"
+        )
+
+    @staticmethod
     def _review_prompt(config: RunConfig, round_no: int, implementation_output: str) -> str:
         clipped = WorkflowEngine._clip_text(implementation_output, max_chars=3000)
         level = max(0, min(2, int(config.evolution_level)))
+        repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
+        repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
+        plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
         mode_guidance = ''
         if level >= 1:
             mode_guidance = (
@@ -367,7 +680,10 @@ class WorkflowEngine:
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
             f"EvolutionLevel: {level}\n"
+            f"RepairMode: {repair_mode}\n"
             f"{language_instruction}\n"
+            f"{repair_guidance}\n"
+            f"{plain_mode_instruction}\n"
             "Review the implementation summary and decide blocker status.\n"
             "Mark BLOCKER only for correctness, regression, security, or data-loss risks.\n"
             "Do not mark BLOCKER for style-only, process-only, or preference-only feedback.\n"
@@ -424,3 +740,39 @@ class WorkflowEngine:
                 continue
             out[provider] = params
         return out
+
+    @staticmethod
+    def _normalize_repair_mode(value: str | None) -> str:
+        mode = str(value or '').strip().lower()
+        if mode in {'minimal', 'balanced', 'structural'}:
+            return mode
+        return 'balanced'
+
+    @staticmethod
+    def _repair_mode_guidance(mode: str) -> str:
+        normalized = WorkflowEngine._normalize_repair_mode(mode)
+        if normalized == 'minimal':
+            return (
+                'Repair policy: minimal patch only. Restrict changes to immediate blockers; '
+                'avoid broad refactors, file moves, and nonessential scope.'
+            )
+        if normalized == 'structural':
+            return (
+                'Repair policy: structural fix allowed. Resolve root causes even when it requires '
+                'module refactor, API reshaping, and broader regression tests.'
+            )
+        return (
+            'Repair policy: balanced fix (default). Resolve root cause with moderate scope and add '
+            'targeted tests; avoid unnecessary architectural churn.'
+        )
+
+    @staticmethod
+    def _plain_mode_instruction(enabled: bool) -> str:
+        if not bool(enabled):
+            return 'Plain Mode: disabled.'
+        return (
+            'Plain Mode: enabled. Write for small/beginner readers in short sentences. '
+            'Avoid internal process jargon, hidden prompt mechanics, or tool/skill self-reference. '
+            'Start with one-line conclusion, then compact bullet points: issue -> impact -> evidence, '
+            'and next actions.'
+        )

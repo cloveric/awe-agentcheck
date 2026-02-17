@@ -1264,11 +1264,11 @@
           <div class="controls-row">
             <div style="flex:1; min-width:220px;">
               <label for="author">Author</label>
-              <input id="author" value="claude#author-A" />
+              <input id="author" value="codex#author-A" />
             </div>
             <div style="flex:1; min-width:220px;">
               <label for="reviewers">Reviewers (comma-separated: claude/codex/gemini)</label>
-              <input id="reviewers" value="codex#review-B,claude#review-C" />
+              <input id="reviewers" value="claude#review-B,gemini#review-C" />
             </div>
           </div>
           <div class="controls-row">
@@ -1318,9 +1318,17 @@
                 <option value="2">2 | proactive evolve</option>
               </select>
             </div>
+            <div style="flex:0 0 220px;">
+              <label for="repairMode">Repair Mode</label>
+              <select id="repairMode">
+                <option value="minimal">minimal | smallest safe patch</option>
+                <option value="balanced" selected>balanced | root-cause + focused scope</option>
+                <option value="structural">structural | allow deeper refactor</option>
+              </select>
+            </div>
             <div style="flex:0 0 180px;">
               <label for="maxRounds">Max Rounds (fallback)</label>
-              <input id="maxRounds" type="number" min="1" max="20" value="3" />
+              <input id="maxRounds" type="number" min="1" max="20" value="1" />
             </div>
             <div style="flex:1; min-width:220px;">
               <label for="evolveUntil">Evolve Until (optional)</label>
@@ -1331,6 +1339,27 @@
               <select id="conversationLanguage">
                 <option value="en">English (default)</option>
                 <option value="zh">中文</option>
+              </select>
+            </div>
+            <div style="flex:0 0 220px;">
+              <label for="plainMode">Plain Mode</label>
+              <select id="plainMode">
+                <option value="1">1 | beginner-friendly (default)</option>
+                <option value="0">0 | raw technical output</option>
+              </select>
+            </div>
+            <div style="flex:0 0 220px;">
+              <label for="streamMode">Stream Mode</label>
+              <select id="streamMode">
+                <option value="1">1 | realtime stream (default)</option>
+                <option value="0">0 | stage summary only</option>
+              </select>
+            </div>
+            <div style="flex:0 0 220px;">
+              <label for="debateMode">Debate Mode</label>
+              <select id="debateMode">
+                <option value="1">1 | reviewer-author debate (default)</option>
+                <option value="0">0 | skip debate</option>
               </select>
             </div>
           </div>
@@ -1440,6 +1469,10 @@
       mergeTargetPath: document.getElementById('mergeTargetPath'),
       evolveUntil: document.getElementById('evolveUntil'),
       maxRounds: document.getElementById('maxRounds'),
+      repairMode: document.getElementById('repairMode'),
+      plainMode: document.getElementById('plainMode'),
+      streamMode: document.getElementById('streamMode'),
+      debateMode: document.getElementById('debateMode'),
     };
 
     const THEME_OPTIONS = [
@@ -1981,12 +2014,33 @@
     }
 
     function roleGroups() {
+      const scopedTasks = tasksInSelectedProject();
+      const selected = selectedTask();
+      const visibleParticipants = new Set();
+      if (selected) {
+        const seed = [selected.author_participant, ...(selected.reviewer_participants || [])];
+        for (const id of seed) {
+          const pid = String(id || '').trim();
+          if (pid) visibleParticipants.add(pid);
+        }
+      } else {
+        for (const task of scopedTasks) {
+          const seed = [task.author_participant, ...(task.reviewer_participants || [])];
+          for (const id of seed) {
+            const pid = String(id || '').trim();
+            if (pid) visibleParticipants.add(pid);
+          }
+        }
+      }
+
+      const sourceTasks = scopedTasks.length ? scopedTasks : state.tasks;
       const map = new Map();
-      for (const task of state.tasks) {
+      for (const task of sourceTasks) {
         const participants = [task.author_participant, ...(task.reviewer_participants || [])];
         for (const id of participants) {
           const pid = String(id || '').trim();
           if (!pid) continue;
+          if (visibleParticipants.size && !visibleParticipants.has(pid)) continue;
           let role = map.get(pid);
           if (!role) {
             role = { id: pid, provider: parseProvider(pid), tasks: 0, active: 0 };
@@ -2019,6 +2073,7 @@
       if (!projects.length) {
         state.selectedProject = null;
         state.selectedTaskId = null;
+        state.selectedRole = 'all';
         return;
       }
 
@@ -2029,11 +2084,18 @@
       const scoped = tasksInSelectedProject();
       if (!scoped.length) {
         state.selectedTaskId = null;
+        state.selectedRole = 'all';
         return;
       }
 
       if (!state.selectedTaskId || !scoped.some((t) => t.task_id === state.selectedTaskId)) {
-        state.selectedTaskId = scoped[0].task_id;
+        const running = scoped.find((t) => String(t.status || '') === 'running');
+        state.selectedTaskId = (running || scoped[0]).task_id;
+      }
+
+      const current = scoped.find((t) => t.task_id === state.selectedTaskId) || null;
+      if (state.selectedRole !== 'all' && current && !participantInTask(current, state.selectedRole)) {
+        state.selectedRole = 'all';
       }
     }
 
@@ -2236,6 +2298,9 @@
 
     function renderRoles() {
       const roles = roleGroups();
+      if (state.selectedRole !== 'all' && !roles.some((r) => r.id === state.selectedRole)) {
+        state.selectedRole = 'all';
+      }
       el.roleList.innerHTML = '';
 
       const allBtn = document.createElement('button');
@@ -2324,6 +2389,10 @@
         { label: 'SandboxPath', value: task.sandbox_workspace_path || 'n/a' },
         { label: 'SelfLoop', value: String(task.self_loop_mode ?? 1) },
         { label: 'Evolution', value: String(task.evolution_level ?? 0) },
+        { label: 'RepairMode', value: String(task.repair_mode || 'balanced') },
+        { label: 'PlainMode', value: String(task.plain_mode !== false ? 1 : 0) },
+        { label: 'StreamMode', value: String(task.stream_mode !== false ? 1 : 0) },
+        { label: 'DebateMode', value: String(task.debate_mode !== false ? 1 : 0) },
         { label: 'EvolveUntil', value: task.evolve_until || 'n/a' },
         { label: 'ProviderModels', value: formatProviderModels(task.provider_models) },
         { label: 'ProviderModelParams', value: formatProviderModelParams(task.provider_model_params) },
@@ -2363,9 +2432,17 @@
     function formatHistoryTime(value) {
       const text = String(value || '').trim();
       if (!text) return 'n/a';
-      const dt = new Date(text);
+      const dt = parseEventDate(text);
       if (Number.isNaN(dt.getTime())) return text;
       return dt.toLocaleString();
+    }
+
+    function parseEventDate(raw) {
+      const text = String(raw || '').trim();
+      if (!text) return new Date(NaN);
+      const hasOffset = /(?:Z|[+-]\d{2}:\d{2})$/i.test(text);
+      const normalized = hasOffset ? text : `${text}Z`;
+      return new Date(normalized);
     }
 
     function formatRevisionSummary(revisions) {
@@ -2435,8 +2512,25 @@
     function eventActor(event, task) {
       const payload = event.payload || {};
       const type = String(event.type || '');
-      if (type === 'review' || type === 'proposal_review') {
+      if (
+        type === 'review'
+        || type === 'proposal_review'
+        || type === 'proposal_precheck_review'
+        || type === 'debate_review'
+        || type === 'debate_reply'
+        || type === 'participant_stream'
+      ) {
         return String(payload.participant || 'reviewer');
+      }
+      if (
+        type === 'review_started'
+        || type === 'proposal_precheck_review_started'
+        || type === 'debate_review_started'
+        || type === 'debate_reply_started'
+        || type === 'discussion_started'
+        || type === 'implementation_started'
+      ) {
+        return String(payload.participant || payload.provider || 'system');
       }
       if (type === 'discussion' || type === 'implementation') {
         if (task && task.author_participant) return task.author_participant;
@@ -2449,6 +2543,26 @@
     function eventText(event) {
       const payload = event.payload || {};
       if (payload.output) return String(payload.output);
+      if (payload.chunk) {
+        const chunk = String(payload.chunk);
+        const streamName = String(payload.stream || 'stdout').toLowerCase();
+        return streamName === 'stderr' ? `[stderr] ${chunk}` : chunk;
+      }
+      if (event.type === 'debate_started') {
+        const count = Number(payload.reviewer_count || 0);
+        return `debate_started: reviewers=${count}`;
+      }
+      if (event.type === 'debate_completed') return 'debate_completed';
+      if (event.type === 'debate_review_started' || event.type === 'debate_reply_started') {
+        const participant = String(payload.participant || 'agent');
+        const timeout = Number(payload.timeout_seconds || 0);
+        return `${event.type}: participant=${participant} timeout=${timeout}s`;
+      }
+      if (event.type === 'proposal_precheck_review_started') {
+        const participant = String(payload.participant || 'reviewer');
+        const timeout = Number(payload.timeout_seconds || 0);
+        return `proposal_precheck_review_started: participant=${participant} timeout=${timeout}s`;
+      }
       if (event.type === 'discussion_started' || event.type === 'implementation_started') {
         const provider = String(payload.provider || 'unknown');
         const timeout = Number(payload.timeout_seconds || 0);
@@ -2482,7 +2596,16 @@
     function eventClass(event) {
       const t = String(event.type || '');
       if (t === 'discussion' || t === 'implementation') return 'agent';
-      if (t === 'review' || t === 'proposal_review') return 'review';
+      if (t === 'debate_reply') return 'agent';
+      if (t === 'discussion_started' || t === 'implementation_started' || t === 'debate_reply_started') return 'agent';
+      if (t === 'review' || t === 'proposal_review' || t === 'proposal_precheck_review') return 'review';
+      if (t === 'debate_review') return 'review';
+      if (t === 'review_started' || t === 'debate_review_started' || t === 'proposal_review_started' || t === 'proposal_precheck_review_started') return 'review';
+      if (t === 'participant_stream') {
+        const stage = String((event.payload || {}).stage || '');
+        if (stage.includes('review')) return 'review';
+        return 'agent';
+      }
       if (t.includes('failed') || t === 'system_failure' || t === 'force_failed') return 'system bad';
       return 'system';
     }
@@ -2531,7 +2654,10 @@
         const meta = document.createElement('div');
         meta.className = 'msg-kind';
         const roundText = event.round ? `round ${event.round}` : 'task';
-        const timeStr = event.created_at ? new Date(event.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+        const timeObj = event.created_at ? parseEventDate(event.created_at) : null;
+        const timeStr = (timeObj && !Number.isNaN(timeObj.getTime()))
+          ? timeObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          : '';
         meta.textContent = `${event.type} | ${roundText}${timeStr ? ` | ${timeStr}` : ''}`;
 
         const body = document.createElement('pre');
@@ -2779,6 +2905,10 @@
         provider_models: readProviderModelsFromForm(),
         provider_model_params: readProviderModelParamsFromForm(),
         claude_team_agents: Number(document.getElementById('claudeTeamAgents').value || 0) === 1,
+        repair_mode: String(document.getElementById('repairMode').value || 'balanced').trim().toLowerCase() || 'balanced',
+        plain_mode: Number(document.getElementById('plainMode').value || 1) === 1,
+        stream_mode: Number(document.getElementById('streamMode').value || 1) === 1,
+        debate_mode: Number(document.getElementById('debateMode').value || 1) === 1,
         sandbox_mode: Number(document.getElementById('sandboxMode').value || 1) === 1,
         sandbox_workspace_path: (sandboxPathRaw || null),
         self_loop_mode: Number(document.getElementById('selfLoopMode').value || 0),
@@ -2786,7 +2916,7 @@
         merge_target_path: (mergeTargetRaw || null),
         workspace_path: document.getElementById('workspacePath').value,
         auto_start: !!autoStart,
-        max_rounds: Math.max(1, Math.min(20, Number(document.getElementById('maxRounds').value || 3))),
+        max_rounds: Math.max(1, Math.min(20, Number(document.getElementById('maxRounds').value || 1))),
       };
 
       try {

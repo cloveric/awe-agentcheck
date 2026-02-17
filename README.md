@@ -23,7 +23,7 @@
 
 <p align="center">
   <b>Production-grade multi-agent collaboration engine for real software work.</b><br/>
-  <sub>Coordinate Claude, Codex, and other CLI agents to diagnose bugs, implement fixes, review each other, and continuously evolve your codebase.</sub>
+  <sub>Coordinate Claude, Codex, Gemini, and other CLI agents in reviewer-first consensus loops to diagnose bugs, implement fixes, cross-review results, and continuously evolve your codebase.</sub>
 </p>
 <p align="center">
   <sub><b>Brand mode (low-risk rename):</b> display name = <code>AWE-AgentForge</code>, runtime/package IDs stay <code>awe-agentcheck</code> / <code>awe_agentcheck</code>.</sub>
@@ -68,6 +68,24 @@
    - project selector now includes historical projects even when no active tasks are loaded.
 10. Startup defaults now preserve local history:
    - `scripts/start_api.ps1` and overnight launcher default to persistent local SQLite when `AWE_DATABASE_URL` is unset.
+11. Added explicit repair policy mode end-to-end:
+   - `repair_mode`: `minimal` / `balanced` / `structural`
+   - wired through Web form, API, CLI, task metadata, and workflow prompts.
+12. Reviewer fault tolerance improved:
+   - single reviewer runtime failures (e.g., Gemini `provider_limit`) no longer crash the whole task as `failed_system`.
+   - now emits `review_error` / `proposal_review_error`, downgrades that reviewer to `unknown`, and continues to gate/manual decision.
+13. Added `plain_mode` (default enabled) for beginner-readable outputs:
+   - enabled: concise, less jargon-heavy responses in conversation flow
+   - disabled: raw technical output style.
+14. Reviewer-first alignment is now explicit:
+   - when `debate_mode=1`, reviewers precheck first and author responds with a revised plan.
+   - author remains the implementation owner; reviewers do not write final code changes.
+15. Manual mode semantics were tightened:
+   - in `self_loop_mode=0`, `max_rounds` means required proposal consensus rounds (not just one discussion pass).
+   - if reviewers cannot converge after bounded retries, task exits with `failed_gate` (`proposal_consensus_not_reached`).
+16. Added richer proposal-stage events for observability:
+   - `proposal_precheck_review*`
+   - `proposal_consensus_reached` / `proposal_consensus_retry` / `proposal_consensus_failed`
 
 <br/>
 
@@ -200,12 +218,14 @@ queued → running → waiting_manual → (approve) → queued → running → p
                                   → (reject)  → canceled
 ```
 
+`running` in manual mode is now a proposal-consensus stage (reviewer-first when `debate_mode=1`) before pausing at `waiting_manual`.
+
 ### Three Controls
 
 | Control | Values | Default | What It Does |
 |:---|:---:|:---:|:---|
 | `sandbox_mode` | `0` / `1` | **`1`** | `1` = run in an isolated `*-lab` copy of the workspace; `0` = run directly in main workspace |
-| `self_loop_mode` | `0` / `1` | **`0`** | `0` = pause for author approval after discussion; `1` = run autonomously end-to-end |
+| `self_loop_mode` | `0` / `1` | **`0`** | `0` = run proposal consensus rounds, then pause for approval; `1` = run autonomous implementation/review loops |
 | `auto_merge` | `0` / `1` | **`1`** | `1` = on pass, auto-merge changes back + generate changelog; `0` = keep results in sandbox only |
 
 > [!TIP]
@@ -374,10 +394,14 @@ If this is your first time, operate in this exact order:
 | `Claude/Codex/Gemini Model Params` | Optional extra args per provider | For Codex use `-c model_reasoning_effort=xhigh` |
 | `Claude Team Agents` | Enable/disable Claude `--agents` mode | `0` (disabled) |
 | `Evolution Level` | `0` fix-only, `1` guided evolve, `2` proactive evolve | Start with `0` |
-| `Max Rounds` | Round cap fallback when no deadline is provided | `3` |
+| `Repair Mode` | `minimal` / `balanced` / `structural` | Start with `balanced` |
+| `Max Rounds` | `self_loop_mode=0`: required consensus rounds; `self_loop_mode=1`: retry cap fallback when no deadline | `1` |
 | `Evolve Until` | Optional deadline (`YYYY-MM-DD HH:MM`) | Empty unless running overnight |
 | `Max Rounds` + `Evolve Until` | Priority rule | If `Evolve Until` is set, deadline wins; if empty, `Max Rounds` is used |
 | `Conversation Language` | Prompt language for agent outputs (`en` / `zh`) | `English` for logs, `中文` for Chinese collaboration |
+| `Plain Mode` | Beginner-friendly readable output (`1` on / `0` off) | Start with `1` |
+| `Stream Mode` | Realtime stream chunks from participant stdout/stderr (`1` on / `0` off) | Start with `1` |
+| `Debate Mode` | Enable reviewer-first debate/precheck stage (`1` on / `0` off) | Start with `1` |
 | `Sandbox Mode` | `1` sandbox / `0` main workspace | Keep `1` for safety |
 | `Sandbox Workspace Path` | Optional custom sandbox path | Leave blank (auto per-task path) |
 | `Self Loop Mode` | `0` manual approval / `1` autonomous | Start with `0` |
@@ -414,8 +438,8 @@ You can create a task via the **Web UI** (use the "Create Task" form at the bott
 ```powershell
 py -m awe_agentcheck.cli run `
   --task "Fix the login validation bug" `
-  --author "claude#author-A" `
-  --reviewer "codex#review-B" `
+  --author "codex#author-A" `
+  --reviewer "claude#review-B" `
   --conversation-language en `
   --workspace-path "." `
   --auto-start
@@ -423,10 +447,10 @@ py -m awe_agentcheck.cli run `
 
 This will:
 1. Create a task with title "Fix the login validation bug"
-2. Assign Claude as the author and Codex as the reviewer
+2. Assign Codex as the author and Claude as the reviewer
 3. Use default policies (`sandbox_mode=1`, `self_loop_mode=0`, `auto_merge=1`)
 4. Automatically start the task (`--auto-start`)
-5. Since `self_loop_mode=0`, the system will run a discussion first, then pause at `waiting_manual` for your approval
+5. Since `self_loop_mode=0`, the system will run reviewer-first proposal consensus rounds, then pause at `waiting_manual` for your approval
 
 ### Step 6: Approve and Execute (Manual Mode)
 
@@ -493,12 +517,16 @@ py -m awe_agentcheck.cli run `
 | `--auto-merge` / `--no-auto-merge` | No | enabled | Enable/disable auto-fusion on pass |
 | `--merge-target-path` | No | project root | Where to merge changes back to |
 | `--workspace-path` | No | `.` | Path to the target repository |
-| `--max-rounds` | No | `3` | Maximum discussion/review/gate rounds |
+| `--max-rounds` | No | `3` | Manual mode: required consensus rounds. Autonomous mode: max gate retries when no deadline |
 | `--test-command` | No | `py -m pytest -q` | Command to run tests |
 | `--lint-command` | No | `py -m ruff check .` | Command to run linter |
 | `--evolution-level` | No | `0` | `0` = fix-only, `1` = guided evolve, `2` = proactive evolve |
+| `--repair-mode` | No | `balanced` | Repair policy (`minimal` / `balanced` / `structural`) |
 | `--evolve-until` | No | — | Deadline for evolution (e.g. `2026-02-13 06:00`) |
 | `--conversation-language` | No | `en` | Agent output language (`en` or `zh`) |
+| `--plain-mode` / `--no-plain-mode` | No | enabled | Toggle beginner-readable output mode |
+| `--stream-mode` / `--no-stream-mode` | No | enabled | Toggle realtime stream events |
+| `--debate-mode` / `--no-debate-mode` | No | enabled | Toggle reviewer-first debate/precheck stage |
 | `--provider-model` | No | — | Per-provider model override in `provider=model` format (repeatable) |
 | `--provider-model-param` | No | — | Per-provider extra args in `provider=args` format (repeatable) |
 | `--claude-team-agents` | No | `0` | `1` enables Claude `--agents` mode for Claude participants |
@@ -597,8 +625,8 @@ py -m awe_agentcheck.cli run `
 
 What happens:
 1. System creates an isolated sandbox workspace (`awe-agentcheck-lab/20260213-...`)
-2. Claude (author) generates a discussion proposal
-3. Codex and Claude (reviewers) evaluate the proposal
+2. Reviewers precheck and challenge the proposal first (reviewer-first stage)
+3. Author revises proposal, reviewers re-check for consensus
 4. Task pauses at `waiting_manual` — you review in the web UI
 5. You approve → system runs implementation → reviewers review code → tests + lint → gate decision
 6. If passed: changes auto-merge back to your main workspace with a changelog
@@ -746,7 +774,7 @@ POST /api/tasks
 | Capability | Description | Status |
 |:---|:---|:---:|
 | **Sandbox-first execution** | Default `sandbox_mode=1`, runs in `*-lab` workspace with auto-generated per-task isolation | `GA` |
-| **Author-approval gate** | Default `self_loop_mode=0`, enters `waiting_manual` before implementation | `GA` |
+| **Author-approval gate** | Default `self_loop_mode=0`, enters `waiting_manual` after reviewer-first proposal consensus rounds | `GA` |
 | **Autonomous self-loop** | `self_loop_mode=1` for unattended operation | `GA` |
 | **Auto fusion** | On pass: merge + `CHANGELOG.auto.md` + snapshot | `GA` |
 | **Provider model pinning** | Set model per provider (`claude` / `codex` / `gemini`) per task | `GA` |
@@ -767,15 +795,19 @@ POST /api/tasks
 This is the recommended mode for most use cases:
 
 1. **Create task** → status becomes `queued`
-2. **Start task** → system detects manual mode, runs the **discussion phase**:
-   - Author (e.g. Claude) generates an implementation proposal
-   - Reviewers evaluate the proposal and flag blockers
-3. **Wait for human** → status becomes `waiting_manual`, task pauses
-4. **Author decides**:
+2. **Start task** → system runs proposal-consensus rounds:
+   - if `debate_mode=1`, reviewers precheck first (`proposal_precheck_review`)
+   - author replies with a revised proposal based on reviewer feedback
+   - reviewers evaluate proposal quality/alignment (`proposal_review`)
+3. **Consensus rule**:
+   - one round is counted only when all required reviewers return pass-level consensus
+   - each round has bounded retry attempts; if still not aligned, task ends as `failed_gate` (`proposal_consensus_not_reached`)
+4. **Wait for human** → after required consensus rounds are complete, status becomes `waiting_manual`
+5. **Author decides**:
    - **Approve** → status becomes `queued` (with `author_approved` reason), then immediately re-starts into the full workflow
    - **Reject** → status becomes `canceled`
-5. **Full workflow** runs: Discussion → Implementation → Review → Verify (test + lint) → Gate Decision
-6. **Gate result**:
+6. **Full workflow** runs: reviewer-first debate (optional) → author discussion → author implementation → reviewer review → verify (test + lint) → gate
+7. **Gate result**:
    - **Pass** → `passed` → Auto Fusion (merge + changelog + snapshot + sandbox cleanup)
    - **Fail** → retry next round; limit by `Evolve Until` when set, otherwise by `max_rounds`, then `failed_gate`
 
@@ -785,7 +817,7 @@ For unattended operation:
 
 1. **Create task** → `queued`
 2. **Start task** → immediately enters the full workflow (no manual checkpoint)
-3. **Round 1..N**: Discussion → Implementation → Review → Verify → Gate
+3. **Round 1..N**: reviewer-first debate (optional) → author discussion → author implementation → reviewer review → verify → gate
 4. **Gate result**:
    - **Pass** → `passed` → Auto Fusion
    - **Fail** → retry until deadline (`Evolve Until`) or `max_rounds` (when no deadline), then `failed_gate`

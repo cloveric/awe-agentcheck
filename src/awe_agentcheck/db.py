@@ -12,6 +12,14 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 from awe_agentcheck.repository import decode_task_meta, encode_task_meta
 
 
+def _iso_utc(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat()
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -90,6 +98,10 @@ class SqlTaskRepository:
         provider_models: dict[str, str],
         provider_model_params: dict[str, str],
         claude_team_agents: bool,
+        repair_mode: str,
+        plain_mode: bool,
+        stream_mode: bool,
+        debate_mode: bool,
         auto_merge: bool,
         merge_target_path: str | None,
         sandbox_mode: bool,
@@ -117,6 +129,10 @@ class SqlTaskRepository:
                 provider_models=provider_models,
                 provider_model_params=provider_model_params,
                 claude_team_agents=claude_team_agents,
+                repair_mode=repair_mode,
+                plain_mode=plain_mode,
+                stream_mode=stream_mode,
+                debate_mode=debate_mode,
                 auto_merge=auto_merge,
                 merge_target_path=merge_target_path,
                 sandbox_mode=sandbox_mode,
@@ -284,6 +300,10 @@ class SqlTaskRepository:
             'provider_models': dict(meta.get('provider_models', {})),
             'provider_model_params': dict(meta.get('provider_model_params', {})),
             'claude_team_agents': bool(meta.get('claude_team_agents', False)),
+            'repair_mode': str(meta.get('repair_mode') or 'balanced'),
+            'plain_mode': bool(meta.get('plain_mode', True)),
+            'stream_mode': bool(meta.get('stream_mode', True)),
+            'debate_mode': bool(meta.get('debate_mode', True)),
             'auto_merge': bool(meta.get('auto_merge', True)),
             'merge_target_path': meta.get('merge_target_path'),
             'sandbox_mode': bool(meta.get('sandbox_mode', False)),
@@ -300,8 +320,8 @@ class SqlTaskRepository:
             'lint_command': row.lint_command,
             'rounds_completed': row.rounds_completed,
             'cancel_requested': row.cancel_requested,
-            'created_at': row.created_at.isoformat(),
-            'updated_at': row.updated_at.isoformat(),
+            'created_at': _iso_utc(row.created_at),
+            'updated_at': _iso_utc(row.updated_at),
         }
 
     @staticmethod
@@ -313,5 +333,5 @@ class SqlTaskRepository:
             'type': row.event_type,
             'round': row.round_number,
             'payload': json.loads(row.payload_json),
-            'created_at': row.created_at.isoformat(),
+            'created_at': _iso_utc(row.created_at),
         }

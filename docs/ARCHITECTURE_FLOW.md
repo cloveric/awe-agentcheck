@@ -23,18 +23,26 @@ WorkflowEngine
 ```text
 create task (queued)
   -> if self_loop_mode=0:
-       start task -> waiting_manual (discussion + proposal review only)
+       start task -> proposal consensus rounds (running)
+         when debate_mode=1:
+           1) reviewer precheck pass
+           2) author proposal/reply
+           3) reviewer proposal review
+         round counted only on reviewer consensus
+         bounded retries per round; if no consensus -> failed_gate(proposal_consensus_not_reached)
+       after target consensus rounds -> waiting_manual
        author decision:
-         approve -> queued -> start task (running)
+         approve -> queued -> start task (running, full workflow)
          reject -> canceled
   -> if self_loop_mode=1:
        start task (running)
          -> round 1..N
-            1) discussion (author CLI)
-            2) implementation (author CLI)
-            3) review (reviewer CLI(s))
-            4) verify (test command + lint command)
-            5) gate (medium policy)
+            1) reviewer-first debate/precheck (optional, debate_mode=1)
+            2) discussion (author CLI)
+            3) implementation (author CLI)
+            4) review (reviewer CLI(s))
+            5) verify (test command + lint command)
+            6) gate (medium policy)
          -> terminal: passed | failed_gate | failed_system | canceled
 
 Task-level strategy controls:
@@ -43,6 +51,10 @@ Task-level strategy controls:
   - `0` fix-only
   - `1` guided evolution
   - `2` proactive evolution
+- `repair_mode`:
+  - `minimal` smallest safe patch
+  - `balanced` root-cause + focused scope (default)
+  - `structural` allows deeper refactor
 - `evolve_until`: optional discussion/evolution wall-clock deadline (reaches deadline -> graceful cancel with `deadline_reached`)
 - precedence rule:
   - if `evolve_until` is set, deadline is primary stop condition
@@ -58,8 +70,17 @@ Task-level strategy controls:
     - `<project>-lab/<timestamp>-<id>`
   - after `passed + auto_merge_completed`, generated sandbox is auto-cleaned
 - `self_loop_mode`:
-  - `0` discuss/review first, wait author confirmation before implementation (default)
+  - `0` proposal consensus rounds first, then wait author confirmation before implementation (default)
   - `1` fully autonomous loop
+- `plain_mode`:
+  - `1` beginner-readable output style (default)
+  - `0` raw technical style
+- `stream_mode`:
+  - `1` emit realtime participant stream chunks (default)
+  - `0` emit stage-level outputs only
+- `debate_mode`:
+  - `1` enable reviewer-first debate stages (default)
+  - `0` skip debate stages
 ```
 
 ## 3) Participant Model

@@ -299,3 +299,32 @@ def test_participant_runner_resolves_executable_with_shutil_which(tmp_path: Path
 
     assert captured['argv'] is not None
     assert captured['argv'][0].lower().endswith('codex.cmd')
+
+
+def test_participant_runner_stream_callback_receives_chunks(tmp_path: Path, monkeypatch):
+    captured = []
+
+    def fake_streaming(*, argv, runtime_input, cwd, timeout_seconds, on_stream):
+        on_stream('stdout', 'line-1\n')
+        on_stream('stderr', 'warn-1\n')
+        return subprocess.CompletedProcess(
+            args=argv,
+            returncode=0,
+            stdout='line-1\nVERDICT: NO_BLOCKER\n',
+            stderr='warn-1\n',
+        )
+
+    monkeypatch.setattr('awe_agentcheck.adapters.ParticipantRunner._run_streaming', staticmethod(fake_streaming))
+    runner = ParticipantRunner(command_overrides={'claude': 'claude -p'}, dry_run=False)
+    result = runner.run(
+        participant=parse_participant_id('claude#author-A'),
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=1,
+        on_stream=lambda stream_name, chunk: captured.append((stream_name, chunk)),
+    )
+
+    assert result.returncode == 0
+    assert result.verdict == 'no_blocker'
+    assert ('stdout', 'line-1\n') in captured
+    assert ('stderr', 'warn-1\n') in captured

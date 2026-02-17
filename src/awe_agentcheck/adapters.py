@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from queue import Empty, Queue
 import re
 import shlex
 import shutil
 import subprocess
 import time
+from threading import Thread
 from pathlib import Path
+from typing import Callable
 
 from awe_agentcheck.participants import Participant
 
@@ -86,6 +89,7 @@ class ParticipantRunner:
         model: str | None = None,
         model_params: str | None = None,
         claude_team_agents: bool = False,
+        on_stream: Callable[[str, str], None] | None = None,
     ) -> AdapterResult:
         if self.dry_run:
             simulated = (
@@ -126,16 +130,25 @@ class ParticipantRunner:
                 prompt=current_prompt,
             )
             try:
-                completed = subprocess.run(
-                    runtime_argv,
-                    input=runtime_input,
-                    capture_output=True,
-                    text=True,
-                    encoding='utf-8',
-                    errors='replace',
-                    cwd=str(cwd),
-                    timeout=timeout_seconds,
-                )
+                if on_stream is None:
+                    completed = subprocess.run(
+                        runtime_argv,
+                        input=runtime_input,
+                        capture_output=True,
+                        text=True,
+                        encoding='utf-8',
+                        errors='replace',
+                        cwd=str(cwd),
+                        timeout=timeout_seconds,
+                    )
+                else:
+                    completed = self._run_streaming(
+                        argv=runtime_argv,
+                        runtime_input=runtime_input,
+                        cwd=cwd,
+                        timeout_seconds=timeout_seconds,
+                        on_stream=on_stream,
+                    )
                 break
             except FileNotFoundError as exc:
                 raise RuntimeError(
@@ -305,3 +318,91 @@ class ParticipantRunner:
     @staticmethod
     def _format_command(argv: list[str]) -> str:
         return ' '.join(str(v) for v in argv)
+
+    @staticmethod
+    def _run_streaming(
+        *,
+        argv: list[str],
+        runtime_input: str,
+        cwd: Path,
+        timeout_seconds: int,
+        on_stream: Callable[[str, str], None],
+    ) -> subprocess.CompletedProcess:
+        stdin_pipe = subprocess.PIPE if runtime_input else subprocess.DEVNULL
+        process = subprocess.Popen(
+            argv,
+            stdin=stdin_pipe,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            cwd=str(cwd),
+            bufsize=1,
+        )
+
+        if runtime_input and process.stdin is not None:
+            try:
+                process.stdin.write(runtime_input)
+            finally:
+                process.stdin.close()
+
+        queue: Queue[tuple[str, str]] = Queue()
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+
+        def _pump(pipe, stream_name: str, sink: list[str]) -> None:
+            if pipe is None:
+                return
+            try:
+                while True:
+                    chunk = pipe.readline()
+                    if chunk == '':
+                        break
+                    sink.append(chunk)
+                    queue.put((stream_name, chunk))
+            finally:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+        workers = [
+            Thread(target=_pump, args=(process.stdout, 'stdout', stdout_chunks), daemon=True),
+            Thread(target=_pump, args=(process.stderr, 'stderr', stderr_chunks), daemon=True),
+        ]
+        for worker in workers:
+            worker.start()
+
+        deadline = time.monotonic() + max(1, int(timeout_seconds))
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                try:
+                    process.wait(timeout=2)
+                except Exception:
+                    pass
+                raise subprocess.TimeoutExpired(cmd=argv, timeout=timeout_seconds)
+
+            timeout = min(0.1, max(0.01, remaining))
+            try:
+                stream_name, chunk = queue.get(timeout=timeout)
+                on_stream(stream_name, chunk)
+            except Empty:
+                pass
+
+            finished = process.poll() is not None
+            drained = queue.empty() and all(not worker.is_alive() for worker in workers)
+            if finished and drained:
+                break
+
+        for worker in workers:
+            worker.join(timeout=0.2)
+
+        return subprocess.CompletedProcess(
+            args=argv,
+            returncode=int(process.returncode or 0),
+            stdout=''.join(stdout_chunks),
+            stderr=''.join(stderr_chunks),
+        )

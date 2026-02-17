@@ -29,6 +29,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument('--provider-model', action='append', default=[], help='Provider model override in provider=model format (repeatable)')
     run.add_argument('--provider-model-param', action='append', default=[], help='Provider model params in provider=args format (repeatable)')
     run.add_argument('--claude-team-agents', type=int, default=0, choices=[0, 1], help='Enable Claude --agents mode for Claude participants')
+    run.add_argument('--repair-mode', default='balanced', choices=['minimal', 'balanced', 'structural'], help='Repair policy: minimal, balanced, structural')
+    run.add_argument('--plain-mode', action=argparse.BooleanOptionalAction, default=True, help='Enable beginner-friendly plain output formatting (default: on)')
+    run.add_argument('--stream-mode', action=argparse.BooleanOptionalAction, default=True, help='Enable streaming conversation events (default: on)')
+    run.add_argument('--debate-mode', action=argparse.BooleanOptionalAction, default=True, help='Enable pre-implementation reviewer/author debate (default: on)')
     run.add_argument('--auto-merge', action=argparse.BooleanOptionalAction, default=True, help='Enable auto-fusion/changelog/snapshot after passed (default: on)')
     run.add_argument('--merge-target-path', default='', help='Optional path to receive auto-merged changes')
     run.add_argument('--workspace-path', default='.', help='Target repository/workspace path')
@@ -147,6 +151,10 @@ def main(argv: list[str] | None = None) -> int:
                     'provider_models': provider_models,
                     'provider_model_params': provider_model_params,
                     'claude_team_agents': int(args.claude_team_agents) == 1,
+                    'repair_mode': str(args.repair_mode).strip().lower() or 'balanced',
+                    'plain_mode': bool(args.plain_mode),
+                    'stream_mode': bool(args.stream_mode),
+                    'debate_mode': bool(args.debate_mode),
                     'sandbox_mode': int(args.sandbox_mode) == 1,
                     'sandbox_workspace_path': (args.sandbox_workspace_path.strip() or None),
                     'self_loop_mode': int(args.self_loop_mode),

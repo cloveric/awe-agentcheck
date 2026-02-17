@@ -23,7 +23,7 @@
 
 <p align="center">
   <b>面向真实工程问题的多智能体协作引擎。</b><br/>
-  <sub>协调 Claude、Codex 及其他 CLI 智能体，完成故障诊断、修复实现、交叉评审，并持续推动代码库自我进化。</sub>
+  <sub>协调 Claude、Codex、Gemini 及其他 CLI 智能体，以 reviewer-first 共识循环完成故障诊断、修复实现、交叉评审，并持续推动代码库自我进化。</sub>
 </p>
 <p align="center">
   <sub><b>低风险改名模式：</b>展示名使用 <code>AWE-AgentForge</code>，运行/包标识仍保持 <code>awe-agentcheck</code> / <code>awe_agentcheck</code> 以兼容现有脚本。</sub>
@@ -68,6 +68,24 @@
    - 即使当前无活跃任务，项目下拉也会包含历史项目。
 10. 启动默认改为本地持久化：
    - 当未设置 `AWE_DATABASE_URL` 时，`scripts/start_api.ps1` 与夜跑脚本默认使用本地 SQLite 持久库。
+11. 新增显式修复策略模式（全链路）：
+   - `repair_mode`: `minimal` / `balanced` / `structural`
+   - 已接入 Web 表单、API、CLI、任务元数据与工作流提示词。
+12. 审阅者容错能力增强：
+   - 单个审阅者运行失败（例如 Gemini `provider_limit`）不再直接把整任务打成 `failed_system`。
+   - 现在会记录 `review_error` / `proposal_review_error`，将该审阅者降级为 `unknown`，并继续门禁/人工决策流程。
+13. 新增 `plain_mode`（默认开启）：
+   - 开启时：对话输出更偏小白可读、减少术语噪音
+   - 关闭时：保留原始技术风格输出。
+14. 明确 reviewer-first 语义：
+   - 当 `debate_mode=1` 时，先由审阅者做预审，再由作者基于反馈修订方案。
+   - 最终代码实现仍由作者执行，审阅者不直接写入最终改动。
+15. 手动模式语义收紧：
+   - 在 `self_loop_mode=0` 下，`max_rounds` 表示“提案共识轮次目标”，不再是单次讨论上限。
+   - 若审阅者在限定重试内仍无法达成共识，任务以 `failed_gate`（`proposal_consensus_not_reached`）结束。
+16. 新增提案阶段可观测事件：
+   - `proposal_precheck_review*`
+   - `proposal_consensus_reached` / `proposal_consensus_retry` / `proposal_consensus_failed`
 
 <br/>
 
@@ -200,12 +218,14 @@ queued → running → waiting_manual → (approve) → queued → running → p
                                   → (reject)  → canceled
 ```
 
+这里的 `running` 在手动模式下表示“提案共识阶段”（`debate_mode=1` 时先 reviewer-first 预审），达标后才进入 `waiting_manual`。
+
 ### 三大控制参数
 
 | 参数 | 可选值 | 默认值 | 作用 |
 |:---|:---:|:---:|:---|
 | `sandbox_mode` | `0` / `1` | **`1`** | `1` = 在隔离的 `*-lab` 副本中运行；`0` = 直接在主工作区运行 |
-| `self_loop_mode` | `0` / `1` | **`0`** | `0` = 讨论后暂停等待作者确认；`1` = 全自动端到端运行 |
+| `self_loop_mode` | `0` / `1` | **`0`** | `0` = 先跑提案共识轮，再暂停等待确认；`1` = 全自动实现/审查循环 |
 | `auto_merge` | `0` / `1` | **`1`** | `1` = 通过后自动合并变更 + 生成变更日志；`0` = 结果保留在沙盒中 |
 
 > [!TIP]
@@ -374,10 +394,14 @@ http://localhost:8000/
 | `Claude/Codex/Gemini Model Params` | 每个提供者的附加参数（可选） | Codex 建议 `-c model_reasoning_effort=xhigh` |
 | `Claude Team Agents` | 是否启用 Claude `--agents` 模式 | `0`（关闭） |
 | `Evolution Level` | `0`仅修复，`1`引导进化，`2`主动进化 | 先用 `0` |
-| `Max Rounds` | 未设置截止时间时的轮次上限兜底 | `3` |
+| `Repair Mode` | `minimal` / `balanced` / `structural` | 建议先用 `balanced` |
+| `Max Rounds` | `self_loop_mode=0` 时为共识轮目标；`self_loop_mode=1` 时为无截止时间的重试上限 | `1` |
 | `Evolve Until` | 可选截止时间（`YYYY-MM-DD HH:MM`） | 非夜跑可留空 |
 | `Max Rounds` + `Evolve Until` | 优先级规则 | 若设置了 `Evolve Until`，以截止时间为准；为空时才使用 `Max Rounds` |
 | `Conversation Language` | 对话输出语言（`en` / `zh`） | 英文日志优先选 `English`，中文协作选 `中文` |
+| `Plain Mode` | 小白可读输出模式（`1` 开 / `0` 关） | 建议先用 `1` |
+| `Stream Mode` | 参与者 stdout/stderr 实时流输出（`1` 开 / `0` 关） | 建议先用 `1` |
+| `Debate Mode` | 启用 reviewer-first 预审/辩论阶段（`1` 开 / `0` 关） | 建议先用 `1` |
 | `Sandbox Mode` | `1`沙盒 / `0`主仓 | 安全起见用 `1` |
 | `Sandbox Workspace Path` | 自定义沙盒路径 | 建议留空（自动每任务独立） |
 | `Self Loop Mode` | `0`手动审批 / `1`全自动 | 先用 `0` |
@@ -414,8 +438,8 @@ UI 策略说明：当 `Sandbox Mode = 0` 时，面板会强制 `Auto Merge = 0` 
 ```powershell
 py -m awe_agentcheck.cli run `
   --task "修复登录验证的bug" `
-  --author "claude#author-A" `
-  --reviewer "codex#review-B" `
+  --author "codex#author-A" `
+  --reviewer "claude#review-B" `
   --conversation-language zh `
   --workspace-path "." `
   --auto-start
@@ -423,10 +447,10 @@ py -m awe_agentcheck.cli run `
 
 这个命令会：
 1. 创建标题为 "修复登录验证的bug" 的任务
-2. 指定 Claude 为作者，Codex 为审阅者
+2. 指定 Codex 为作者，Claude 为审阅者
 3. 使用默认策略（`sandbox_mode=1`, `self_loop_mode=0`, `auto_merge=1`）
 4. 立即启动任务（`--auto-start`）
-5. 由于 `self_loop_mode=0`，系统会先运行讨论，然后在 `waiting_manual` 暂停等待你的确认
+5. 由于 `self_loop_mode=0`，系统会先跑 reviewer-first 提案共识轮，然后在 `waiting_manual` 暂停等待你的确认
 
 ### 第 6 步：审批并执行（手动模式）
 
@@ -493,12 +517,16 @@ py -m awe_agentcheck.cli run `
 | `--auto-merge` / `--no-auto-merge` | 否 | 开启 | 通过后是否自动融合 |
 | `--merge-target-path` | 否 | 项目根目录 | 变更合并回哪个目录 |
 | `--workspace-path` | 否 | `.` | 目标仓库路径 |
-| `--max-rounds` | 否 | `3` | 最大讨论/审查/门禁轮次 |
+| `--max-rounds` | 否 | `3` | 手动模式：共识轮目标；自动模式：无截止时间时的门禁重试上限 |
 | `--test-command` | 否 | `py -m pytest -q` | 测试命令 |
 | `--lint-command` | 否 | `py -m ruff check .` | 代码检查命令 |
 | `--evolution-level` | 否 | `0` | `0` = 仅修复，`1` = 引导进化，`2` = 主动进化 |
+| `--repair-mode` | 否 | `balanced` | 修复策略（`minimal` / `balanced` / `structural`） |
 | `--evolve-until` | 否 | — | 进化截止时间（如 `2026-02-13 06:00`） |
 | `--conversation-language` | 否 | `en` | 智能体输出语言（`en` 或 `zh`） |
+| `--plain-mode` / `--no-plain-mode` | 否 | 开启 | 开关小白可读输出模式 |
+| `--stream-mode` / `--no-stream-mode` | 否 | 开启 | 开关实时流事件输出 |
+| `--debate-mode` / `--no-debate-mode` | 否 | 开启 | 开关 reviewer-first 预审/辩论阶段 |
 | `--provider-model` | 否 | — | 按提供者指定模型，格式 `provider=model`（可重复） |
 | `--provider-model-param` | 否 | — | 按提供者传递额外参数，格式 `provider=args`（可重复） |
 | `--claude-team-agents` | 否 | `0` | `1` 时为 Claude 参与者启用 `--agents` 模式 |
@@ -597,8 +625,8 @@ py -m awe_agentcheck.cli run `
 
 流程说明：
 1. 系统创建隔离沙盒工作区（`awe-agentcheck-lab/20260213-...`）
-2. Claude（作者）生成实现方案
-3. Codex 和 Claude（审阅者）评估方案
+2. 审阅者先进行预审并挑战方案（reviewer-first 阶段）
+3. 作者修订方案后，审阅者再次评估并确认共识
 4. 任务在 `waiting_manual` 暂停 — 你在 Web UI 中查看
 5. 你批准 → 系统运行实现 → 审阅者审查代码 → 测试 + lint → 门禁决定
 6. 如果通过：变更自动合并回主工作区，附带变更日志
@@ -746,7 +774,7 @@ POST /api/tasks
 | 能力 | 说明 | 状态 |
 |:---|:---|:---:|
 | **沙盒优先执行** | 默认 `sandbox_mode=1`，运行在 `*-lab` 工作区，自动生成每任务隔离沙盒 | `GA` |
-| **作者确认门** | 默认 `self_loop_mode=0`，实现前进入 `waiting_manual` | `GA` |
+| **作者确认门** | 默认 `self_loop_mode=0`，在 reviewer-first 提案共识轮后进入 `waiting_manual` | `GA` |
 | **全自动自循环** | `self_loop_mode=1`，适合无人值守运行 | `GA` |
 | **自动融合** | 通过后：合并 + `CHANGELOG.auto.md` + 快照 | `GA` |
 | **提供者模型绑定** | 每任务按 `claude` / `codex` / `gemini` 指定模型 | `GA` |
@@ -767,15 +795,19 @@ POST /api/tasks
 推荐大多数场景使用：
 
 1. **创建任务** → 状态变为 `queued`
-2. **启动任务** → 系统检测到手动模式，运行**讨论阶段**：
-   - 作者（如 Claude）生成实现方案
-   - 审阅者评估方案并标记阻塞项
-3. **等待人工** → 状态变为 `waiting_manual`，任务暂停
-4. **作者决定**：
+2. **启动任务** → 系统运行提案共识轮：
+   - 若 `debate_mode=1`，先由审阅者做预审（`proposal_precheck_review`）
+   - 作者基于反馈修订提案
+   - 审阅者进行提案评审（`proposal_review`）
+3. **共识规则**：
+   - 仅当所有必需审阅者都给出通过级结论时，才计为一轮共识完成
+   - 每轮有有限重试；若仍无法对齐，则任务以 `failed_gate`（`proposal_consensus_not_reached`）结束
+4. **等待人工** → 达到目标共识轮后，状态变为 `waiting_manual`
+5. **作者决定**：
    - **批准** → 状态变为 `queued`（原因为 `author_approved`），然后立即重新启动进入完整工作流
    - **拒绝** → 状态变为 `canceled`
-5. **完整工作流** 运行：讨论 → 实现 → 审查 → 验证（测试 + lint）→ 门禁决定
-6. **门禁结果**：
+6. **完整工作流** 运行：reviewer-first 辩论（可选）→ 作者讨论 → 作者实现 → 审阅者审查 → 验证（测试 + lint）→ 门禁决定
+7. **门禁结果**：
    - **通过** → `passed` → 自动融合（合并 + 变更日志 + 快照 + 沙盒清理）
    - **失败** → 重试下一轮；若设置 `Evolve Until` 则由截止时间控制，否则由 `max_rounds` 控制，最终 `failed_gate`
 
@@ -785,7 +817,7 @@ POST /api/tasks
 
 1. **创建任务** → `queued`
 2. **启动任务** → 直接进入完整工作流（无手动检查点）
-3. **第 1..N 轮**：讨论 → 实现 → 审查 → 验证 → 门禁
+3. **第 1..N 轮**：reviewer-first 辩论（可选）→ 作者讨论 → 作者实现 → 审查 → 验证 → 门禁
 4. **门禁结果**：
    - **通过** → `passed` → 自动融合
    - **失败** → 持续重试，直到达到 `Evolve Until`（若设置）或 `max_rounds`（未设置截止时间）→ `failed_gate`

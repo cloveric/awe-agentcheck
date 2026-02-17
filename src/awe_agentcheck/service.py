@@ -36,6 +36,10 @@ class CreateTaskInput:
     provider_models: dict[str, str] | None = None
     provider_model_params: dict[str, str] | None = None
     claude_team_agents: bool = False
+    repair_mode: str = 'balanced'
+    plain_mode: bool = True
+    stream_mode: bool = True
+    debate_mode: bool = True
     sandbox_mode: bool = True
     sandbox_workspace_path: str | None = None
     sandbox_cleanup_on_pass: bool = True
@@ -68,6 +72,10 @@ class TaskView:
     provider_models: dict[str, str]
     provider_model_params: dict[str, str]
     claude_team_agents: bool
+    repair_mode: str
+    plain_mode: bool
+    stream_mode: bool
+    debate_mode: bool
     sandbox_mode: bool
     sandbox_workspace_path: str | None
     sandbox_generated: bool
@@ -131,6 +139,7 @@ _DEFAULT_PROVIDER_MODELS = {
 }
 
 _SUPPORTED_CONVERSATION_LANGUAGES = {'en', 'zh'}
+_SUPPORTED_REPAIR_MODES = {'minimal', 'balanced', 'structural'}
 
 
 def _reason_bucket(reason: str | None) -> str | None:
@@ -211,6 +220,10 @@ class OrchestratorService:
         provider_models = self._normalize_provider_models(payload.provider_models)
         provider_model_params = self._normalize_provider_model_params(payload.provider_model_params)
         claude_team_agents = bool(payload.claude_team_agents)
+        repair_mode = self._normalize_repair_mode(payload.repair_mode, strict=True)
+        plain_mode = self._normalize_plain_mode(payload.plain_mode)
+        stream_mode = self._normalize_bool_flag(payload.stream_mode, default=True)
+        debate_mode = self._normalize_bool_flag(payload.debate_mode, default=True)
         sandbox_mode = bool(payload.sandbox_mode)
         self_loop_mode = max(0, min(1, int(payload.self_loop_mode)))
         sandbox_cleanup_on_pass = bool(payload.sandbox_cleanup_on_pass)
@@ -251,6 +264,10 @@ class OrchestratorService:
             provider_models=provider_models,
             provider_model_params=provider_model_params,
             claude_team_agents=claude_team_agents,
+            repair_mode=repair_mode,
+            plain_mode=plain_mode,
+            stream_mode=stream_mode,
+            debate_mode=debate_mode,
             sandbox_mode=sandbox_mode,
             sandbox_workspace_path=sandbox_workspace_path,
             sandbox_generated=sandbox_generated,
@@ -275,6 +292,10 @@ class OrchestratorService:
                 'provider_models': dict(row.get('provider_models', {})),
                 'provider_model_params': dict(row.get('provider_model_params', {})),
                 'claude_team_agents': bool(row.get('claude_team_agents', False)),
+                'repair_mode': str(row.get('repair_mode') or 'balanced'),
+                'plain_mode': bool(row.get('plain_mode', True)),
+                'stream_mode': bool(row.get('stream_mode', True)),
+                'debate_mode': bool(row.get('debate_mode', True)),
                 'sandbox_mode': bool(row.get('sandbox_mode', False)),
                 'sandbox_workspace_path': row.get('sandbox_workspace_path'),
                 'sandbox_generated': bool(row.get('sandbox_generated', False)),
@@ -541,7 +562,16 @@ class OrchestratorService:
             if len(findings) >= 3:
                 return findings
 
-        interesting = {'gate_failed', 'gate_passed', 'manual_gate', 'review', 'proposal_review', 'discussion'}
+        interesting = {
+            'gate_failed',
+            'gate_passed',
+            'manual_gate',
+            'review',
+            'proposal_review',
+            'discussion',
+            'debate_review',
+            'debate_reply',
+        }
         for event in events:
             etype = str(event.get('type') or '').strip().lower()
             if etype not in interesting:
@@ -945,7 +975,7 @@ class OrchestratorService:
             event_type = str(event.get('type', ''))
             content = str(event.get('output', '')).strip()
             round_no = int(event.get('round', 0) or 0)
-            if event_type in {'discussion', 'implementation', 'review'} and content:
+            if event_type in {'discussion', 'implementation', 'review', 'debate_review', 'debate_reply'} and content:
                 role = event_type
                 participant = event.get('participant') or event.get('provider') or role
                 self.artifact_store.append_discussion(
@@ -977,6 +1007,10 @@ class OrchestratorService:
                     provider_models=dict(row.get('provider_models', {})),
                     provider_model_params=dict(row.get('provider_model_params', {})),
                     claude_team_agents=bool(row.get('claude_team_agents', False)),
+                    repair_mode=self._normalize_repair_mode(row.get('repair_mode')),
+                    plain_mode=self._normalize_plain_mode(row.get('plain_mode')),
+                    stream_mode=self._normalize_bool_flag(row.get('stream_mode', True), default=True),
+                    debate_mode=self._normalize_bool_flag(row.get('debate_mode', True), default=True),
                     cwd=Path(str(row.get('workspace_path') or Path.cwd())),
                     max_rounds=int(row['max_rounds']),
                     test_command=row['test_command'],
@@ -1165,6 +1199,8 @@ class OrchestratorService:
             "Generated proposal requires author approval before implementation."
         )
         review_payload: list[dict] = []
+        consensus_rounds = 0
+        target_rounds = max(1, int(row.get('max_rounds', 1)))
 
         try:
             runner = getattr(self.workflow_engine, 'runner', None)
@@ -1183,6 +1219,10 @@ class OrchestratorService:
                 provider_models=dict(row.get('provider_models', {})),
                 provider_model_params=dict(row.get('provider_model_params', {})),
                 claude_team_agents=bool(row.get('claude_team_agents', False)),
+                repair_mode=self._normalize_repair_mode(row.get('repair_mode')),
+                plain_mode=self._normalize_plain_mode(row.get('plain_mode')),
+                stream_mode=self._normalize_bool_flag(row.get('stream_mode', True), default=True),
+                debate_mode=self._normalize_bool_flag(row.get('debate_mode', True), default=True),
                 cwd=Path(str(row.get('workspace_path') or Path.cwd())),
                 max_rounds=int(row.get('max_rounds', 3)),
                 test_command=str(row.get('test_command', 'py -m pytest -q')),
@@ -1191,98 +1231,256 @@ class OrchestratorService:
 
             discussion_text = str(row.get('description') or '').strip()
             if runner is not None:
-                discussion_started = {
-                    'type': 'proposal_discussion_started',
-                    'round': 1,
-                    'provider': author.provider,
-                    'participant': author.participant_id,
-                    'timeout_seconds': timeout,
-                }
-                self.repository.append_event(
-                    task_id,
-                    event_type='proposal_discussion_started',
-                    payload=discussion_started,
-                    round_number=1,
-                )
-                self.artifact_store.append_event(task_id, discussion_started)
-                discussion = runner.run(
-                    participant=author,
-                    prompt=WorkflowEngine._discussion_prompt(config, 1, None),
-                    cwd=config.cwd,
-                    timeout_seconds=timeout,
-                    model=(config.provider_models or {}).get(author.provider),
-                    model_params=(config.provider_model_params or {}).get(author.provider),
-                    claude_team_agents=bool(config.claude_team_agents),
-                )
-                discussion_text = str(discussion.output or '').strip() or discussion_text
-                if discussion_text:
-                    discussion_event = {
-                        'type': 'discussion',
-                        'round': 1,
-                        'provider': author.provider,
-                        'output': discussion_text,
-                    }
-                    self.repository.append_event(
-                        task_id,
-                        event_type='discussion',
-                        payload=discussion_event,
-                        round_number=1,
-                    )
-                    self.artifact_store.append_event(task_id, discussion_event)
-                    self.artifact_store.append_discussion(
-                        task_id,
-                        role=f'discussion:{author.participant_id}',
-                        round_number=1,
-                        content=discussion_text,
-                    )
-
-                for reviewer in reviewers:
-                    review_started = {
-                        'type': 'proposal_review_started',
-                        'round': 1,
-                        'participant': reviewer.participant_id,
-                        'timeout_seconds': timeout,
-                    }
-                    self.repository.append_event(
-                        task_id,
-                        event_type='proposal_review_started',
-                        payload=review_started,
-                        round_number=1,
-                    )
-                    self.artifact_store.append_event(task_id, review_started)
-                    review = runner.run(
-                        participant=reviewer,
-                        prompt=self._proposal_review_prompt(config, discussion_text),
-                        cwd=config.cwd,
-                        timeout_seconds=timeout,
-                        model=(config.provider_models or {}).get(reviewer.provider),
-                        model_params=(config.provider_model_params or {}).get(reviewer.provider),
-                        claude_team_agents=bool(config.claude_team_agents),
-                    )
-                    verdict = WorkflowEngine._normalize_verdict(str(getattr(review, 'verdict', '') or ''))
-                    review_text = str(getattr(review, 'output', '') or '').strip()
-                    payload = {
-                        'type': 'proposal_review',
-                        'round': 1,
-                        'participant': reviewer.participant_id,
-                        'verdict': verdict.value,
-                        'output': review_text,
-                    }
-                    review_payload.append(payload)
-                    self.repository.append_event(
-                        task_id,
-                        event_type='proposal_review',
-                        payload=payload,
-                        round_number=1,
-                    )
-                    self.artifact_store.append_event(task_id, payload)
-                    if review_text:
-                        self.artifact_store.append_discussion(
+                def run_proposal_reviewer_pass(
+                    source_text: str,
+                    *,
+                    round_no: int,
+                    stage: str,
+                ) -> tuple[list[dict], str]:
+                    payloads: list[dict] = []
+                    merged_context = str(source_text or '').strip()
+                    for reviewer in reviewers:
+                        started_type = f'{stage}_started'
+                        error_type = f'{stage}_error'
+                        review_started = {
+                            'type': started_type,
+                            'round': round_no,
+                            'participant': reviewer.participant_id,
+                            'provider': reviewer.provider,
+                            'timeout_seconds': timeout,
+                        }
+                        self.repository.append_event(
                             task_id,
-                            role=f'proposal_review:{reviewer.participant_id}',
-                            round_number=1,
-                            content=review_text,
+                            event_type=started_type,
+                            payload=review_started,
+                            round_number=round_no,
                         )
+                        self.artifact_store.append_event(task_id, review_started)
+                        try:
+                            review = runner.run(
+                                participant=reviewer,
+                                prompt=self._proposal_review_prompt(config, merged_context),
+                                cwd=config.cwd,
+                                timeout_seconds=timeout,
+                                model=(config.provider_models or {}).get(reviewer.provider),
+                                model_params=(config.provider_model_params or {}).get(reviewer.provider),
+                                claude_team_agents=bool(config.claude_team_agents),
+                            )
+                            verdict = WorkflowEngine._normalize_verdict(str(getattr(review, 'verdict', '') or ''))
+                            review_text = str(getattr(review, 'output', '') or '').strip()
+                        except Exception as exc:
+                            reason = str(exc or 'review_failed').strip() or 'review_failed'
+                            error_payload = {
+                                'type': error_type,
+                                'round': round_no,
+                                'participant': reviewer.participant_id,
+                                'provider': reviewer.provider,
+                                'reason': reason,
+                            }
+                            self.repository.append_event(
+                                task_id,
+                                event_type=error_type,
+                                payload=error_payload,
+                                round_number=round_no,
+                            )
+                            self.artifact_store.append_event(task_id, error_payload)
+                            verdict = ReviewVerdict.UNKNOWN
+                            review_text = f'[{error_type}] {reason}'
+                        payload = {
+                            'type': stage,
+                            'round': round_no,
+                            'participant': reviewer.participant_id,
+                            'provider': reviewer.provider,
+                            'verdict': verdict.value,
+                            'output': review_text,
+                        }
+                        payloads.append(payload)
+                        self.repository.append_event(
+                            task_id,
+                            event_type='proposal_review',
+                            payload=payload,
+                            round_number=1,
+                        )
+                        self.artifact_store.append_event(task_id, payload)
+                        if review_text:
+                            self.artifact_store.append_discussion(
+                                task_id,
+                                role=f'{stage}:{reviewer.participant_id}',
+                                round_number=round_no,
+                                content=review_text,
+                            )
+                        merged_context = self._append_proposal_feedback_context(
+                            merged_context,
+                            reviewer_id=reviewer.participant_id,
+                            review_text=review_text,
+                        )
+                    return payloads, merged_context
+
+                proposal_seed = discussion_text or str(row.get('title') or '').strip()
+                current_seed = proposal_seed
+                reviewer_first_mode = bool(config.debate_mode) and bool(reviewers)
+                max_alignment_attempts = 3
+
+                while consensus_rounds < target_rounds:
+                    round_no = consensus_rounds + 1
+                    attempt = 0
+                    consensus_reached = False
+                    round_latest_reviews: list[dict] = []
+                    round_latest_proposal = current_seed
+
+                    while attempt < max_alignment_attempts and not consensus_reached:
+                        attempt += 1
+                        pre_reviews: list[dict] = []
+                        merged_context = current_seed
+                        if reviewer_first_mode:
+                            pre_reviews, merged_context = run_proposal_reviewer_pass(
+                                merged_context,
+                                round_no=round_no,
+                                stage='proposal_precheck_review',
+                            )
+
+                        discussion_started = {
+                            'type': 'proposal_discussion_started',
+                            'round': round_no,
+                            'provider': author.provider,
+                            'participant': author.participant_id,
+                            'timeout_seconds': timeout,
+                            'attempt': attempt,
+                        }
+                        self.repository.append_event(
+                            task_id,
+                            event_type='proposal_discussion_started',
+                            payload=discussion_started,
+                            round_number=round_no,
+                        )
+                        self.artifact_store.append_event(task_id, discussion_started)
+
+                        discussion_prompt = (
+                            self._proposal_author_prompt(config, merged_context, pre_reviews)
+                            if reviewer_first_mode
+                            else WorkflowEngine._discussion_prompt(config, round_no, None)
+                        )
+                        discussion = runner.run(
+                            participant=author,
+                            prompt=discussion_prompt,
+                            cwd=config.cwd,
+                            timeout_seconds=timeout,
+                            model=(config.provider_models or {}).get(author.provider),
+                            model_params=(config.provider_model_params or {}).get(author.provider),
+                            claude_team_agents=bool(config.claude_team_agents),
+                        )
+                        discussion_text = str(discussion.output or '').strip() or current_seed
+                        round_latest_proposal = discussion_text
+                        if discussion_text:
+                            discussion_event = {
+                                'type': 'discussion',
+                                'round': round_no,
+                                'participant': author.participant_id,
+                                'provider': author.provider,
+                                'attempt': attempt,
+                                'output': discussion_text,
+                            }
+                            self.repository.append_event(
+                                task_id,
+                                event_type='discussion',
+                                payload=discussion_event,
+                                round_number=round_no,
+                            )
+                            self.artifact_store.append_event(task_id, discussion_event)
+                            self.artifact_store.append_discussion(
+                                task_id,
+                                role=f'discussion:{author.participant_id}',
+                                round_number=round_no,
+                                content=discussion_text,
+                            )
+
+                        round_latest_reviews, merged_after_review = run_proposal_reviewer_pass(
+                            discussion_text,
+                            round_no=round_no,
+                            stage='proposal_review',
+                        )
+                        review_payload = list(round_latest_reviews)
+                        no_blocker, blocker, unknown = self._proposal_verdict_counts(round_latest_reviews)
+                        if self._proposal_consensus_reached(round_latest_reviews, expected_reviewers=len(reviewers)):
+                            consensus_reached = True
+                            consensus_rounds += 1
+                            current_seed = round_latest_proposal
+                            ok_payload = {
+                                'round': round_no,
+                                'attempt': attempt,
+                                'verdicts': {
+                                    'no_blocker': no_blocker,
+                                    'blocker': blocker,
+                                    'unknown': unknown,
+                                },
+                                'consensus_rounds': consensus_rounds,
+                                'target_rounds': target_rounds,
+                            }
+                            self.repository.append_event(
+                                task_id,
+                                event_type='proposal_consensus_reached',
+                                payload=ok_payload,
+                                round_number=round_no,
+                            )
+                            self.artifact_store.append_event(task_id, {'type': 'proposal_consensus_reached', **ok_payload})
+                        else:
+                            retry_payload = {
+                                'round': round_no,
+                                'attempt': attempt,
+                                'verdicts': {
+                                    'no_blocker': no_blocker,
+                                    'blocker': blocker,
+                                    'unknown': unknown,
+                                },
+                            }
+                            self.repository.append_event(
+                                task_id,
+                                event_type='proposal_consensus_retry',
+                                payload=retry_payload,
+                                round_number=round_no,
+                            )
+                            self.artifact_store.append_event(task_id, {'type': 'proposal_consensus_retry', **retry_payload})
+                            current_seed = self._append_proposal_feedback_context(
+                                merged_after_review,
+                                reviewer_id='consensus',
+                                review_text=f'unresolved blockers={blocker}, unknown={unknown}',
+                            )
+
+                    if not consensus_reached:
+                        fail_reason = 'proposal_consensus_not_reached'
+                        failed = self.repository.update_task_status(
+                            task_id,
+                            status=TaskStatus.FAILED_GATE.value,
+                            reason=fail_reason,
+                            rounds_completed=consensus_rounds,
+                        )
+                        failed_payload = {
+                            'round': round_no,
+                            'attempts': max_alignment_attempts,
+                            'consensus_rounds': consensus_rounds,
+                            'target_rounds': target_rounds,
+                            'latest_proposal': WorkflowEngine._clip_text(round_latest_proposal, max_chars=1200),
+                            'latest_reviews': round_latest_reviews,
+                        }
+                        self.repository.append_event(
+                            task_id,
+                            event_type='proposal_consensus_failed',
+                            payload=failed_payload,
+                            round_number=round_no,
+                        )
+                        self.artifact_store.append_event(task_id, {'type': 'proposal_consensus_failed', **failed_payload})
+                        self.artifact_store.update_state(
+                            task_id,
+                            {
+                                'status': TaskStatus.FAILED_GATE.value,
+                                'last_gate_reason': fail_reason,
+                                'rounds_completed': consensus_rounds,
+                            },
+                        )
+                        self.artifact_store.write_final_report(task_id, f'status=failed_gate\nreason={fail_reason}')
+                        return self._to_view(failed)
+
+                discussion_text = current_seed
 
             proposal_preview = WorkflowEngine._clip_text(discussion_text, max_chars=1200).strip()
             no_blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value)
@@ -1290,6 +1488,7 @@ class OrchestratorService:
             unknown = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.UNKNOWN.value)
             summary = (
                 f"Task: {str(row.get('title') or '')}\n"
+                f"Consensus rounds: {consensus_rounds}/{target_rounds}\n"
                 f"Proposal verdicts: no_blocker={no_blocker}, blocker={blocker}, unknown={unknown}\n"
                 f"Proposal:\n{proposal_preview}"
             )
@@ -1300,11 +1499,13 @@ class OrchestratorService:
             task_id,
             status=TaskStatus.WAITING_MANUAL.value,
             reason='author_confirmation_required',
-            rounds_completed=row.get('rounds_completed', 0),
+            rounds_completed=consensus_rounds,
         )
         pending_payload = {
             'summary': summary,
             'self_loop_mode': int(row.get('self_loop_mode', 0)),
+            'consensus_rounds': consensus_rounds,
+            'target_rounds': target_rounds,
             'review_payload': review_payload,
         }
         self.repository.append_event(
@@ -1398,6 +1599,37 @@ class OrchestratorService:
                 raise ValueError(f'invalid conversation_language: {text}')
             return 'en'
         return normalized
+
+    @staticmethod
+    def _normalize_repair_mode(value, *, strict: bool = False) -> str:
+        text = str(value or '').strip().lower()
+        if not text:
+            return 'balanced'
+        if text not in _SUPPORTED_REPAIR_MODES:
+            if strict:
+                raise ValueError(f'invalid repair_mode: {text}')
+            return 'balanced'
+        return text
+
+    @staticmethod
+    def _normalize_plain_mode(value) -> bool:
+        text = str(value).strip().lower()
+        if text in {'0', 'false', 'no', 'off'}:
+            return False
+        if text in {'1', 'true', 'yes', 'on'}:
+            return True
+        return bool(value)
+
+    @staticmethod
+    def _normalize_bool_flag(value, *, default: bool) -> bool:
+        text = str(value).strip().lower()
+        if text in {'0', 'false', 'no', 'off'}:
+            return False
+        if text in {'1', 'true', 'yes', 'on'}:
+            return True
+        if text in {'', 'none'}:
+            return bool(default)
+        return bool(value)
 
     @staticmethod
     def _normalize_provider_models(value: dict[str, str] | None) -> dict[str, str]:
@@ -1564,15 +1796,61 @@ class OrchestratorService:
     def _proposal_review_prompt(config: RunConfig, discussion_output: str) -> str:
         clipped = WorkflowEngine._clip_text(discussion_output, max_chars=2500)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
+        plain_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
         return (
             f"Task: {config.title}\n"
             "You are reviewing a proposed implementation plan before code changes.\n"
             "Mark BLOCKER only for correctness, regression, security, or data-loss risks.\n"
             f"{language_instruction}\n"
+            f"{plain_instruction}\n"
             "Output one line: VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN.\n"
             "Then provide concise rationale and critical risks.\n"
             f"Plan:\n{clipped}\n"
         )
+
+    @staticmethod
+    def _proposal_author_prompt(config: RunConfig, merged_context: str, review_payload: list[dict]) -> str:
+        clipped = WorkflowEngine._clip_text(merged_context, max_chars=3200)
+        language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
+        plain_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
+        no_blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value)
+        blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.BLOCKER.value)
+        unknown = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.UNKNOWN.value)
+        return (
+            f"Task: {config.title}\n"
+            "You are the author responding to reviewer-first proposal feedback.\n"
+            f"{language_instruction}\n"
+            f"{plain_instruction}\n"
+            f"Reviewer verdict snapshot: no_blocker={no_blocker}, blocker={blocker}, unknown={unknown}\n"
+            "Produce an updated implementation proposal for manual approval.\n"
+            "Address reviewer concerns explicitly and keep plan incremental.\n"
+            "Do not ask follow-up questions.\n"
+            f"Context:\n{clipped}\n"
+        )
+
+    @staticmethod
+    def _append_proposal_feedback_context(base_text: str, *, reviewer_id: str, review_text: str) -> str:
+        seed = str(base_text or '').strip()
+        note = str(review_text or '').strip()
+        if not note:
+            return seed
+        merged = f"{seed}\n\n[reviewer:{reviewer_id}]\n{note}".strip()
+        return WorkflowEngine._clip_text(merged, max_chars=4500)
+
+    @staticmethod
+    def _proposal_verdict_counts(review_payload: list[dict]) -> tuple[int, int, int]:
+        no_blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value)
+        blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.BLOCKER.value)
+        unknown = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.UNKNOWN.value)
+        return no_blocker, blocker, unknown
+
+    @staticmethod
+    def _proposal_consensus_reached(review_payload: list[dict], *, expected_reviewers: int) -> bool:
+        if expected_reviewers <= 0:
+            return True
+        if len(review_payload) < expected_reviewers:
+            return False
+        return all(str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value for item in review_payload[:expected_reviewers])
 
     @staticmethod
     def _resolve_merge_target(row: dict) -> Path:
@@ -1595,6 +1873,10 @@ class OrchestratorService:
             provider_models={str(k): str(v) for k, v in dict(row.get('provider_models', {})).items()},
             provider_model_params={str(k): str(v) for k, v in dict(row.get('provider_model_params', {})).items()},
             claude_team_agents=bool(row.get('claude_team_agents', False)),
+            repair_mode=OrchestratorService._normalize_repair_mode(row.get('repair_mode')),
+            plain_mode=OrchestratorService._normalize_plain_mode(row.get('plain_mode', True)),
+            stream_mode=OrchestratorService._normalize_bool_flag(row.get('stream_mode', True), default=True),
+            debate_mode=OrchestratorService._normalize_bool_flag(row.get('debate_mode', True), default=True),
             sandbox_mode=bool(row.get('sandbox_mode', False)),
             sandbox_workspace_path=(str(row.get('sandbox_workspace_path')).strip() if row.get('sandbox_workspace_path') else None),
             sandbox_generated=bool(row.get('sandbox_generated', False)),

@@ -14,6 +14,7 @@ class FakeRunner:
         self.calls = 0
         self.timeouts: list[int] = []
         self.prompts: list[str] = []
+        self.participants: list[str] = []
         self.call_options: list[dict] = []
 
     def run(self, *, participant, prompt, cwd, timeout_seconds=900, **kwargs):
@@ -21,6 +22,7 @@ class FakeRunner:
         self.calls += 1
         self.timeouts.append(timeout_seconds)
         self.prompts.append(prompt)
+        self.participants.append(str(getattr(participant, 'participant_id', '')))
         self.call_options.append(dict(kwargs))
         return self.outputs[idx]
 
@@ -36,6 +38,31 @@ class FakeCommandExecutor:
         if 'pytest' in command:
             return CommandResult(ok=self.tests_ok, command=command, returncode=0 if self.tests_ok else 1, stdout='', stderr='')
         return CommandResult(ok=self.lint_ok, command=command, returncode=0 if self.lint_ok else 1, stdout='', stderr='')
+
+
+class ReviewerFailureRunner:
+    def __init__(self):
+        self.calls = 0
+
+    def run(self, *, participant, prompt, cwd, timeout_seconds=900, **kwargs):
+        self.calls += 1
+        if participant.participant_id == 'gemini#review-C':
+            raise RuntimeError('provider_limit provider=gemini command=gemini -m gemini-3-pro-preview')
+        return _ok_result('no_blocker')
+
+
+class StreamingRunner:
+    def __init__(self, outputs: list[AdapterResult]):
+        self.outputs = outputs
+        self.calls = 0
+
+    def run(self, *, participant, prompt, cwd, timeout_seconds=900, **kwargs):
+        callback = kwargs.get('on_stream')
+        if callable(callback):
+            callback('stdout', f'{participant.participant_id}: stream-line\n')
+        idx = min(self.calls, len(self.outputs) - 1)
+        self.calls += 1
+        return self.outputs[idx]
 
 
 class EventSink:
@@ -473,3 +500,146 @@ def test_workflow_passes_provider_model_params_to_runner(tmp_path: Path):
     assert runner.call_options[0].get('model_params') == '-c model_reasoning_effort=high'
     assert runner.call_options[1].get('model_params') == '-c model_reasoning_effort=high'
     assert runner.call_options[2].get('model_params') == '--approval-mode yolo'
+
+
+def test_workflow_degrades_reviewer_exception_to_unknown_instead_of_crashing(tmp_path: Path):
+    runner = ReviewerFailureRunner()
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-reviewer-fail',
+            title='Reviewer failure resilience',
+            description='gemini may fail intermittently',
+            author=parse_participant_id('codex#author-A'),
+            reviewers=[parse_participant_id('claude#review-B'), parse_participant_id('gemini#review-C')],
+            evolution_level=0,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'failed_gate'
+    assert result.gate_reason == 'review_unknown'
+    assert any(e['type'] == 'review_error' and e.get('participant') == 'gemini#review-C' for e in sink.events)
+    assert any(
+        e['type'] == 'review' and e.get('participant') == 'gemini#review-C' and e.get('verdict') == 'unknown'
+        for e in sink.events
+    )
+
+
+def test_workflow_prompts_include_repair_mode_guidance(tmp_path: Path):
+    cfg = RunConfig(
+        task_id='t-repair',
+        title='Repair mode prompt',
+        description='verify prompt policy',
+        author=parse_participant_id('claude#author-A'),
+        reviewers=[parse_participant_id('codex#review-B')],
+        evolution_level=0,
+        evolve_until=None,
+        cwd=tmp_path,
+        max_rounds=1,
+        test_command='py -m pytest -q',
+        lint_command='py -m ruff check .',
+        repair_mode='structural',
+    )
+    prompt = WorkflowEngine._implementation_prompt(cfg, 1, 'plan')
+    assert 'RepairMode: structural' in prompt
+    assert 'structural fix allowed' in prompt.lower()
+
+
+def test_workflow_prompts_include_plain_mode_guidance_by_default(tmp_path: Path):
+    cfg = RunConfig(
+        task_id='t-plain',
+        title='Plain mode prompt',
+        description='verify plain mode policy',
+        author=parse_participant_id('claude#author-A'),
+        reviewers=[parse_participant_id('codex#review-B')],
+        evolution_level=0,
+        evolve_until=None,
+        cwd=tmp_path,
+        max_rounds=1,
+        test_command='py -m pytest -q',
+        lint_command='py -m ruff check .',
+    )
+    prompt = WorkflowEngine._discussion_prompt(cfg, 1, None)
+    assert 'Plain Mode' in prompt
+    assert 'small' in prompt.lower() or 'beginner' in prompt.lower()
+
+
+def test_workflow_debate_mode_adds_reviewer_author_exchange(tmp_path: Path):
+    runner = FakeRunner([
+        _ok_result(),  # debate review
+        _ok_result(),  # discussion
+        _ok_result(),  # implementation
+        _ok_result(),  # gate review
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-debate',
+            title='Debate mode',
+            description='verify reviewer-author exchange',
+            author=parse_participant_id('codex#author-A'),
+            reviewers=[parse_participant_id('claude#review-B')],
+            evolution_level=0,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+            debate_mode=True,
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'passed'
+    assert runner.calls == 4
+    assert runner.participants[0] == 'claude#review-B'
+    assert runner.participants[1] == 'codex#author-A'
+    assert runner.participants[2] == 'codex#author-A'
+    event_types = [str(e.get('type')) for e in sink.events]
+    assert 'debate_started' in event_types
+    assert 'debate_review' in event_types
+    assert 'debate_completed' in event_types
+
+
+def test_workflow_stream_mode_emits_participant_stream_events(tmp_path: Path):
+    runner = StreamingRunner([
+        _ok_result(),  # discussion
+        _ok_result(),  # implementation
+        _ok_result(),  # review
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-stream',
+            title='Stream mode',
+            description='verify streaming events',
+            author=parse_participant_id('claude#author-A'),
+            reviewers=[parse_participant_id('codex#review-B')],
+            evolution_level=0,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+            stream_mode=True,
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'passed'
+    assert any(e.get('type') == 'participant_stream' for e in sink.events)

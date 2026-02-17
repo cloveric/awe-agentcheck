@@ -1,5 +1,19 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-18, reviewer-first + consensus semantics sync)
+
+1. Reviewer-first workflow alignment completed:
+   - autonomous loop (`self_loop_mode=1`) now runs reviewer-first debate/precheck when `debate_mode=1`.
+   - author remains implementation owner; reviewers provide critique and gate decisions.
+2. Manual mode (`self_loop_mode=0`) semantics tightened:
+   - `max_rounds` is interpreted as required proposal consensus rounds.
+   - each round supports bounded alignment retries; repeated misalignment now fails with `proposal_consensus_not_reached`.
+   - `waiting_manual` is entered only after required consensus rounds complete.
+3. Proposal-stage observability expanded:
+   - new event families: `proposal_precheck_review*`, `proposal_consensus_reached`, `proposal_consensus_retry`, `proposal_consensus_failed`.
+4. Documentation sync completed:
+   - `README.md`, `README.zh-CN.md`, `docs/RUNBOOK.md`, `docs/ARCHITECTURE_FLOW.md` updated to match runtime behavior.
+
 ## Update (2026-02-18, docs + repo metadata sync)
 
 1. Synced architecture doc to current runtime:

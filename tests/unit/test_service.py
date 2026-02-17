@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from awe_agentcheck.adapters import AdapterResult
 from awe_agentcheck.repository import InMemoryTaskRepository
 from awe_agentcheck.service import CreateTaskInput, OrchestratorService
 from awe_agentcheck.storage.artifacts import ArtifactStore
@@ -55,6 +56,62 @@ class FakeWorkflowEngineWithFileChange:
         return RunResult(status='passed', rounds=1, gate_reason='passed')
 
 
+class ProposalRunnerWithReviewerFailure:
+    def run(self, *, participant, prompt, cwd, timeout_seconds=900, **kwargs):
+        if participant.participant_id == 'gemini#review-C':
+            raise RuntimeError('provider_limit provider=gemini command=gemini -m gemini-3-pro-preview')
+        if participant.participant_id == 'codex#author-A':
+            return AdapterResult(
+                output='Plan proposal from author',
+                verdict='unknown',
+                next_action=None,
+                returncode=0,
+                duration_seconds=0.1,
+            )
+        return AdapterResult(
+            output='VERDICT: NO_BLOCKER',
+            verdict='no_blocker',
+            next_action=None,
+            returncode=0,
+            duration_seconds=0.1,
+        )
+
+
+class ProposalOnlyWorkflowEngine:
+    def __init__(self):
+        self.runner = ProposalRunnerWithReviewerFailure()
+        self.participant_timeout_seconds = 20
+
+
+class ProposalRunnerOrderProbe:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def run(self, *, participant, prompt, cwd, timeout_seconds=900, **kwargs):
+        self.calls.append(str(participant.participant_id))
+        if str(participant.participant_id).startswith('codex#author'):
+            return AdapterResult(
+                output='Author revised proposal after reviewer-first feedback',
+                verdict='unknown',
+                next_action=None,
+                returncode=0,
+                duration_seconds=0.1,
+            )
+        return AdapterResult(
+            output='VERDICT: NO_BLOCKER\nReviewer notes',
+            verdict='no_blocker',
+            next_action=None,
+            returncode=0,
+            duration_seconds=0.1,
+        )
+
+
+class ProposalOrderWorkflowEngine:
+    def __init__(self):
+        self.runner = ProposalRunnerOrderProbe()
+        self.participant_timeout_seconds = 20
+
+
 def build_service(tmp_path: Path, workflow_engine=None, *, max_concurrent_running_tasks: int = 1) -> OrchestratorService:
     return OrchestratorService(
         repository=InMemoryTaskRepository(),
@@ -84,6 +141,9 @@ def test_service_create_task_sets_queued_status(tmp_path: Path):
     assert task.workspace_path
     assert task.evolution_level == 0
     assert task.evolve_until is None
+    assert task.plain_mode is True
+    assert task.stream_mode is True
+    assert task.debate_mode is True
     assert task.auto_merge is True
     assert task.merge_target_path is None
 
@@ -163,6 +223,56 @@ def test_service_create_task_accepts_conversation_language(tmp_path: Path):
     assert task.conversation_language == 'zh'
 
 
+def test_service_create_task_accepts_repair_mode(tmp_path: Path):
+    svc = build_service(tmp_path)
+    task = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='Repair config',
+            description='structural repair',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            repair_mode='structural',
+        )
+    )
+    assert task.repair_mode == 'structural'
+
+
+def test_service_create_task_accepts_plain_mode_disabled(tmp_path: Path):
+    svc = build_service(tmp_path)
+    task = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='Plain mode config',
+            description='disable plain mode',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            plain_mode=False,
+        )
+    )
+    assert task.plain_mode is False
+
+
+def test_service_create_task_accepts_stream_and_debate_modes_disabled(tmp_path: Path):
+    svc = build_service(tmp_path)
+    task = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='Stream/debate mode config',
+            description='disable stream/debate mode',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            stream_mode=False,
+            debate_mode=False,
+        )
+    )
+    assert task.stream_mode is False
+    assert task.debate_mode is False
+
+
 def test_service_create_task_rejects_invalid_conversation_language(tmp_path: Path):
     svc = build_service(tmp_path)
     with pytest.raises(ValueError, match='invalid conversation_language'):
@@ -175,6 +285,22 @@ def test_service_create_task_rejects_invalid_conversation_language(tmp_path: Pat
                 author_participant='codex#author-A',
                 reviewer_participants=['gemini#review-B'],
                 conversation_language='jp',
+            )
+        )
+
+
+def test_service_create_task_rejects_invalid_repair_mode(tmp_path: Path):
+    svc = build_service(tmp_path)
+    with pytest.raises(ValueError, match='invalid repair_mode'):
+        svc.create_task(
+            CreateTaskInput(
+                sandbox_mode=False,
+                self_loop_mode=1,
+                title='Repair invalid',
+                description='invalid repair mode',
+                author_participant='codex#author-A',
+                reviewer_participants=['gemini#review-B'],
+                repair_mode='aggressive',
             )
         )
 
@@ -1016,6 +1142,70 @@ def test_service_stats_include_recent_rates_and_duration(tmp_path: Path):
     assert stats.failed_gate_rate_50 == 1 / 3
     assert stats.failed_system_rate_50 == 1 / 3
     assert stats.mean_task_duration_seconds_50 == 120.0
+
+
+def test_service_proposal_review_reviewer_failure_degrades_to_unknown(tmp_path: Path):
+    svc = OrchestratorService(
+        repository=InMemoryTaskRepository(),
+        artifact_store=ArtifactStore(tmp_path / '.agents'),
+        workflow_engine=ProposalOnlyWorkflowEngine(),
+    )
+    created = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=0,
+            title='Proposal reviewer resilience',
+            description='proposal stage should survive single reviewer failure',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B', 'gemini#review-C'],
+        )
+    )
+
+    started = svc.start_task(created.task_id)
+    assert started.status.value == 'failed_gate'
+    assert started.last_gate_reason == 'proposal_consensus_not_reached'
+
+    events = svc.list_events(created.task_id)
+    assert any(
+        e['type'] == 'proposal_precheck_review_error'
+        and str(e.get('payload', {}).get('participant')) == 'gemini#review-C'
+        for e in events
+    )
+    assert any(
+        e['type'] in {'proposal_precheck_review', 'proposal_review'}
+        and str(e.get('payload', {}).get('participant')) == 'gemini#review-C'
+        and str(e.get('payload', {}).get('verdict')) == 'unknown'
+        for e in events
+    )
+    assert any(e['type'] == 'proposal_consensus_failed' for e in events)
+
+
+def test_service_manual_mode_uses_reviewer_first_before_author_proposal(tmp_path: Path):
+    engine = ProposalOrderWorkflowEngine()
+    svc = OrchestratorService(
+        repository=InMemoryTaskRepository(),
+        artifact_store=ArtifactStore(tmp_path / '.agents'),
+        workflow_engine=engine,
+    )
+    created = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=0,
+            title='Reviewer-first proposal order',
+            description='reviewer should go first in manual mode',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+        )
+    )
+
+    started = svc.start_task(created.task_id)
+    assert started.status.value == 'waiting_manual'
+
+    calls = engine.runner.calls
+    assert calls
+    assert calls[0] == 'claude#review-B'
+    assert 'codex#author-A' in calls
+    assert calls.index('codex#author-A') < len(calls) - 1
 
 
 

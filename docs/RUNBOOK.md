@@ -64,20 +64,25 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scr
 $env:PYTHONPATH="C:/Users/hangw/awe-agentcheck/src"
 py -m awe_agentcheck.cli run `
   --task "Implement parser" `
-  --author "claude#author-A" `
-  --reviewer "codex#review-B" `
+  --author "codex#author-A" `
+  --reviewer "claude#review-B" `
   --reviewer "gemini#review-C" `
   --provider-model "claude=claude-opus-4-6" `
   --provider-model "codex=gpt-5.3-codex" `
+  --provider-model "gemini=gemini-3-pro-preview" `
   --provider-model-param "codex=-c model_reasoning_effort=xhigh" `
   --conversation-language "en" `
-  --claude-team-agents 1 `
-  --evolution-level 1 `
+  --claude-team-agents 0 `
+  --evolution-level 0 `
+  --repair-mode "balanced" `
+  --plain-mode `
+  --stream-mode `
+  --debate-mode `
   --sandbox-mode 1 `
   --self-loop-mode 0 `
   --evolve-until "2026-02-13 06:00" `
   --workspace-path "C:/Users/hangw/awe-agentcheck" `
-  --max-rounds 3 `
+  --max-rounds 1 `
   --test-command "py -m pytest -q" `
   --lint-command "py -m ruff check ." `
   --auto-start
@@ -89,14 +94,19 @@ Default policy:
 2. If `sandbox_workspace_path` is omitted, system creates unique per-task sandbox under `<workspace>-lab/<timestamp>-<id>`.
 3. Generated sandbox is auto-cleaned after `passed + auto_merge_completed`.
 4. User-specified sandbox path is preserved by default.
-5. `self_loop_mode=0` enters `waiting_manual` after discussion/proposal review.
-6. Author must approve before implementation starts.
-7. `auto_merge=1` is enabled by default; disable per task with CLI `--no-auto-merge`, API `auto_merge=false`, or Web `Auto Merge=0`.
-8. Optional model pinning via `--provider-model provider=model` applies per provider for this task.
-9. Optional per-provider args via `--provider-model-param provider=args` are forwarded as-is.
-10. Optional language control via `--conversation-language en|zh` influences prompt output language.
-11. Optional Claude `--agents` behavior via `--claude-team-agents 1` applies to Claude participants only.
-12. `max_rounds` is used only when `evolve_until` is empty; if `evolve_until` is set, deadline takes priority.
+5. `self_loop_mode=0` runs proposal-consensus rounds first, then enters `waiting_manual`.
+6. With `debate_mode=1`, proposal stage is reviewer-first (`proposal_precheck_review` -> author revision -> `proposal_review`).
+7. One consensus round is counted only when required reviewers align; repeated misalignment can end with `failed_gate` (`proposal_consensus_not_reached`).
+8. Author must approve before full implementation loop starts.
+9. In full loop, author is still the implementation actor and reviewers remain evaluators.
+10. `repair_mode` defaults to `balanced`; choose `minimal` or `structural` per risk appetite.
+11. `plain_mode=1`, `stream_mode=1`, `debate_mode=1` are default-friendly for readable and observable runs.
+12. `auto_merge=1` is enabled by default; disable per task with CLI `--no-auto-merge`, API `auto_merge=false`, or Web `Auto Merge=0`.
+13. Optional model pinning via `--provider-model provider=model` applies per provider for this task.
+14. Optional per-provider args via `--provider-model-param provider=args` are forwarded as-is.
+15. Optional language control via `--conversation-language en|zh` influences prompt output language.
+16. Optional Claude `--agents` behavior via `--claude-team-agents 1` applies to Claude participants only.
+17. `max_rounds` is used only when `evolve_until` is empty; if `evolve_until` is set, deadline takes priority.
 
 ## 4) Inspect status and timeline
 
@@ -131,8 +141,9 @@ Capabilities:
 5. Start/cancel/force-fail actions for selected task.
 6. Author controls for `waiting_manual`: `Approve + Queue`, `Approve + Start`, `Reject`.
 7. Create task includes `sandbox_mode`, `sandbox_workspace_path`, `self_loop_mode`, `evolution_level`, optional `evolve_until`, `conversation_language`, `provider_models`, `provider_model_params`, and `claude_team_agents`.
-8. Auto polling and extended stats with reason/provider breakdown.
-9. Project history card shows cross-task records for selected project: core findings, revisions, disputes, next steps.
+8. Create task advanced controls include `repair_mode`, `plain_mode`, `stream_mode`, `debate_mode`.
+9. Auto polling and extended stats with reason/provider breakdown.
+10. Project history card shows cross-task records for selected project: core findings, revisions, disputes, next steps.
 
 ## 7) Artifacts
 
