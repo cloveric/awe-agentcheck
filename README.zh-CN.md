@@ -44,6 +44,15 @@
 
 <br/>
 
+## 最新更新（2026-02-17）
+
+1. 新增一等公民 `gemini` 参与者支持（`provider#alias`）。
+2. 新增运行时配置 `AWE_GEMINI_COMMAND`（默认：`gemini -p --yolo`）。
+3. 夜间启动器已支持自动解析 Gemini 命令路径。
+4. 新增夜间启动安全保护：`scripts/start_overnight_until_7.ps1` 现在必须显式传入 `-Until`，避免误触后长时间持续运行。
+
+<br/>
+
 ## 为什么选择 AWE-AgentForge？
 
 <table>

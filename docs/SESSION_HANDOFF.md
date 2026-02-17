@@ -1,5 +1,16 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-17, safety guard)
+
+1. Added accidental-launch protection for overnight runner:
+   - `scripts/start_overnight_until_7.ps1` now requires explicit `-Until`.
+   - missing `-Until` now fails fast with clear error text.
+2. Updated operator docs to match new launch contract:
+   - `docs/RUNBOOK.md` examples now include explicit `-Until`.
+3. Root-cause clarification for "sudden start" incident:
+   - no Task Scheduler / startup item was found for the project.
+   - launch behavior matched a direct invocation of `start_overnight_until_7.ps1` before this safety guard was enabled.
+
 ## Update (2026-02-17)
 
 1. Added first-class Gemini CLI participant support across runtime:
@@ -78,7 +89,7 @@
    - API unreachable on `http://127.0.0.1:8000/api/health` (service not running)
    - no relevant scheduled task found for auto-restart
 4. Resume command (after pause window only):
-   - `pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1"`
+   - `pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -Until "2026-02-18 07:00"`
 
 ## Goal
 
@@ -200,7 +211,8 @@ start_overnight_until_7.ps1
 Start/restart loop with fresh API:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -RestartApi
+$until = "2026-02-18 07:00"
+pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -RestartApi -Until "$until"
 ```
 
 Stop only latest session:

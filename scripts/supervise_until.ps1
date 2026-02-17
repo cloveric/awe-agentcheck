@@ -34,11 +34,7 @@ New-Item -ItemType Directory -Path $sessionsDir -Force | Out-Null
 function Resolve-TargetTime([string]$UntilValue) {
   $now = Get-Date
   if ([string]::IsNullOrWhiteSpace($UntilValue)) {
-    $target = Get-Date -Hour 6 -Minute 0 -Second 0
-    if ($now -ge $target) {
-      $target = $target.AddDays(1)
-    }
-    return $target
+    throw "Missing required -Until value. Example: -Until '2026-02-18 07:00'."
   }
   try {
     $target = Get-Date $UntilValue

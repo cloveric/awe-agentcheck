@@ -155,34 +155,35 @@ Notes:
 
 ## 9) One-command background launch + stop
 
-Start in background (next local 07:00 deadline):
+Start in background (explicit deadline required):
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1"
+$until = "2026-02-18 07:00"
+pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -Until "$until"
 ```
 
 Force replace any existing overnight process:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart
+pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -Until "$until"
 ```
 
 Force replace overnight process and restart API listener:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -RestartApi
+pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -RestartApi -Until "$until"
 ```
 
 Customize primary cooldown window after provider-limit:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -PrimaryDisableSeconds 5400
+pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -PrimaryDisableSeconds 5400 -Until "$until"
 ```
 
 Customize per-task watchdog timeout:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -TaskTimeoutSeconds 2400
+pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -TaskTimeoutSeconds 2400 -Until "$until"
 ```
 
 Set an explicit stop time (for example, until next day 06:00):
@@ -194,19 +195,19 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scr
 Set evolution intensity for auto-created overnight tasks:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -EvolutionLevel 2
+pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -EvolutionLevel 2 -Until "$until"
 ```
 
 Run overnight in direct-main mode (disable sandbox):
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -NoSandbox
+pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -ForceRestart -NoSandbox -Until "$until"
 ```
 
 Start in safe dry-run mode:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -DryRun
+pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_overnight_until_7.ps1" -DryRun -Until "$until"
 ```
 
 Stop latest background session:

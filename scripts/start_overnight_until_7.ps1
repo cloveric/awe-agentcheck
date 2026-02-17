@@ -34,19 +34,15 @@ New-Item -ItemType Directory -Path $sessionsDir -Force | Out-Null
 
 $now = Get-Date
 if ([string]::IsNullOrWhiteSpace($Until)) {
-  $target = Get-Date -Hour 7 -Minute 0 -Second 0
-  if ($now -ge $target) {
-    $target = $target.AddDays(1)
-  }
-} else {
-  try {
-    $target = Get-Date $Until
-  } catch {
-    throw "Invalid -Until value: $Until. Expected parseable datetime like '2026-02-13 06:00'."
-  }
-  if ($target -le $now) {
-    throw "Until must be in the future. Received: $Until"
-  }
+  throw "Missing required -Until value. Example: -Until '2026-02-18 07:00'."
+}
+try {
+  $target = Get-Date $Until
+} catch {
+  throw "Invalid -Until value: $Until. Expected parseable datetime like '2026-02-13 06:00'."
+}
+if ($target -le $now) {
+  throw "Until must be in the future. Received: $Until"
 }
 $until = $target.ToString('yyyy-MM-dd HH:mm')
 

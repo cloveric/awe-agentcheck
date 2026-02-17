@@ -44,6 +44,15 @@
 
 <br/>
 
+## Latest Update (2026-02-17)
+
+1. Added first-class `gemini` participant support (`provider#alias`).
+2. Added `AWE_GEMINI_COMMAND` runtime config (default: `gemini -p --yolo`).
+3. Updated overnight launcher to resolve Gemini command path automatically.
+4. Added safety guard for overnight launch: `scripts/start_overnight_until_7.ps1` now requires explicit `-Until` to prevent accidental long runs.
+
+<br/>
+
 ## Why AWE-AgentForge?
 
 <table>
