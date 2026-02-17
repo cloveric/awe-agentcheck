@@ -22,6 +22,9 @@
 6. Verification status:
    - `py -m pytest -q` passed.
    - `py -m ruff check .` passed.
+7. Overnight launcher stability hardened:
+   - `scripts/start_overnight_until_7.ps1` now waits for `/healthz` before launching worker.
+   - default restart behavior now resets active `AutoEvolve:*` tasks (best-effort) to avoid startup `concurrency_limit` queue buildup.
 
 ## Update (2026-02-18, reviewer-first + consensus semantics sync)
 

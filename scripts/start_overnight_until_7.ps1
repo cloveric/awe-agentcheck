@@ -2,6 +2,7 @@ param(
   [switch]$DryRun,
   [switch]$ForceRestart,
   [switch]$RestartApi,
+  [bool]$ResetActiveAutoEvolve = $true,
   [switch]$NoAutoMerge,
   [switch]$NoSandbox,
   [string]$Until = '',
@@ -101,6 +102,63 @@ function Resolve-CommandPath([string]$Name) {
   return ($found | Select-Object -First 1).Source
 }
 
+function Wait-ApiReady([string]$BaseUrl, [int]$MaxAttempts = 25, [int]$DelaySeconds = 1) {
+  $healthUrl = "$($BaseUrl.TrimEnd('/'))/healthz"
+  for ($i = 1; $i -le [Math]::Max(1, $MaxAttempts); $i++) {
+    try {
+      $resp = Invoke-RestMethod -Uri $healthUrl -Method Get -TimeoutSec 5
+      if ($resp -and $resp.status -eq 'ok') {
+        return $true
+      }
+    } catch {
+    }
+    Start-Sleep -Seconds ([Math]::Max(1, $DelaySeconds))
+  }
+  return $false
+}
+
+function Reset-ActiveAutoEvolveTasks([string]$BaseUrl) {
+  $apiRoot = $BaseUrl.TrimEnd('/')
+  try {
+    $tasks = Invoke-RestMethod -Uri "$apiRoot/api/tasks?limit=400" -Method Get -TimeoutSec 20
+  } catch {
+    Write-Output '[launch] skip reset_active_autoevolve: cannot list tasks'
+    return
+  }
+
+  $active = @()
+  foreach ($t in @($tasks)) {
+    $status = [string]($t.status)
+    $title = [string]($t.title)
+    $isAuto = $title -like 'AutoEvolve:*'
+    $isActive = $status -in @('running', 'queued', 'waiting_manual')
+    if ($isAuto -and $isActive) {
+      $active += $t
+    }
+  }
+
+  if ($active.Count -eq 0) {
+    Write-Output '[launch] no active AutoEvolve tasks to reset'
+    return
+  }
+
+  $reason = 'operator_restart_cleanup'
+  foreach ($t in $active) {
+    $taskId = [string]($t.task_id)
+    if ([string]::IsNullOrWhiteSpace($taskId)) { continue }
+    try {
+      Invoke-RestMethod -Uri "$apiRoot/api/tasks/$taskId/cancel" -Method Post -TimeoutSec 20 | Out-Null
+    } catch {
+    }
+    try {
+      Invoke-RestMethod -Uri "$apiRoot/api/tasks/$taskId/force-fail" -Method Post -ContentType 'application/json' -Body (@{reason=$reason} | ConvertTo-Json -Compress) -TimeoutSec 20 | Out-Null
+      Write-Output "[launch] reset active task: $taskId"
+    } catch {
+      Write-Output "[launch] reset task failed (best-effort): $taskId"
+    }
+  }
+}
+
 if ($ForceRestart) {
   Write-Output '[launch] ForceRestart enabled, cleaning previous overnight processes'
   & pwsh -NoProfile -ExecutionPolicy Bypass -File "$repo/scripts/stop_overnight.ps1" -All | Out-Null
@@ -123,9 +181,9 @@ if ($ForceRestart) {
 
 $claudePath = Resolve-CommandPath 'claude'
 if ($claudePath) {
-  $resolvedClaudeCommand = "`"$claudePath`" -p --dangerously-skip-permissions --effort low --model claude-opus-4-6"
+  $resolvedClaudeCommand = "`"$claudePath`" -p --dangerously-skip-permissions --strict-mcp-config --effort low --model claude-opus-4-6"
 } else {
-  $resolvedClaudeCommand = 'claude -p --dangerously-skip-permissions --effort low --model claude-opus-4-6'
+  $resolvedClaudeCommand = 'claude -p --dangerously-skip-permissions --strict-mcp-config --effort low --model claude-opus-4-6'
 }
 
 $codexPath = Resolve-CommandPath 'codex'
@@ -217,7 +275,14 @@ if ($existingListener) {
 } else {
   $apiProc = Start-Process -FilePath 'pwsh' -ArgumentList '-NoProfile','-Command',$apiCmd -PassThru -WindowStyle Hidden -RedirectStandardOutput $apiStdout -RedirectStandardError $apiStderr
   $apiStartedByScript = $true
-  Start-Sleep -Seconds 2
+}
+
+if (-not (Wait-ApiReady -BaseUrl $ApiBase -MaxAttempts 25 -DelaySeconds 1)) {
+  throw "[launch] API did not become healthy at $ApiBase/healthz"
+}
+
+if ($ResetActiveAutoEvolve) {
+  Reset-ActiveAutoEvolveTasks -BaseUrl $ApiBase
 }
 
 $nightProc = Start-Process -FilePath 'pwsh' -ArgumentList '-NoProfile','-Command',$nightCmd -PassThru -WindowStyle Hidden -RedirectStandardOutput $nightStdout -RedirectStandardError $nightStderr
