@@ -216,6 +216,13 @@
       line-height: 1;
     }
 
+    .tree-tool-btn.active {
+      border-color: var(--line-strong);
+      box-shadow: 0 0 0 1px rgba(31, 232, 137, 0.22);
+      background: rgba(10, 24, 24, 0.92);
+      color: #d4ffe9;
+    }
+
     .tree-list {
       display: block;
       border: 1px solid rgba(31, 232, 137, 0.2);
@@ -733,6 +740,61 @@
       padding-right: 2px;
     }
 
+    .create-help {
+      border: 1px solid rgba(31, 232, 137, 0.26);
+      border-radius: 10px;
+      background: rgba(7, 17, 24, 0.86);
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .create-help.is-collapsed {
+      display: none;
+    }
+
+    .create-help-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .create-help-list {
+      display: grid;
+      gap: 6px;
+      max-height: 34vh;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .create-help-item {
+      border: 1px solid rgba(136, 229, 255, 0.2);
+      border-radius: 8px;
+      background: rgba(7, 15, 22, 0.92);
+      padding: 7px 8px;
+      display: grid;
+      gap: 3px;
+    }
+
+    .create-help-item-title {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: #9df6cb;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    .create-help-item-desc {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #b8e8d1;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     .history-body.is-collapsed {
       display: none;
     }
@@ -920,6 +982,8 @@
     body[data-theme="pixel"] .tree-list,
     body[data-theme="pixel"] .tree-empty,
     body[data-theme="pixel"] .status-grid,
+    body[data-theme="pixel"] .create-help,
+    body[data-theme="pixel"] .create-help-item,
     body[data-theme="pixel"] .empty,
     body[data-theme="pixel"] .message,
     body[data-theme="pixel"] .list button {
@@ -955,6 +1019,15 @@
 
     body[data-theme="pixel"] .scope-row {
       border-bottom-color: rgba(255, 255, 255, 0.2);
+    }
+
+    body[data-theme="pixel"] .create-help-item-title {
+      color: #f0f0f0;
+    }
+
+    body[data-theme="pixel"] .create-help-item-desc,
+    body[data-theme="pixel"] #createHelpHint {
+      color: #b6b6b6;
     }
 
     body[data-theme="pixel"] input,
@@ -1119,6 +1192,8 @@
     body[data-theme="executive"] .card,
     body[data-theme="executive"] .tree-list,
     body[data-theme="executive"] .status-grid,
+    body[data-theme="executive"] .create-help,
+    body[data-theme="executive"] .create-help-item,
     body[data-theme="executive"] .message,
     body[data-theme="executive"] .empty {
       border-color: rgba(122, 180, 255, 0.26);
@@ -1136,6 +1211,15 @@
 
     body[data-theme="executive"] .scope-value {
       color: #d7e9ff;
+    }
+
+    body[data-theme="executive"] .create-help-item-title {
+      color: #9acdfd;
+    }
+
+    body[data-theme="executive"] .create-help-item-desc,
+    body[data-theme="executive"] #createHelpHint {
+      color: #cfe2f8;
     }
 
     body[data-theme="executive"] .pill {
@@ -1312,7 +1396,23 @@
         </section>
 
         <section class="card">
-          <h2 class="card-title">Create Task</h2>
+          <div class="tree-head">
+            <h2 class="card-title">Create Task</h2>
+            <div class="tree-tools">
+              <button id="openCreateHelpBtn" class="tree-tool-btn" type="button">Help</button>
+            </div>
+          </div>
+          <div id="createHelpPanel" class="create-help is-collapsed">
+            <div class="create-help-head">
+              <div id="createHelpHint" class="mini-status">Create Task field guide</div>
+              <div class="tree-tools">
+                <button id="createHelpLangEnBtn" class="tree-tool-btn" type="button">EN</button>
+                <button id="createHelpLangZhBtn" class="tree-tool-btn" type="button">中文</button>
+                <button id="closeCreateHelpBtn" class="tree-tool-btn" type="button">Close</button>
+              </div>
+            </div>
+            <div id="createHelpList" class="create-help-list"></div>
+          </div>
           <div class="controls-row">
             <div style="flex:1; min-width:220px;">
               <label for="title">Title</label>
@@ -1488,6 +1588,8 @@
       treeByProject: new Map(),
       treeOpenByProject: new Map(),
       historyCollapsed: false,
+      createHelpCollapsed: true,
+      createHelpLanguage: 'zh',
       polling: true,
       timer: null,
       apiHealthy: false,
@@ -1510,6 +1612,13 @@
       projectHistoryBody: document.getElementById('projectHistoryBody'),
       clearHistoryBtn: document.getElementById('clearHistoryBtn'),
       toggleHistoryBtn: document.getElementById('toggleHistoryBtn'),
+      openCreateHelpBtn: document.getElementById('openCreateHelpBtn'),
+      closeCreateHelpBtn: document.getElementById('closeCreateHelpBtn'),
+      createHelpPanel: document.getElementById('createHelpPanel'),
+      createHelpHint: document.getElementById('createHelpHint'),
+      createHelpList: document.getElementById('createHelpList'),
+      createHelpLangEnBtn: document.getElementById('createHelpLangEnBtn'),
+      createHelpLangZhBtn: document.getElementById('createHelpLangZhBtn'),
       createStatus: document.getElementById('createStatus'),
       pollBtn: document.getElementById('pollBtn'),
       startBtn: document.getElementById('startBtn'),
@@ -1545,6 +1654,129 @@
       { id: 'neon', label: 'Neon Grid' },
       { id: 'pixel', label: 'Terminal Pixel' },
       { id: 'executive', label: 'Executive Glass' },
+    ];
+
+    const CREATE_TASK_HELP_ITEMS = [
+      {
+        field: 'Title',
+        en: 'Task name shown in task list, history, and conversation stream.',
+        zh: '任务名称，会显示在任务列表、历史记录和对话流里。',
+      },
+      {
+        field: 'Workspace path',
+        en: 'Root path of the project to operate on. Use your real repository path.',
+        zh: '要操作的项目根目录。建议填写真实仓库路径。',
+      },
+      {
+        field: 'Author',
+        en: 'The implementing role. Format: provider#alias (example: codex#author-A).',
+        zh: '负责实现代码的角色。格式：provider#alias（例如 codex#author-A）。',
+      },
+      {
+        field: 'Reviewers',
+        en: 'One or more review roles, comma-separated. They challenge and evaluate the author output.',
+        zh: '一个或多个审阅角色，逗号分隔。用于质疑与评估作者输出。',
+      },
+      {
+        field: 'Claude/Codex/Gemini Model',
+        en: 'Pin model per provider for this task. You can select from list or type custom model id.',
+        zh: '按提供者绑定模型。可从列表选择，也可手动输入模型 ID。',
+      },
+      {
+        field: 'Model Params',
+        en: 'Extra provider-specific CLI args (advanced). Keep empty unless you know what you need.',
+        zh: '提供者额外参数（进阶）。不确定时建议留空。',
+      },
+      {
+        field: 'Claude Team Agents',
+        en: 'Enable Claude --agents behavior for Claude participants in this task.',
+        zh: '为 Claude 参与者启用 `--agents` 行为。',
+      },
+      {
+        field: 'Evolution Level',
+        en: '0=fix-only, 1=guided evolution, 2=proactive evolution.',
+        zh: '0=仅修复，1=引导进化，2=主动进化。',
+      },
+      {
+        field: 'Repair Mode',
+        en: 'minimal=smallest patch, balanced=root-cause focused, structural=allow deeper refactor.',
+        zh: 'minimal=最小修补，balanced=聚焦根因，structural=允许更深重构。',
+      },
+      {
+        field: 'Max Rounds',
+        en: 'Fallback round cap when no deadline is set.',
+        zh: '未设置截止时间时的轮次上限。',
+      },
+      {
+        field: 'Evolve Until',
+        en: 'Deadline in local time. When set, deadline takes priority over Max Rounds.',
+        zh: '本地时间截止点。设置后优先于 Max Rounds。',
+      },
+      {
+        field: 'Conversation Language',
+        en: 'Controls preferred output language for participant responses.',
+        zh: '控制参与者输出语言偏好。',
+      },
+      {
+        field: 'Plain Mode',
+        en: 'Beginner-readable style. Recommended ON for easier conversation text.',
+        zh: '小白可读模式。建议开启，便于看懂对话内容。',
+      },
+      {
+        field: 'Stream Mode',
+        en: 'Realtime streaming chunks from participants. OFF means stage summary only.',
+        zh: '实时流式输出。关闭后仅显示阶段总结。',
+      },
+      {
+        field: 'Debate Mode',
+        en: 'Enable reviewer-first debate/precheck stage before implementation.',
+        zh: '启用 reviewer-first 预审/辩论阶段。',
+      },
+      {
+        field: 'Sandbox Mode',
+        en: '1=run in isolated lab workspace, 0=run directly in main workspace.',
+        zh: '1=在隔离沙盒运行，0=直接在主工作区运行。',
+      },
+      {
+        field: 'Sandbox Workspace Path',
+        en: 'Optional custom sandbox folder. Leave blank for auto unique per-task sandbox.',
+        zh: '可选自定义沙盒路径。留空则自动生成每任务独立沙盒。',
+      },
+      {
+        field: 'Self Loop Mode',
+        en: '0=manual checkpoint, 1=autonomous loop.',
+        zh: '0=人工确认流程，1=全自动循环流程。',
+      },
+      {
+        field: 'Auto Merge',
+        en: 'On pass, merge sandbox changes to target path automatically.',
+        zh: '任务通过后，自动将沙盒改动融合到目标路径。',
+      },
+      {
+        field: 'Merge Target Path',
+        en: 'Destination path for auto-merge. Leave blank to merge in-place.',
+        zh: '自动融合目标路径。留空表示原地融合。',
+      },
+      {
+        field: 'Description',
+        en: 'Main instruction body. Include goal, constraints, acceptance criteria.',
+        zh: '主要任务说明。建议写清目标、约束和验收标准。',
+      },
+      {
+        field: 'Create',
+        en: 'Create task only (queued). Start manually later.',
+        zh: '仅创建任务（queued），稍后手动启动。',
+      },
+      {
+        field: 'Create + Start',
+        en: 'Create task and start immediately.',
+        zh: '创建并立即启动任务。',
+      },
+      {
+        field: 'Policy Note',
+        en: 'When Sandbox Mode = 0, Auto Merge is forced to 0. When Evolve Until is set, Max Rounds is disabled.',
+        zh: '策略说明：Sandbox Mode=0 时 Auto Merge 会被强制为 0；设置 Evolve Until 后 Max Rounds 会禁用。',
+      },
     ];
 
     function sleep(ms) {
@@ -2565,6 +2797,89 @@
       }
     }
 
+    function readCreateHelpCollapsedPreference() {
+      try {
+        return localStorage.getItem('awe-agentcheck-create-help-collapsed') !== '0';
+      } catch {
+        return true;
+      }
+    }
+
+    function readCreateHelpLanguagePreference() {
+      try {
+        const raw = String(localStorage.getItem('awe-agentcheck-create-help-lang') || '').trim().toLowerCase();
+        return raw === 'en' ? 'en' : 'zh';
+      } catch {
+        return 'zh';
+      }
+    }
+
+    function renderCreateHelp() {
+      const lang = state.createHelpLanguage === 'en' ? 'en' : 'zh';
+      const collapsed = !!state.createHelpCollapsed;
+
+      if (el.createHelpPanel) {
+        el.createHelpPanel.classList.toggle('is-collapsed', collapsed);
+      }
+      if (el.openCreateHelpBtn) {
+        el.openCreateHelpBtn.textContent = collapsed ? 'Help' : 'Hide Help';
+        el.openCreateHelpBtn.title = collapsed ? 'Open Create Task help' : 'Hide Create Task help';
+      }
+      if (el.createHelpLangEnBtn) {
+        el.createHelpLangEnBtn.classList.toggle('active', lang === 'en');
+      }
+      if (el.createHelpLangZhBtn) {
+        el.createHelpLangZhBtn.classList.toggle('active', lang === 'zh');
+      }
+      if (el.createHelpHint) {
+        el.createHelpHint.textContent = lang === 'en'
+          ? 'Create Task field guide (EN)'
+          : 'Create Task 字段说明（中文）';
+      }
+      if (!el.createHelpList) return;
+
+      el.createHelpList.innerHTML = '';
+      if (collapsed) return;
+
+      for (const item of CREATE_TASK_HELP_ITEMS) {
+        const card = document.createElement('article');
+        card.className = 'create-help-item';
+
+        const head = document.createElement('div');
+        head.className = 'create-help-item-title';
+        head.textContent = String(item.field || '');
+
+        const desc = document.createElement('div');
+        desc.className = 'create-help-item-desc';
+        desc.textContent = lang === 'en' ? String(item.en || '') : String(item.zh || '');
+
+        card.appendChild(head);
+        card.appendChild(desc);
+        el.createHelpList.appendChild(card);
+      }
+    }
+
+    function setCreateHelpCollapsed(collapsed, opts = {}) {
+      state.createHelpCollapsed = !!collapsed;
+      renderCreateHelp();
+      if (opts.persist === false) return;
+      try {
+        localStorage.setItem('awe-agentcheck-create-help-collapsed', state.createHelpCollapsed ? '1' : '0');
+      } catch {
+      }
+    }
+
+    function setCreateHelpLanguage(language, opts = {}) {
+      const normalized = String(language || '').trim().toLowerCase() === 'en' ? 'en' : 'zh';
+      state.createHelpLanguage = normalized;
+      renderCreateHelp();
+      if (opts.persist === false) return;
+      try {
+        localStorage.setItem('awe-agentcheck-create-help-lang', normalized);
+      } catch {
+      }
+    }
+
     function renderProjectHistory() {
       const scoped = historyItemsInSelectedProject();
       const selected = normalizeProjectPath(state.selectedProject || '');
@@ -3186,6 +3501,18 @@
     if (el.clearHistoryBtn) {
       el.clearHistoryBtn.addEventListener('click', () => clearProjectHistory());
     }
+    if (el.openCreateHelpBtn) {
+      el.openCreateHelpBtn.addEventListener('click', () => setCreateHelpCollapsed(!state.createHelpCollapsed));
+    }
+    if (el.closeCreateHelpBtn) {
+      el.closeCreateHelpBtn.addEventListener('click', () => setCreateHelpCollapsed(true));
+    }
+    if (el.createHelpLangEnBtn) {
+      el.createHelpLangEnBtn.addEventListener('click', () => setCreateHelpLanguage('en'));
+    }
+    if (el.createHelpLangZhBtn) {
+      el.createHelpLangZhBtn.addEventListener('click', () => setCreateHelpLanguage('zh'));
+    }
 
     if (el.evolveUntil && !String(el.evolveUntil.value || '').trim()) {
       el.evolveUntil.value = computeDefaultEvolveUntil();
@@ -3201,6 +3528,8 @@
     }
     syncCreateTaskPolicyControls();
     setHistoryCollapsed(readHistoryCollapsePreference(), { persist: false });
+    setCreateHelpCollapsed(readCreateHelpCollapsedPreference(), { persist: false });
+    setCreateHelpLanguage(readCreateHelpLanguagePreference(), { persist: false });
 
     initThemeSelector();
     setPolling(readPollPreference());
