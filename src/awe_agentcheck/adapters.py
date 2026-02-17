@@ -16,6 +16,10 @@ _LIMIT_PATTERNS = (
     'hit your limit',
     'usage limit',
     'rate limit',
+    'ratelimitexceeded',
+    'resource_exhausted',
+    'model_capacity_exhausted',
+    'no capacity available',
     'quota exceeded',
     'insufficient_quota',
 )
@@ -116,10 +120,15 @@ class ParticipantRunner:
         started = time.monotonic()
         completed = None
         for attempt in range(1, attempts + 1):
+            runtime_argv, runtime_input = self._prepare_runtime_invocation(
+                argv=argv,
+                provider=participant.provider,
+                prompt=current_prompt,
+            )
             try:
                 completed = subprocess.run(
-                    argv,
-                    input=current_prompt,
+                    runtime_argv,
+                    input=runtime_input,
                     capture_output=True,
                     text=True,
                     encoding='utf-8',
@@ -195,11 +204,29 @@ class ParticipantRunner:
         if extra:
             argv.extend(extra)
 
-        if str(provider or '').strip().lower() == 'claude':
+        provider_text = str(provider or '').strip().lower()
+        if provider_text == 'gemini':
+            argv = ParticipantRunner._normalize_gemini_approval_flags(argv)
+
+        if provider_text == 'claude':
             if claude_team_agents and not ParticipantRunner._has_agents_flag(argv):
                 argv.extend(['--agents', '{}'])
 
         return argv
+
+    @staticmethod
+    def _prepare_runtime_invocation(*, argv: list[str], provider: str, prompt: str) -> tuple[list[str], str]:
+        provider_text = str(provider or '').strip().lower()
+        runtime_argv = list(argv)
+        runtime_input = prompt
+        if provider_text != 'gemini':
+            return runtime_argv, runtime_input
+        if ParticipantRunner._has_prompt_flag(runtime_argv):
+            return runtime_argv, runtime_input
+        # Gemini CLI is significantly more stable in non-interactive mode.
+        runtime_argv.extend(['--prompt', prompt])
+        runtime_input = ''
+        return runtime_argv, runtime_input
 
     @staticmethod
     def _split_extra_args(value: str | None) -> list[str]:
@@ -228,6 +255,38 @@ class ParticipantRunner:
             if text == '--agents' or text.startswith('--agents='):
                 return True
         return False
+
+    @staticmethod
+    def _has_prompt_flag(argv: list[str]) -> bool:
+        for token in argv:
+            text = str(token).strip()
+            if text in {'-p', '--prompt'}:
+                return True
+            if text.startswith('--prompt='):
+                return True
+        return False
+
+    @staticmethod
+    def _normalize_gemini_approval_flags(argv: list[str]) -> list[str]:
+        has_yolo = False
+        has_approval_mode = False
+        for token in argv:
+            text = str(token).strip()
+            if text in {'-y', '--yolo'}:
+                has_yolo = True
+            elif text == '--approval-mode' or text.startswith('--approval-mode='):
+                has_approval_mode = True
+        if not (has_yolo and has_approval_mode):
+            return argv
+
+        # Gemini CLI treats --yolo and --approval-mode as mutually exclusive.
+        out: list[str] = []
+        for token in argv:
+            text = str(token).strip()
+            if text in {'-y', '--yolo'}:
+                continue
+            out.append(str(token))
+        return out
 
     @staticmethod
     def _resolve_executable(argv: list[str]) -> list[str]:

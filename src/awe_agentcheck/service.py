@@ -1191,6 +1191,20 @@ class OrchestratorService:
 
             discussion_text = str(row.get('description') or '').strip()
             if runner is not None:
+                discussion_started = {
+                    'type': 'proposal_discussion_started',
+                    'round': 1,
+                    'provider': author.provider,
+                    'participant': author.participant_id,
+                    'timeout_seconds': timeout,
+                }
+                self.repository.append_event(
+                    task_id,
+                    event_type='proposal_discussion_started',
+                    payload=discussion_started,
+                    round_number=1,
+                )
+                self.artifact_store.append_event(task_id, discussion_started)
                 discussion = runner.run(
                     participant=author,
                     prompt=WorkflowEngine._discussion_prompt(config, 1, None),
@@ -1223,6 +1237,19 @@ class OrchestratorService:
                     )
 
                 for reviewer in reviewers:
+                    review_started = {
+                        'type': 'proposal_review_started',
+                        'round': 1,
+                        'participant': reviewer.participant_id,
+                        'timeout_seconds': timeout,
+                    }
+                    self.repository.append_event(
+                        task_id,
+                        event_type='proposal_review_started',
+                        payload=review_started,
+                        round_number=1,
+                    )
+                    self.artifact_store.append_event(task_id, review_started)
                     review = runner.run(
                         participant=reviewer,
                         prompt=self._proposal_review_prompt(config, discussion_text),

@@ -205,6 +205,76 @@ def test_participant_runner_appends_provider_model_params_tokens(tmp_path: Path,
     assert '0.1' in captured['argv']
 
 
+def test_participant_runner_deduplicates_conflicting_gemini_approval_flags(tmp_path: Path, monkeypatch):
+    captured = {'argv': None}
+
+    def fake_run(argv, **kwargs):
+        captured['argv'] = list(argv)
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout='VERDICT: NO_BLOCKER', stderr='')
+
+    monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
+    runner = ParticipantRunner(command_overrides={'gemini': 'gemini --yolo'}, dry_run=False)
+    runner.run(
+        participant=parse_participant_id('gemini#review-B'),
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=1,
+        model='gemini-3-pro-preview',
+        model_params='--approval-mode yolo',
+    )
+
+    assert captured['argv'] is not None
+    assert '--approval-mode' in captured['argv']
+    assert 'yolo' in captured['argv']
+    assert '--yolo' not in captured['argv']
+    assert '-y' not in captured['argv']
+
+
+def test_participant_runner_uses_gemini_prompt_flag_when_missing(tmp_path: Path, monkeypatch):
+    captured = {'argv': None, 'input': None}
+
+    def fake_run(argv, **kwargs):
+        captured['argv'] = list(argv)
+        captured['input'] = kwargs.get('input')
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout='VERDICT: NO_BLOCKER', stderr='')
+
+    monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
+    runner = ParticipantRunner(command_overrides={'gemini': 'gemini --approval-mode yolo'}, dry_run=False)
+    runner.run(
+        participant=parse_participant_id('gemini#review-B'),
+        prompt='please review this',
+        cwd=tmp_path,
+        timeout_seconds=1,
+        model='gemini-2.5-pro',
+    )
+
+    assert captured['argv'] is not None
+    assert '--prompt' in captured['argv']
+    assert 'please review this' in captured['argv']
+    assert captured['input'] == ''
+
+
+def test_participant_runner_detects_gemini_capacity_output_as_provider_limit(tmp_path: Path, monkeypatch):
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(
+            args=argv,
+            returncode=1,
+            stdout='',
+            stderr='No capacity available for model gemini-3-pro-preview on the server',
+        )
+
+    monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
+    runner = ParticipantRunner(command_overrides={'gemini': 'gemini --approval-mode yolo'}, dry_run=False)
+    with pytest.raises(RuntimeError, match='provider_limit'):
+        runner.run(
+            participant=parse_participant_id('gemini#review-B'),
+            prompt='hello',
+            cwd=tmp_path,
+            timeout_seconds=1,
+            model='gemini-3-pro-preview',
+        )
+
+
 def test_participant_runner_resolves_executable_with_shutil_which(tmp_path: Path, monkeypatch):
     captured = {'argv': None}
 
