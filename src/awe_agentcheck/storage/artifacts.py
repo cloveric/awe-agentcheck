@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,6 +109,13 @@ class ArtifactStore:
         path = ws.artifacts_dir / safe_name
         path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
         return path
+
+    def remove_task_workspace(self, task_id: str) -> bool:
+        task_root = self.root / 'threads' / str(task_id or '').strip()
+        if not task_root.exists() or not task_root.is_dir():
+            return False
+        shutil.rmtree(task_root, ignore_errors=False)
+        return True
 
     @staticmethod
     def _ensure_text(path: Path, content: str) -> None:

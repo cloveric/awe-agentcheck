@@ -798,27 +798,56 @@
 
     .status-grid {
       display: grid;
-      gap: 8px;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 4px 16px;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      border: 1px solid rgba(31, 232, 137, 0.18);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: rgba(6, 16, 22, 0.65);
     }
 
-    .status-box {
-      border: 1px solid rgba(31, 232, 137, 0.26);
-      border-radius: 10px;
-      padding: 8px;
-      background: rgba(8, 20, 22, 0.88);
+    .scope-row {
+      display: grid;
+      grid-template-columns: 120px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding: 5px 0;
+      border-bottom: 1px dashed rgba(136, 229, 255, 0.22);
+      min-width: 0;
+    }
+
+    .scope-row:last-child {
+      border-bottom: none;
+    }
+
+    .scope-key {
+      color: #9df6cb;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-family: var(--mono);
+      white-space: nowrap;
+      padding-top: 2px;
+    }
+
+    .scope-value {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      white-space: pre-wrap;
+      line-height: 1.35;
+      font-family: var(--mono);
       font-size: 12px;
       color: #b3f2d2;
-      font-family: var(--mono);
     }
 
-    .status-box strong {
-      display: block;
-      color: #9df6cb;
-      font-size: 12px;
-      margin-bottom: 4px;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
+    .scope-value .pill {
+      vertical-align: middle;
+    }
+
+    .status-grid .empty {
+      grid-column: 1 / -1;
+      background: rgba(8, 20, 22, 0.88);
     }
 
     code {
@@ -890,7 +919,7 @@
     body[data-theme="pixel"] .card,
     body[data-theme="pixel"] .tree-list,
     body[data-theme="pixel"] .tree-empty,
-    body[data-theme="pixel"] .status-box,
+    body[data-theme="pixel"] .status-grid,
     body[data-theme="pixel"] .empty,
     body[data-theme="pixel"] .message,
     body[data-theme="pixel"] .list button {
@@ -915,8 +944,17 @@
     body[data-theme="pixel"] .mini-status,
     body[data-theme="pixel"] .msg-kind,
     body[data-theme="pixel"] .item-meta,
-    body[data-theme="pixel"] .theme-label {
+    body[data-theme="pixel"] .theme-label,
+    body[data-theme="pixel"] .scope-key {
       color: #9e9e9e;
+    }
+
+    body[data-theme="pixel"] .scope-value {
+      color: #f0f0f0;
+    }
+
+    body[data-theme="pixel"] .scope-row {
+      border-bottom-color: rgba(255, 255, 255, 0.2);
     }
 
     body[data-theme="pixel"] input,
@@ -1080,12 +1118,24 @@
 
     body[data-theme="executive"] .card,
     body[data-theme="executive"] .tree-list,
-    body[data-theme="executive"] .status-box,
+    body[data-theme="executive"] .status-grid,
     body[data-theme="executive"] .message,
     body[data-theme="executive"] .empty {
       border-color: rgba(122, 180, 255, 0.26);
       background: rgba(10, 20, 33, 0.82);
       box-shadow: var(--shadow), inset 0 0 0 1px rgba(122, 180, 255, 0.11);
+    }
+
+    body[data-theme="executive"] .scope-row {
+      border-bottom-color: rgba(122, 180, 255, 0.26);
+    }
+
+    body[data-theme="executive"] .scope-key {
+      color: #9acdfd;
+    }
+
+    body[data-theme="executive"] .scope-value {
+      color: #d7e9ff;
     }
 
     body[data-theme="executive"] .pill {
@@ -1251,6 +1301,7 @@
           <div class="tree-head">
             <h2 class="card-title">Project History</h2>
             <div class="tree-tools">
+              <button id="clearHistoryBtn" class="tree-tool-btn btn-warn" type="button">Clear</button>
               <button id="toggleHistoryBtn" class="tree-tool-btn" type="button">Collapse</button>
             </div>
           </div>
@@ -1457,6 +1508,7 @@
       projectHistory: document.getElementById('projectHistory'),
       historySummary: document.getElementById('historySummary'),
       projectHistoryBody: document.getElementById('projectHistoryBody'),
+      clearHistoryBtn: document.getElementById('clearHistoryBtn'),
       toggleHistoryBtn: document.getElementById('toggleHistoryBtn'),
       createStatus: document.getElementById('createStatus'),
       pollBtn: document.getElementById('pollBtn'),
@@ -2419,10 +2471,24 @@
       ];
 
       for (const item of boxes) {
-        const div = document.createElement('div');
-        div.className = 'status-box';
-        div.innerHTML = `<strong>${escapeHtml(item.label)}</strong>${item.html || escapeHtml(item.value)}`;
-        el.taskSnapshot.appendChild(div);
+        const row = document.createElement('div');
+        row.className = 'scope-row';
+
+        const key = document.createElement('span');
+        key.className = 'scope-key';
+        key.textContent = String(item.label || '');
+
+        const value = document.createElement('span');
+        value.className = 'scope-value';
+        if (item.html) {
+          value.innerHTML = item.html;
+        } else {
+          value.textContent = String(item.value ?? '');
+        }
+
+        row.appendChild(key);
+        row.appendChild(value);
+        el.taskSnapshot.appendChild(row);
       }
 
       const waitingManual = String(task.status) === 'waiting_manual';
@@ -2935,6 +3001,41 @@
       }
     }
 
+    async function clearProjectHistory() {
+      const normalizedProject = normalizeProjectPath(state.selectedProject || '');
+      const scoped = historyItemsInSelectedProject();
+      if (!scoped.length) {
+        el.actionStatus.textContent = 'No history records to clear for current scope.';
+        return;
+      }
+
+      const scopeLabel = normalizedProject || 'all projects';
+      const hint = normalizedProject
+        ? 'Only terminal history tasks in this project will be removed.'
+        : 'Terminal history tasks across all projects will be removed.';
+      const ok = window.confirm(`Clear Project History?\nScope: ${scopeLabel}\nRecords: ${scoped.length}\n${hint}\nRunning/queued tasks are kept by default.`);
+      if (!ok) {
+        return;
+      }
+
+      try {
+        const result = await api('/api/project-history/clear', {
+          method: 'POST',
+          body: JSON.stringify({
+            project_path: normalizedProject || null,
+            include_non_terminal: false,
+          }),
+        });
+        const deleted = Number(result.deleted_tasks || 0);
+        const skipped = Number(result.skipped_non_terminal || 0);
+        const artifacts = Number(result.deleted_artifacts || 0);
+        el.actionStatus.textContent = `History cleared: deleted=${deleted}, artifacts=${artifacts}, skipped_active=${skipped}.`;
+        await loadData({ forceEvents: true });
+      } catch (err) {
+        el.actionStatus.textContent = `Clear history failed: ${String(err)}`;
+      }
+    }
+
     async function createTask(autoStart) {
       const evolveUntilRaw = String(document.getElementById('evolveUntil').value || '').trim();
       const sandboxPathRaw = String(document.getElementById('sandboxWorkspacePath').value || '').trim();
@@ -3081,6 +3182,9 @@
         setHistoryCollapsed(next);
         renderProjectHistory();
       });
+    }
+    if (el.clearHistoryBtn) {
+      el.clearHistoryBtn.addEventListener('click', () => clearProjectHistory());
     }
 
     if (el.evolveUntil && !String(el.evolveUntil.value || '').trim()) {

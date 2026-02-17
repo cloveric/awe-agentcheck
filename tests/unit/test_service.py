@@ -1209,6 +1209,69 @@ def test_service_manual_mode_uses_reviewer_first_before_author_proposal(tmp_path
 
 
 
+def test_service_clear_project_history_removes_terminal_tasks_only(tmp_path: Path):
+    svc = build_service(tmp_path)
+    project_root = tmp_path / 'repo'
+    project_root.mkdir()
+
+    t1 = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='History A',
+            description='terminal pass',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project_root),
+        )
+    )
+    t2 = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='History B',
+            description='terminal fail',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project_root),
+        )
+    )
+    t3 = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='History C',
+            description='active',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project_root),
+        )
+    )
+
+    svc.repository.update_task_status(t1.task_id, status='passed', reason='passed', rounds_completed=1)
+    svc.repository.update_task_status(t2.task_id, status='failed_gate', reason='review_blocker', rounds_completed=1)
+    svc.repository.update_task_status(t3.task_id, status='running', reason=None, rounds_completed=0)
+
+    svc.artifact_store.append_event(t1.task_id, {'type': 'seed'})
+    svc.artifact_store.append_event(t2.task_id, {'type': 'seed'})
+    svc.artifact_store.append_event(t3.task_id, {'type': 'seed'})
+
+    result = svc.clear_project_history(project_path=str(project_root))
+    assert result['project_path'] == str(project_root)
+    assert result['deleted_tasks'] == 2
+    assert result['deleted_artifacts'] == 2
+    assert result['skipped_non_terminal'] == 1
+
+    assert svc.get_task(t1.task_id) is None
+    assert svc.get_task(t2.task_id) is None
+    assert svc.get_task(t3.task_id) is not None
+
+    thread_root = svc.artifact_store.root / 'threads'
+    assert not (thread_root / t1.task_id).exists()
+    assert not (thread_root / t2.task_id).exists()
+    assert (thread_root / t3.task_id).exists()
+
+
 def test_create_task_rejects_invalid_author_participant(tmp_path: Path):
     svc = build_service(tmp_path)
     with pytest.raises(ValueError, match='invalid author_participant'):

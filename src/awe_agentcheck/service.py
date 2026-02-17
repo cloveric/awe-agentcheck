@@ -472,6 +472,56 @@ class OrchestratorService:
 
         return items
 
+    def clear_project_history(
+        self,
+        *,
+        project_path: str | None = None,
+        include_non_terminal: bool = False,
+    ) -> dict:
+        requested_text = str(project_path or '').strip() or None
+        requested_project = (
+            self._normalize_project_path_key(requested_text)
+            if requested_text
+            else None
+        )
+        rows = self.repository.list_tasks(limit=10_000)
+        candidate_ids: list[str] = []
+        skipped_non_terminal = 0
+
+        for row in rows:
+            task_id = str(row.get('task_id') or '').strip()
+            if not task_id:
+                continue
+            row_project = (
+                str(row.get('project_path') or '').strip()
+                or str(row.get('workspace_path') or '').strip()
+            )
+            row_project_key = self._normalize_project_path_key(row_project)
+            if requested_project and row_project_key != requested_project:
+                continue
+
+            status = str(row.get('status') or '').strip().lower()
+            if (not include_non_terminal) and status not in _TERMINAL_STATUSES:
+                skipped_non_terminal += 1
+                continue
+            candidate_ids.append(task_id)
+
+        deleted_tasks = self.repository.delete_tasks(candidate_ids)
+        deleted_artifacts = 0
+        for task_id in sorted(set(candidate_ids)):
+            try:
+                if self.artifact_store.remove_task_workspace(task_id):
+                    deleted_artifacts += 1
+            except OSError:
+                continue
+
+        return {
+            'project_path': requested_text,
+            'deleted_tasks': int(deleted_tasks),
+            'deleted_artifacts': int(deleted_artifacts),
+            'skipped_non_terminal': int(skipped_non_terminal),
+        }
+
     def list_events(self, task_id: str) -> list[dict]:
         return self.repository.list_events(task_id)
 

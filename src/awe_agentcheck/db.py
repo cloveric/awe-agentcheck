@@ -280,6 +280,29 @@ class SqlTaskRepository:
             ).scalars().all()
             return [self._event_to_dict(r) for r in rows]
 
+    def delete_tasks(self, task_ids: list[str]) -> int:
+        unique_ids: list[str] = []
+        seen: set[str] = set()
+        for raw in task_ids:
+            task_id = str(raw or '').strip()
+            if not task_id or task_id in seen:
+                continue
+            seen.add(task_id)
+            unique_ids.append(task_id)
+        if not unique_ids:
+            return 0
+
+        deleted = 0
+        with self.db.session() as session:
+            rows = session.execute(
+                select(TaskEntity).where(TaskEntity.task_id.in_(unique_ids))
+            ).scalars().all()
+            for row in rows:
+                session.delete(row)
+                deleted += 1
+            session.flush()
+        return deleted
+
     @staticmethod
     def _task_to_dict(row: TaskEntity) -> dict:
         meta = decode_task_meta(row.reviewer_participants_json)

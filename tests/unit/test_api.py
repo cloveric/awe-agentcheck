@@ -487,6 +487,56 @@ def test_api_project_history_returns_records_for_project_scope(tmp_path: Path):
     assert 'auto_merge' in item['revisions']
 
 
+def test_api_project_history_clear_removes_terminal_records_only(tmp_path: Path):
+    client = build_client(tmp_path)
+    payload = {
+        'description': 'history clear',
+        'author_participant': 'codex#author-A',
+        'reviewer_participants': ['claude#review-B'],
+        'workspace_path': str(tmp_path),
+        'sandbox_mode': False,
+        'self_loop_mode': 1,
+        'auto_merge': False,
+        'auto_start': False,
+    }
+    a = client.post('/api/tasks', json={**payload, 'title': 'History clear A'})
+    b = client.post('/api/tasks', json={**payload, 'title': 'History clear B'})
+    c = client.post('/api/tasks', json={**payload, 'title': 'History clear C'})
+    assert a.status_code == 201
+    assert b.status_code == 201
+    assert c.status_code == 201
+
+    task_a = a.json()
+    task_b = b.json()
+    task_c = c.json()
+    project_path = task_a['project_path']
+
+    started_a = client.post(f"/api/tasks/{task_a['task_id']}/start", json={'background': False})
+    started_b = client.post(f"/api/tasks/{task_b['task_id']}/start", json={'background': False})
+    assert started_a.status_code == 200
+    assert started_b.status_code == 200
+    assert started_a.json()['status'] == 'passed'
+    assert started_b.json()['status'] == 'passed'
+
+    cleared = client.post(
+        '/api/project-history/clear',
+        json={'project_path': project_path, 'include_non_terminal': False},
+    )
+    assert cleared.status_code == 200
+    body = cleared.json()
+    assert body['project_path'] == project_path
+    assert body['deleted_tasks'] == 2
+    assert body['deleted_artifacts'] == 2
+    assert body['skipped_non_terminal'] >= 1
+
+    tasks = client.get('/api/tasks', params={'limit': 20})
+    assert tasks.status_code == 200
+    ids = {item['task_id'] for item in tasks.json()}
+    assert task_a['task_id'] not in ids
+    assert task_b['task_id'] not in ids
+    assert task_c['task_id'] in ids
+
+
 def test_api_create_task_rejects_invalid_evolve_until(tmp_path: Path):
     client = build_client(tmp_path)
     resp = client.post(

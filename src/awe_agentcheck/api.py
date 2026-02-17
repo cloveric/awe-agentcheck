@@ -177,6 +177,18 @@ class ProjectHistoryResponse(BaseModel):
     items: list[ProjectHistoryItemResponse]
 
 
+class ProjectHistoryClearRequest(BaseModel):
+    project_path: str | None = Field(default=None, max_length=400)
+    include_non_terminal: bool = Field(default=False)
+
+
+class ProjectHistoryClearResponse(BaseModel):
+    project_path: str | None
+    deleted_tasks: int
+    deleted_artifacts: int
+    skipped_non_terminal: int
+
+
 class AppState:
     def __init__(self, service: OrchestratorService):
         self.service = service
@@ -335,6 +347,17 @@ def create_app(
             total=len(items),
             items=[ProjectHistoryItemResponse(**item) for item in items],
         )
+
+    @app.post('/api/project-history/clear', response_model=ProjectHistoryClearResponse)
+    def clear_project_history(
+        payload: ProjectHistoryClearRequest,
+        service: OrchestratorService = Depends(get_service),
+    ) -> ProjectHistoryClearResponse:
+        result = service.clear_project_history(
+            project_path=payload.project_path,
+            include_non_terminal=payload.include_non_terminal,
+        )
+        return ProjectHistoryClearResponse(**result)
 
     @app.get('/api/workspace-tree', response_model=WorkspaceTreeResponse)
     def get_workspace_tree(

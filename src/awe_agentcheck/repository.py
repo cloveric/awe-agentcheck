@@ -94,6 +94,9 @@ class TaskRepository(Protocol):
     def list_events(self, task_id: str) -> list[dict]:
         ...
 
+    def delete_tasks(self, task_ids: list[str]) -> int:
+        ...
+
 
 class InMemoryTaskRepository:
     def __init__(self):
@@ -257,6 +260,23 @@ class InMemoryTaskRepository:
         if task_id not in self.items:
             raise KeyError(task_id)
         return [dict(e) for e in self.events.get(task_id, [])]
+
+    def delete_tasks(self, task_ids: list[str]) -> int:
+        unique_ids: list[str] = []
+        seen: set[str] = set()
+        for raw in task_ids:
+            task_id = str(raw or '').strip()
+            if not task_id or task_id in seen:
+                continue
+            seen.add(task_id)
+            unique_ids.append(task_id)
+        deleted = 0
+        for task_id in unique_ids:
+            if task_id in self.items:
+                del self.items[task_id]
+                self.events.pop(task_id, None)
+                deleted += 1
+        return deleted
 
 
 def encode_reviewer_meta(
