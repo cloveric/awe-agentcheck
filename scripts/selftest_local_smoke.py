@@ -49,6 +49,7 @@ def run_smoke(*, api_base: str, workspace_path: str, task_timeout_seconds: int) 
         "reviewer_participants": ["codex#review-B"],
         "workspace_path": workspace_path,
         "max_rounds": 2,
+        "self_loop_mode": 0,
         "test_command": "py -m pytest -q",
         "lint_command": "py -m ruff check .",
         "auto_start": True,
@@ -69,11 +70,25 @@ def run_smoke(*, api_base: str, workspace_path: str, task_timeout_seconds: int) 
 
         deadline = time.monotonic() + max(1, int(task_timeout_seconds))
         final = task
+        approved_manual = False
         while time.monotonic() < deadline:
             resp = client.get(f"{api_base}/api/tasks/{task_id}")
             resp.raise_for_status()
             final = resp.json()
             status = str(final.get("status", ""))
+            if status == "waiting_manual" and not approved_manual:
+                decision = client.post(
+                    f"{api_base}/api/tasks/{task_id}/author-decision",
+                    json={
+                        "approve": True,
+                        "note": "selftest auto approve waiting_manual proposal",
+                        "auto_start": True,
+                    },
+                )
+                decision.raise_for_status()
+                approved_manual = True
+                time.sleep(1)
+                continue
             if status in TERMINAL_STATUSES:
                 break
             time.sleep(1)
@@ -104,6 +119,7 @@ def run_smoke(*, api_base: str, workspace_path: str, task_timeout_seconds: int) 
             "events": len(rows),
             "stats_total_tasks": stats_body.get("total_tasks"),
             "pass_rate_50": stats_body.get("pass_rate_50"),
+            "manual_approval_used": approved_manual,
         }
 
 
@@ -122,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     env["PYTHONPATH"] = str(repo / "src")
     env["AWE_DRY_RUN"] = "true"
     env["AWE_DATABASE_URL"] = "invalid+driver://fallback"
-    env["AWE_ARTIFACT_ROOT"] = str(repo / ".agents" / "selftest-artifacts")
+    env["AWE_ARTIFACT_ROOT"] = str(repo / ".agents" / "selftest-artifacts" / stamp)
     env["AWE_MAX_CONCURRENT_RUNNING_TASKS"] = "1"
 
     cmd = [

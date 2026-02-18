@@ -115,6 +115,24 @@ class ProposalOrderWorkflowEngine:
         self.participant_timeout_seconds = 20
 
 
+class ProposalRunnerPrecheckUnavailable:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def run(self, *, participant, prompt, cwd, timeout_seconds=900, **kwargs):
+        pid = str(participant.participant_id)
+        self.calls.append(pid)
+        if pid.startswith('codex#author'):
+            raise AssertionError('author should not run when proposal precheck is unavailable')
+        raise RuntimeError('command_timeout provider=claude command=claude -p timeout_seconds=240')
+
+
+class ProposalPrecheckUnavailableWorkflowEngine:
+    def __init__(self):
+        self.runner = ProposalRunnerPrecheckUnavailable()
+        self.participant_timeout_seconds = 240
+
+
 def build_service(tmp_path: Path, workflow_engine=None, *, max_concurrent_running_tasks: int = 1) -> OrchestratorService:
     return OrchestratorService(
         repository=InMemoryTaskRepository(),
@@ -1259,7 +1277,37 @@ def test_service_manual_mode_uses_reviewer_first_before_author_proposal(tmp_path
     assert calls.index('codex#author-A') < len(calls) - 1
 
 
-def test_service_manual_mode_caps_proposal_reviewer_timeout(tmp_path: Path):
+def test_service_manual_mode_fails_fast_when_precheck_reviews_unavailable(tmp_path: Path):
+    engine = ProposalPrecheckUnavailableWorkflowEngine()
+    svc = OrchestratorService(
+        repository=InMemoryTaskRepository(),
+        artifact_store=ArtifactStore(tmp_path / '.agents'),
+        workflow_engine=engine,
+    )
+    created = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=0,
+            title='Review audit precheck unavailable',
+            description='scan repository bugs',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            max_rounds=1,
+        )
+    )
+
+    started = svc.start_task(created.task_id)
+    assert started.status.value == 'failed_gate'
+    assert started.last_gate_reason == 'proposal_precheck_unavailable'
+    assert engine.runner.calls == ['claude#review-B']
+
+    events = svc.list_events(created.task_id)
+    assert any(e['type'] == 'proposal_precheck_review_error' for e in events)
+    assert any(e['type'] == 'proposal_precheck_unavailable' for e in events)
+    assert not any(e['type'] == 'proposal_discussion_started' for e in events)
+
+
+def test_service_manual_mode_proposal_reviewer_timeout_follows_participant_timeout(tmp_path: Path):
     engine = ProposalOrderWorkflowEngine()
     engine.participant_timeout_seconds = 240
     svc = OrchestratorService(
@@ -1283,7 +1331,7 @@ def test_service_manual_mode_caps_proposal_reviewer_timeout(tmp_path: Path):
     assert started.status.value == 'waiting_manual'
 
     # reviewer-precheck, author-discussion, reviewer-proposal
-    assert engine.runner.timeouts == [75, 240, 75]
+    assert engine.runner.timeouts == [240, 240, 240]
 
     events = svc.list_events(created.task_id)
     review_started = [
@@ -1291,10 +1339,10 @@ def test_service_manual_mode_caps_proposal_reviewer_timeout(tmp_path: Path):
         if e['type'] in {'proposal_precheck_review_started', 'proposal_review_started'}
     ]
     assert review_started
-    assert all(int(e.get('payload', {}).get('timeout_seconds') or 0) == 75 for e in review_started)
+    assert all(int(e.get('payload', {}).get('timeout_seconds') or 0) == 240 for e in review_started)
 
 
-def test_service_proposal_review_prompt_enforces_short_structured_format(tmp_path: Path):
+def test_service_proposal_review_prompt_supports_audit_depth_guidance(tmp_path: Path):
     cfg = RunConfig(
         task_id='t-proposal-short',
         title='Proposal short format',
@@ -1315,8 +1363,8 @@ def test_service_proposal_review_prompt_enforces_short_structured_format(tmp_pat
         discussion_output='检查不完善点并提出改进方向。',
         stage='proposal_precheck_review',
     )
-    assert '<= 6 lines' in prompt
-    assert '<= 450 chars' in prompt
+    assert 'repository checks as needed' in prompt
+    assert 'Keep output concise but complete enough to justify verdict.' in prompt
     assert 'VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN' in prompt
 
 

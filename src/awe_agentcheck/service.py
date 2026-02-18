@@ -1522,6 +1522,41 @@ class OrchestratorService:
                                 round_no=round_no,
                                 stage='proposal_precheck_review',
                             )
+                            if pre_reviews and self._proposal_review_usable_count(pre_reviews) == 0:
+                                fail_reason = 'proposal_precheck_unavailable'
+                                fail_payload = {
+                                    'round': round_no,
+                                    'attempt': attempt,
+                                    'reviewers_total': len(pre_reviews),
+                                    'reviewers_usable': 0,
+                                    'latest_reviews': pre_reviews,
+                                }
+                                failed = self.repository.update_task_status(
+                                    task_id,
+                                    status=TaskStatus.FAILED_GATE.value,
+                                    reason=fail_reason,
+                                    rounds_completed=consensus_rounds,
+                                )
+                                self.repository.append_event(
+                                    task_id,
+                                    event_type='proposal_precheck_unavailable',
+                                    payload=fail_payload,
+                                    round_number=round_no,
+                                )
+                                self.artifact_store.append_event(
+                                    task_id,
+                                    {'type': 'proposal_precheck_unavailable', **fail_payload},
+                                )
+                                self.artifact_store.update_state(
+                                    task_id,
+                                    {
+                                        'status': TaskStatus.FAILED_GATE.value,
+                                        'last_gate_reason': fail_reason,
+                                        'rounds_completed': consensus_rounds,
+                                    },
+                                )
+                                self.artifact_store.write_final_report(task_id, f'status=failed_gate\nreason={fail_reason}')
+                                return self._to_view(failed)
 
                         discussion_started = {
                             'type': 'proposal_discussion_started',
@@ -2070,8 +2105,8 @@ class OrchestratorService:
         stage_text = str(stage or 'proposal_review').strip().lower()
         audit_intent = OrchestratorService._is_audit_intent(config)
         stage_guidance = (
-            "Stage: precheck. Build a concrete review scope fast."
-            " If you need evidence, inspect only a few directly relevant files (no repo-wide scan)."
+            "Stage: precheck. Build a concrete review scope."
+            " For audit/discovery tasks, run repository checks as needed and cite concrete evidence."
             " Then summarize findings for author discussion."
             if stage_text == 'proposal_precheck_review'
             else "Stage: proposal review. Evaluate the updated proposal and unresolved risks."
@@ -2090,7 +2125,7 @@ class OrchestratorService:
             f"{plain_instruction}\n"
             f"{stage_guidance}\n"
             f"{audit_guidance}\n"
-            "Hard limits: keep response short (<= 6 lines, <= 450 chars).\n"
+            "Keep output concise but complete enough to justify verdict.\n"
             "Do not include command logs, internal process narration, or tool/skill references.\n"
             "If evidence is insufficient, return VERDICT: UNKNOWN quickly.\n"
             "Output one line: VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN.\n"
@@ -2100,9 +2135,7 @@ class OrchestratorService:
 
     @staticmethod
     def _review_timeout_seconds(participant_timeout_seconds: int) -> int:
-        base = max(1, int(participant_timeout_seconds))
-        # Reviewer phases are intentionally capped so stalled review does not block the pipeline.
-        return min(base, 75)
+        return max(1, int(participant_timeout_seconds))
 
     @staticmethod
     def _proposal_author_prompt(config: RunConfig, merged_context: str, review_payload: list[dict]) -> str:
@@ -2261,6 +2294,32 @@ class OrchestratorService:
         if len(review_payload) < expected_reviewers:
             return False
         return all(str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value for item in review_payload[:expected_reviewers])
+
+    @staticmethod
+    def _proposal_review_usable_count(review_payload: list[dict]) -> int:
+        usable = 0
+        for item in review_payload:
+            if OrchestratorService._is_actionable_proposal_review_text(str(item.get('output') or '')):
+                usable += 1
+        return usable
+
+    @staticmethod
+    def _is_actionable_proposal_review_text(text: str) -> bool:
+        payload = str(text or '').strip()
+        if not payload:
+            return False
+        lowered = payload.lower()
+        if lowered.startswith('[proposal_precheck_review_error]'):
+            return False
+        if lowered.startswith('[proposal_review_error]'):
+            return False
+        if 'command_timeout provider=' in lowered:
+            return False
+        if 'provider_limit provider=' in lowered:
+            return False
+        if 'command_not_found provider=' in lowered:
+            return False
+        return True
 
     @staticmethod
     def _resolve_merge_target(row: dict) -> Path:

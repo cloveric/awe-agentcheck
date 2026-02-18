@@ -65,6 +65,19 @@ class StreamingRunner:
         return self.outputs[idx]
 
 
+class DebateReviewerTimeoutRunner:
+    def __init__(self):
+        self.calls = 0
+        self.participants: list[str] = []
+
+    def run(self, *, participant, prompt, cwd, timeout_seconds=900, **kwargs):
+        self.calls += 1
+        self.participants.append(str(getattr(participant, 'participant_id', '')))
+        if self.calls == 1:
+            raise RuntimeError('command_timeout provider=claude command=claude -p timeout_seconds=75')
+        return _ok_result()
+
+
 class EventSink:
     def __init__(self):
         self.events = []
@@ -255,7 +268,7 @@ def test_workflow_uses_configured_timeouts(tmp_path: Path):
     assert executor.timeouts == [22, 22]
 
 
-def test_workflow_caps_review_timeout_when_participant_timeout_is_large(tmp_path: Path):
+def test_workflow_review_timeout_follows_participant_timeout_when_large(tmp_path: Path):
     runner = FakeRunner([
         _ok_result(),  # discussion
         _ok_result(),  # implementation
@@ -288,11 +301,10 @@ def test_workflow_caps_review_timeout_when_participant_timeout_is_large(tmp_path
     )
 
     assert result.status == 'passed'
-    # discussion + implementation keep participant timeout, review is capped.
-    assert runner.timeouts == [240, 240, 75]
+    assert runner.timeouts == [240, 240, 240]
     review_started = [e for e in sink.events if e.get('type') == 'review_started']
     assert review_started
-    assert int(review_started[-1].get('timeout_seconds') or 0) == 75
+    assert int(review_started[-1].get('timeout_seconds') or 0) == 240
 
 
 def test_workflow_prompts_clip_large_inputs(tmp_path: Path):
@@ -335,8 +347,8 @@ def test_review_prompt_includes_strict_blocker_criteria(tmp_path: Path):
     assert 'correctness' in prompt
     assert 'security' in prompt
     assert 'style-only' in prompt
-    assert '<= 6 lines' in prompt
-    assert '<= 450 chars' in prompt
+    assert 'VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN' in prompt
+    assert 'Keep output concise but complete enough to justify verdict.' in prompt
 
 
 def test_prompts_include_language_instruction_for_chinese(tmp_path: Path):
@@ -653,6 +665,67 @@ def test_workflow_debate_mode_adds_reviewer_author_exchange(tmp_path: Path):
     assert 'debate_started' in event_types
     assert 'debate_review' in event_types
     assert 'debate_completed' in event_types
+
+
+def test_workflow_debate_mode_stops_when_all_reviewer_precheck_unavailable(tmp_path: Path):
+    runner = DebateReviewerTimeoutRunner()
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-debate-timeout',
+            title='Debate timeout',
+            description='reviewer precheck unavailable',
+            author=parse_participant_id('codex#author-A'),
+            reviewers=[parse_participant_id('claude#review-B')],
+            evolution_level=0,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+            debate_mode=True,
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'failed_gate'
+    assert result.gate_reason == 'debate_review_unavailable'
+    assert runner.calls == 1
+    event_types = [str(e.get('type')) for e in sink.events]
+    assert 'debate_review_error' in event_types
+    assert 'discussion_started' not in event_types
+    assert any(
+        str(e.get('type')) == 'gate_failed'
+        and str(e.get('reason') or e.get('payload', {}).get('reason') or '') == 'debate_review_unavailable'
+        for e in sink.events
+    )
+
+
+def test_debate_review_prompt_supports_audit_depth_guidance(tmp_path: Path):
+    cfg = RunConfig(
+        task_id='t-debate-prompt',
+            title='Debate review audit',
+            description='scan repository bugs and security risks',
+        author=parse_participant_id('codex#author-A'),
+        reviewers=[parse_participant_id('claude#review-B')],
+        evolution_level=0,
+        evolve_until=None,
+        cwd=tmp_path,
+        max_rounds=1,
+        test_command='py -m pytest -q',
+        lint_command='py -m ruff check .',
+        conversation_language='zh',
+        plain_mode=True,
+        debate_mode=True,
+    )
+    context = WorkflowEngine._debate_seed_context(cfg, 1, None)
+    prompt = WorkflowEngine._debate_review_prompt(cfg, 1, context, 'claude#review-B')
+    assert 'repository-wide checks as needed' in prompt
+    assert 'include 1-3 evidence points with file paths' in prompt
+    assert 'insufficient_context:' in prompt
 
 
 def test_workflow_stream_mode_emits_participant_stream_events(tmp_path: Path):

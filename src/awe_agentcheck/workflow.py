@@ -133,6 +133,8 @@ class WorkflowEngine:
 
             implementation_context = self._debate_seed_context(config, round_no, previous_gate_reason)
             if debate_mode:
+                debate_review_total = 0
+                debate_review_usable = 0
                 emit(
                     {
                         'type': 'debate_started',
@@ -177,8 +179,10 @@ class WorkflowEngine:
                             ),
                         )
                         review_text = str(debate_review.output or '').strip()
+                        usable = self._is_actionable_debate_review_text(review_text)
                     except Exception as exc:
                         review_text = f'[debate_review_error] {str(exc or "review_failed").strip() or "review_failed"}'
+                        usable = False
                         emit(
                             {
                                 'type': 'debate_review_error',
@@ -189,6 +193,10 @@ class WorkflowEngine:
                             }
                         )
 
+                    debate_review_total += 1
+                    if usable:
+                        debate_review_usable += 1
+
                     emit(
                         {
                             'type': 'debate_review',
@@ -196,15 +204,35 @@ class WorkflowEngine:
                             'participant': reviewer.participant_id,
                             'provider': reviewer.provider,
                             'output': review_text,
+                            'usable': usable,
                         }
                     )
-                    implementation_context = self._append_debate_line(
-                        implementation_context,
-                        speaker=reviewer.participant_id,
-                        text=review_text,
-                    )
+                    if usable:
+                        implementation_context = self._append_debate_line(
+                            implementation_context,
+                            speaker=reviewer.participant_id,
+                            text=review_text,
+                        )
 
-                emit({'type': 'debate_completed', 'round': round_no})
+                emit(
+                    {
+                        'type': 'debate_completed',
+                        'round': round_no,
+                        'reviewers_total': debate_review_total,
+                        'reviewers_usable': debate_review_usable,
+                    }
+                )
+                if debate_review_total > 0 and debate_review_usable == 0:
+                    reason = 'debate_review_unavailable'
+                    emit(
+                        {
+                            'type': 'gate_failed',
+                            'round': round_no,
+                            'reason': reason,
+                            'stage': 'debate_precheck',
+                        }
+                    )
+                    return RunResult(status='failed_gate', rounds=round_no, gate_reason=reason)
 
             if check_cancel():
                 emit({'type': 'canceled', 'round': round_no})
@@ -625,6 +653,12 @@ class WorkflowEngine:
         clipped = WorkflowEngine._clip_text(discussion_context, max_chars=3200)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
+        audit_mode = WorkflowEngine._is_audit_discovery_task(config)
+        depth_guidance = (
+            "Task mode is audit/discovery: perform repository-wide checks as needed, then provide concrete findings with file paths."
+            if audit_mode
+            else "Review current context and provide concrete risk findings."
+        )
         return (
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
@@ -633,6 +667,10 @@ class WorkflowEngine:
             f"{plain_mode_instruction}\n"
             "Debate mode step: review the current plan/context and provide concise, concrete concerns.\n"
             "Focus on correctness, regression risk, reliability, security, and test gaps.\n"
+            f"{depth_guidance}\n"
+            "If you run checks, include 1-3 evidence points with file paths.\n"
+            "Do not include command logs, internal process narration, or tool/skill references.\n"
+            "If context is insufficient, return one short line starting with: insufficient_context: ...\n"
             "Do not output VERDICT/NEXT_ACTION lines in this step.\n"
             "Provide plain text only: findings first, then suggested fixes.\n"
             f"Current context:\n{clipped}\n"
@@ -664,6 +702,54 @@ class WorkflowEngine:
         )
 
     @staticmethod
+    def _is_actionable_debate_review_text(text: str) -> bool:
+        payload = str(text or '').strip()
+        if not payload:
+            return False
+        lowered = payload.lower()
+        if lowered.startswith('[debate_review_error]'):
+            return False
+        if 'command_timeout provider=' in lowered:
+            return False
+        if 'provider_limit provider=' in lowered:
+            return False
+        return True
+
+    @staticmethod
+    def _is_audit_discovery_task(config: RunConfig) -> bool:
+        text = f"{str(config.title or '')}\n{str(config.description or '')}".lower()
+        if not text.strip():
+            return False
+        keywords = (
+            'audit',
+            'review',
+            'inspect',
+            'scan',
+            'check',
+            'bug',
+            'bugs',
+            'vulnerability',
+            'vulnerabilities',
+            'security',
+            'hardening',
+            'improve',
+            'improvement',
+            'quality',
+            'refine',
+            '漏洞',
+            '缺陷',
+            '错误',
+            '检查',
+            '审查',
+            '评审',
+            '改进',
+            '优化',
+            '完善',
+            '风险',
+        )
+        return any(k in text for k in keywords)
+
+    @staticmethod
     def _review_prompt(config: RunConfig, round_no: int, implementation_output: str) -> str:
         clipped = WorkflowEngine._clip_text(implementation_output, max_chars=3000)
         level = max(0, min(2, int(config.evolution_level)))
@@ -674,6 +760,12 @@ class WorkflowEngine:
         plain_review_format = WorkflowEngine._plain_review_format_instruction(
             enabled=bool(config.plain_mode),
             language=config.conversation_language,
+        )
+        audit_mode = WorkflowEngine._is_audit_discovery_task(config)
+        depth_guidance = (
+            "Task mode is audit/discovery: allow deeper checks and provide concrete evidence with file paths."
+            if audit_mode
+            else "Keep review focused on implementation summary and stated scope."
         )
         mode_guidance = ''
         if level >= 1:
@@ -692,7 +784,8 @@ class WorkflowEngine:
             "Review the implementation summary and decide blocker status.\n"
             "Mark BLOCKER only for correctness, regression, security, or data-loss risks.\n"
             "Do not mark BLOCKER for style-only, process-only, or preference-only feedback.\n"
-            "Hard limits: keep response short (<= 6 lines, <= 450 chars).\n"
+            f"{depth_guidance}\n"
+            "Keep output concise but complete enough to justify verdict.\n"
             "Do not include command logs, internal process narration, or tool/skill references.\n"
             "If evidence is insufficient, return VERDICT: UNKNOWN quickly.\n"
             f"{mode_guidance}"
@@ -704,9 +797,7 @@ class WorkflowEngine:
 
     @staticmethod
     def _review_timeout_seconds(participant_timeout_seconds: int) -> int:
-        base = max(1, int(participant_timeout_seconds))
-        # Review should fail fast to avoid long-running non-converging scans.
-        return min(base, 75)
+        return max(1, int(participant_timeout_seconds))
 
     @staticmethod
     def _normalize_verdict(raw: str) -> ReviewVerdict:
