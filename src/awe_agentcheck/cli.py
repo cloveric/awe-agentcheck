@@ -6,7 +6,17 @@ import sys
 
 import httpx
 
-from awe_agentcheck.participants import SUPPORTED_PROVIDERS
+from awe_agentcheck.config import load_settings
+from awe_agentcheck.participants import get_supported_providers, set_extra_providers
+
+
+def _supported_provider_set() -> set[str]:
+    try:
+        settings = load_settings()
+        set_extra_providers(set(settings.extra_provider_commands.keys()))
+    except Exception:
+        pass
+    return get_supported_providers()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser('stats', help='Show aggregated stats')
 
+    analytics = sub.add_parser('analytics', help='Show advanced analytics')
+    analytics.add_argument('--limit', type=int, default=300)
+
+    policy = sub.add_parser('policy-templates', help='List policy templates and recommended profile')
+    policy.add_argument('--workspace-path', default='.', help='Workspace path')
+
     start = sub.add_parser('start', help='Start an existing task')
     start.add_argument('task_id', help='Task id')
     start.add_argument('--background', action='store_true')
@@ -67,6 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     events = sub.add_parser('events', help='List task events')
     events.add_argument('task_id', help='Task id')
+
+    gh = sub.add_parser('github-summary', help='Generate GitHub/PR summary markdown for a task')
+    gh.add_argument('task_id', help='Task id')
 
     tree = sub.add_parser('tree', help='Show workspace tree')
     tree.add_argument('--workspace-path', default='.', help='Workspace path')
@@ -93,6 +112,7 @@ def _print_json(payload) -> None:
 
 
 def _parse_provider_models(values: list[str] | None) -> dict[str, str]:
+    supported = _supported_provider_set()
     out: dict[str, str] = {}
     for raw in values or []:
         text = str(raw or '').strip()
@@ -103,7 +123,7 @@ def _parse_provider_models(values: list[str] | None) -> dict[str, str]:
         provider_raw, model_raw = text.split('=', 1)
         provider = provider_raw.strip().lower()
         model = model_raw.strip()
-        if provider not in SUPPORTED_PROVIDERS:
+        if provider not in supported:
             raise ValueError(f'invalid --provider-model provider: {provider}')
         if not model:
             raise ValueError(f'invalid --provider-model model for provider: {provider}')
@@ -112,6 +132,7 @@ def _parse_provider_models(values: list[str] | None) -> dict[str, str]:
 
 
 def _parse_provider_model_params(values: list[str] | None) -> dict[str, str]:
+    supported = _supported_provider_set()
     out: dict[str, str] = {}
     for raw in values or []:
         text = str(raw or '').strip()
@@ -122,7 +143,7 @@ def _parse_provider_model_params(values: list[str] | None) -> dict[str, str]:
         provider_raw, params_raw = text.split('=', 1)
         provider = provider_raw.strip().lower()
         params = params_raw.strip()
-        if provider not in SUPPORTED_PROVIDERS:
+        if provider not in supported:
             raise ValueError(f'invalid --provider-model-param provider: {provider}')
         if not params:
             raise ValueError(f'invalid --provider-model-param params for provider: {provider}')
@@ -178,6 +199,13 @@ def main(argv: list[str] | None = None) -> int:
             response = client.get(f'{base}/api/tasks', params={'limit': int(args.limit)})
         elif args.command == 'stats':
             response = client.get(f'{base}/api/stats')
+        elif args.command == 'analytics':
+            response = client.get(f'{base}/api/analytics', params={'limit': int(args.limit)})
+        elif args.command == 'policy-templates':
+            response = client.get(
+                f'{base}/api/policy-templates',
+                params={'workspace_path': args.workspace_path},
+            )
         elif args.command == 'start':
             response = client.post(f'{base}/api/tasks/{args.task_id}/start', json={'background': bool(args.background)})
         elif args.command == 'cancel':
@@ -197,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == 'events':
             response = client.get(f'{base}/api/tasks/{args.task_id}/events')
+        elif args.command == 'github-summary':
+            response = client.get(f'{base}/api/tasks/{args.task_id}/github-summary')
         elif args.command == 'tree':
             response = client.get(
                 f'{base}/api/workspace-tree',

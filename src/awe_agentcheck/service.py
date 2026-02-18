@@ -10,6 +10,7 @@ import re
 import shlex
 import shutil
 import stat
+import subprocess
 from uuid import uuid4
 
 from awe_agentcheck.adapters import ParticipantRunner
@@ -17,7 +18,7 @@ from awe_agentcheck.domain.gate import evaluate_medium_gate
 from awe_agentcheck.domain.models import ReviewVerdict, TaskStatus
 from awe_agentcheck.fusion import AutoFusionManager
 from awe_agentcheck.observability import get_logger, set_task_context
-from awe_agentcheck.participants import SUPPORTED_PROVIDERS, parse_participant_id
+from awe_agentcheck.participants import get_supported_providers, parse_participant_id
 from awe_agentcheck.repository import TaskRepository
 from awe_agentcheck.storage.artifacts import ArtifactStore
 from awe_agentcheck.workflow import RunConfig, ShellCommandExecutor, WorkflowEngine
@@ -152,6 +153,73 @@ _DEFAULT_PROVIDER_MODELS = {
 _SUPPORTED_CONVERSATION_LANGUAGES = {'en', 'zh'}
 _SUPPORTED_REPAIR_MODES = {'minimal', 'balanced', 'structural'}
 _ARTIFACT_TASK_ID_RE = re.compile(r'^[A-Za-z0-9._-]+$')
+_DEFAULT_POLICY_TEMPLATE = 'balanced-default'
+_POLICY_TEMPLATE_CATALOG: dict[str, dict] = {
+    'balanced-default': {
+        'id': 'balanced-default',
+        'label': 'Balanced Default',
+        'description': 'General-purpose profile for most repositories.',
+        'defaults': {
+            'sandbox_mode': 1,
+            'self_loop_mode': 0,
+            'auto_merge': 1,
+            'max_rounds': 1,
+            'debate_mode': 1,
+            'plain_mode': 1,
+            'stream_mode': 1,
+            'repair_mode': 'balanced',
+        },
+    },
+    'safe-review': {
+        'id': 'safe-review',
+        'label': 'Safe Review',
+        'description': 'Conservative profile for high-risk or large repositories.',
+        'defaults': {
+            'sandbox_mode': 1,
+            'self_loop_mode': 0,
+            'auto_merge': 0,
+            'max_rounds': 2,
+            'debate_mode': 1,
+            'plain_mode': 1,
+            'stream_mode': 1,
+            'repair_mode': 'minimal',
+        },
+    },
+    'rapid-fix': {
+        'id': 'rapid-fix',
+        'label': 'Rapid Fix',
+        'description': 'Fast patch profile for small/low-risk repositories.',
+        'defaults': {
+            'sandbox_mode': 1,
+            'self_loop_mode': 1,
+            'auto_merge': 1,
+            'max_rounds': 1,
+            'debate_mode': 1,
+            'plain_mode': 1,
+            'stream_mode': 1,
+            'repair_mode': 'minimal',
+        },
+    },
+    'deep-evolve': {
+        'id': 'deep-evolve',
+        'label': 'Deep Evolve',
+        'description': 'Multi-round structural evolution with stronger scrutiny.',
+        'defaults': {
+            'sandbox_mode': 1,
+            'self_loop_mode': 1,
+            'auto_merge': 0,
+            'max_rounds': 3,
+            'debate_mode': 1,
+            'plain_mode': 1,
+            'stream_mode': 1,
+            'repair_mode': 'structural',
+        },
+    },
+}
+
+
+def _supported_providers() -> set[str]:
+    return get_supported_providers()
 
 
 def _reason_bucket(reason: str | None) -> str | None:
@@ -419,15 +487,16 @@ class OrchestratorService:
         )
 
     def get_provider_models_catalog(self) -> dict[str, list[str]]:
+        supported = _supported_providers()
         catalog: dict[str, list[str]] = {
             provider: list(_DEFAULT_PROVIDER_MODELS.get(provider, []))
-            for provider in sorted(SUPPORTED_PROVIDERS)
+            for provider in sorted(supported)
         }
 
         def add_model(provider: str, model: str) -> None:
             provider_key = str(provider or '').strip().lower()
             model_name = str(model or '').strip()
-            if provider_key not in SUPPORTED_PROVIDERS or not model_name:
+            if provider_key not in supported or not model_name:
                 return
             bucket = catalog.setdefault(provider_key, [])
             if model_name not in bucket:
@@ -438,7 +507,7 @@ class OrchestratorService:
         if isinstance(commands, dict):
             for raw_provider, raw_command in commands.items():
                 provider = str(raw_provider or '').strip().lower()
-                if provider not in SUPPORTED_PROVIDERS:
+                if provider not in supported:
                     continue
                 detected = self._extract_model_from_command(str(raw_command or ''))
                 if detected:
@@ -454,9 +523,219 @@ class OrchestratorService:
                 add_model(provider, model)
 
         out: dict[str, list[str]] = {}
-        for provider in sorted(SUPPORTED_PROVIDERS):
+        for provider in sorted(supported):
             out[provider] = [str(v) for v in catalog.get(provider, []) if str(v).strip()]
         return out
+
+    def get_policy_templates(self, *, workspace_path: str | None = None) -> dict:
+        profile = self._analyze_workspace_profile(workspace_path)
+        recommended = self._recommend_policy_template(profile=profile)
+        templates = []
+        for key in sorted(_POLICY_TEMPLATE_CATALOG):
+            item = _POLICY_TEMPLATE_CATALOG[key]
+            templates.append(
+                {
+                    'id': item['id'],
+                    'label': item['label'],
+                    'description': item['description'],
+                    'defaults': dict(item['defaults']),
+                }
+            )
+        return {
+            'recommended_template': recommended,
+            'profile': profile,
+            'templates': templates,
+        }
+
+    def get_analytics(self, *, limit: int = 300) -> dict:
+        rows = self.repository.list_tasks(limit=max(1, min(2000, int(limit))))
+        failures = [row for row in rows if str(row.get('status') or '') == TaskStatus.FAILED_GATE.value]
+        total_failures = len(failures)
+
+        failure_taxonomy: dict[str, int] = {}
+        trend_by_day: dict[str, dict[str, int]] = {}
+        for row in failures:
+            reason = str(row.get('last_gate_reason') or '')
+            bucket = _reason_bucket(reason) or 'other'
+            failure_taxonomy[bucket] = failure_taxonomy.get(bucket, 0) + 1
+
+            day = self._format_task_day(row.get('updated_at') or row.get('created_at'))
+            day_bucket = trend_by_day.setdefault(day, {})
+            day_bucket[bucket] = day_bucket.get(bucket, 0) + 1
+
+        taxonomy_rows: list[dict] = []
+        for bucket, count in sorted(failure_taxonomy.items(), key=lambda item: (-item[1], item[0])):
+            share = (count / total_failures) if total_failures else 0.0
+            taxonomy_rows.append({'bucket': bucket, 'count': count, 'share': round(share, 4)})
+
+        trend_rows: list[dict] = []
+        for day in sorted(trend_by_day.keys()):
+            day_counts = trend_by_day[day]
+            trend_rows.append(
+                {
+                    'day': day,
+                    'total': int(sum(day_counts.values())),
+                    'buckets': dict(sorted(day_counts.items(), key=lambda item: (-item[1], item[0]))),
+                }
+            )
+
+        reviewer_counts: dict[str, dict[str, int]] = {}
+        global_counts = {'no_blocker': 0, 'blocker': 0, 'unknown': 0}
+        for row in rows:
+            task_id = str(row.get('task_id') or '').strip()
+            if not task_id:
+                continue
+            try:
+                events = self.repository.list_events(task_id)
+            except Exception:
+                events = []
+            for event in events:
+                etype = str(event.get('type') or '').strip().lower()
+                if etype not in {'review', 'proposal_review', 'proposal_precheck_review', 'debate_review'}:
+                    continue
+                payload = self._merged_event_payload(event)
+                participant = str(payload.get('participant') or '').strip()
+                if not participant:
+                    continue
+                verdict = str(payload.get('verdict') or '').strip().lower()
+                if verdict not in {'no_blocker', 'blocker', 'unknown'}:
+                    verdict = 'unknown'
+
+                bucket = reviewer_counts.setdefault(participant, {'no_blocker': 0, 'blocker': 0, 'unknown': 0})
+                bucket[verdict] = int(bucket.get(verdict, 0)) + 1
+                global_counts[verdict] = int(global_counts.get(verdict, 0)) + 1
+
+        global_total = int(sum(global_counts.values()))
+        global_adverse_rate = (
+            (global_counts.get('blocker', 0) + global_counts.get('unknown', 0)) / global_total
+            if global_total
+            else 0.0
+        )
+
+        reviewer_rows: list[dict] = []
+        for participant, counts in reviewer_counts.items():
+            total = int(sum(int(v) for v in counts.values()))
+            if total <= 0:
+                continue
+            blocker_rate = counts.get('blocker', 0) / total
+            unknown_rate = counts.get('unknown', 0) / total
+            no_blocker_rate = counts.get('no_blocker', 0) / total
+            adverse_rate = blocker_rate + unknown_rate
+            reviewer_rows.append(
+                {
+                    'participant': participant,
+                    'reviews': total,
+                    'no_blocker_rate': round(no_blocker_rate, 4),
+                    'blocker_rate': round(blocker_rate, 4),
+                    'unknown_rate': round(unknown_rate, 4),
+                    'adverse_rate': round(adverse_rate, 4),
+                    'drift_score': round(abs(adverse_rate - global_adverse_rate), 4),
+                }
+            )
+
+        reviewer_rows.sort(key=lambda item: (-float(item.get('drift_score', 0.0)), -int(item.get('reviews', 0)), item.get('participant', '')))
+
+        return {
+            'generated_at': datetime.now().isoformat(),
+            'window_tasks': len(rows),
+            'window_failed_gate': total_failures,
+            'failure_taxonomy': taxonomy_rows,
+            'failure_taxonomy_trend': trend_rows,
+            'reviewer_global': {
+                'reviews': global_total,
+                'no_blocker_rate': round((global_counts.get('no_blocker', 0) / global_total) if global_total else 0.0, 4),
+                'blocker_rate': round((global_counts.get('blocker', 0) / global_total) if global_total else 0.0, 4),
+                'unknown_rate': round((global_counts.get('unknown', 0) / global_total) if global_total else 0.0, 4),
+                'adverse_rate': round(global_adverse_rate, 4),
+            },
+            'reviewer_drift': reviewer_rows,
+        }
+
+    def build_github_pr_summary(self, task_id: str) -> dict:
+        row = self.repository.get_task(task_id)
+        if row is None:
+            raise KeyError(task_id)
+
+        project_path = str(row.get('project_path') or row.get('workspace_path') or '').strip()
+        git = self._read_git_state(Path(project_path) if project_path else None)
+
+        history_items = self.list_project_history(project_path=project_path, limit=500)
+        history = next((item for item in history_items if str(item.get('task_id') or '') == task_id), None)
+
+        findings = list(history.get('core_findings', [])) if isinstance(history, dict) else []
+        revisions = dict(history.get('revisions', {})) if isinstance(history, dict) else {}
+        disputes = list(history.get('disputes', [])) if isinstance(history, dict) else []
+        next_steps = list(history.get('next_steps', [])) if isinstance(history, dict) else []
+
+        artifacts = self._collect_task_artifacts(task_id=task_id)
+
+        lines: list[str] = []
+        lines.append(f'### AWE-AgentForge Task Summary | {task_id}')
+        lines.append('')
+        lines.append(f'- Title: {row.get("title")}')
+        lines.append(f'- Status: {row.get("status")}')
+        lines.append(f'- Last reason: {row.get("last_gate_reason") or "n/a"}')
+        lines.append(f'- Rounds: {row.get("rounds_completed", 0)}/{row.get("max_rounds", 1)}')
+        lines.append(f'- Project path: `{project_path}`')
+        if git.get('is_git_repo'):
+            lines.append(f'- Git branch: `{git.get("branch") or "detached"}`')
+            lines.append(f'- Git worktree clean: `{git.get("worktree_clean")}`')
+            if git.get('remote_origin'):
+                lines.append(f'- Git remote: `{git.get("remote_origin")}`')
+        lines.append('')
+        lines.append('#### Core Findings')
+        if findings:
+            for item in findings[:5]:
+                lines.append(f'- {item}')
+        else:
+            lines.append('- n/a')
+        lines.append('')
+        lines.append('#### Revisions')
+        if revisions:
+            lines.append(f'- auto_merge: `{bool(revisions.get("auto_merge", False))}`')
+            lines.append(f'- mode: `{revisions.get("mode") or "n/a"}`')
+            lines.append(f'- changed_files: `{int(revisions.get("changed_files") or 0)}`')
+            lines.append(f'- copied_files: `{int(revisions.get("copied_files") or 0)}`')
+            lines.append(f'- deleted_files: `{int(revisions.get("deleted_files") or 0)}`')
+            if revisions.get('snapshot_path'):
+                lines.append(f'- snapshot_path: `{revisions.get("snapshot_path")}`')
+            if revisions.get('changelog_path'):
+                lines.append(f'- changelog_path: `{revisions.get("changelog_path")}`')
+        else:
+            lines.append('- n/a')
+        lines.append('')
+        lines.append('#### Review Disputes')
+        if disputes:
+            for item in disputes[:5]:
+                lines.append(
+                    f'- {item.get("participant", "reviewer")} | {item.get("verdict", "unknown")}: '
+                    f'{self._clip_snippet(item.get("note")) or "n/a"}'
+                )
+        else:
+            lines.append('- none')
+        lines.append('')
+        lines.append('#### Next Steps')
+        if next_steps:
+            for item in next_steps[:5]:
+                lines.append(f'- {item}')
+        else:
+            lines.append('- n/a')
+        lines.append('')
+        lines.append('#### Task Artifacts')
+        if artifacts:
+            for item in artifacts:
+                lines.append(f'- {item["name"]}: `{item["path"]}`')
+        else:
+            lines.append('- n/a')
+
+        return {
+            'task_id': task_id,
+            'project_path': project_path,
+            'status': str(row.get('status') or ''),
+            'git': git,
+            'summary_markdown': '\n'.join(lines).strip() + '\n',
+            'artifacts': artifacts,
+        }
 
     def list_project_history(self, *, project_path: str | None = None, limit: int = 200) -> list[dict]:
         limit_int = max(1, min(1000, int(limit)))
@@ -962,6 +1241,245 @@ class OrchestratorService:
         return text.replace('\\', '/').rstrip('/').lower()
 
     @staticmethod
+    def _format_task_day(value) -> str:
+        parsed = OrchestratorService._parse_iso_datetime(value)
+        if parsed is None:
+            return 'unknown'
+        return parsed.date().isoformat()
+
+    def _analyze_workspace_profile(self, workspace_path: str | None) -> dict:
+        resolved = str(workspace_path or '').strip()
+        if not resolved:
+            return {
+                'workspace_path': '',
+                'exists': False,
+                'repo_size': 'unknown',
+                'risk_level': 'unknown',
+                'file_count': 0,
+                'risk_markers': 0,
+            }
+
+        root = Path(resolved)
+        if not root.exists() or not root.is_dir():
+            return {
+                'workspace_path': str(root),
+                'exists': False,
+                'repo_size': 'unknown',
+                'risk_level': 'unknown',
+                'file_count': 0,
+                'risk_markers': 0,
+            }
+
+        ignore_dirs = {
+            '.git',
+            '.agents',
+            '.venv',
+            '__pycache__',
+            '.pytest_cache',
+            '.ruff_cache',
+            'node_modules',
+        }
+        risk_tokens = {
+            'prod',
+            'deploy',
+            'k8s',
+            'terraform',
+            'helm',
+            'security',
+            'auth',
+            'payment',
+            'migrations',
+            'migration',
+            'database',
+            'db',
+        }
+        risk_extensions = {'.sql', '.tf', '.yaml', '.yml'}
+
+        file_count = 0
+        risk_markers = 0
+        max_scan = 5000
+        for path in root.rglob('*'):
+            if file_count >= max_scan:
+                break
+            if not path.is_file():
+                continue
+            rel_parts = path.relative_to(root).parts
+            if any(part in ignore_dirs for part in rel_parts):
+                continue
+            file_count += 1
+            rel_text = '/'.join(str(v).lower() for v in rel_parts)
+            stem = path.stem.lower()
+            ext = path.suffix.lower()
+            if any(token in rel_text for token in risk_tokens):
+                risk_markers += 1
+                continue
+            if ext in risk_extensions and stem in {'prod', 'deploy', 'migration', 'schema', 'security'}:
+                risk_markers += 1
+
+        if file_count <= 120:
+            repo_size = 'small'
+        elif file_count <= 1200:
+            repo_size = 'medium'
+        else:
+            repo_size = 'large'
+
+        if risk_markers >= 20 or (repo_size == 'large' and risk_markers >= 8):
+            risk_level = 'high'
+        elif risk_markers >= 6 or repo_size == 'large':
+            risk_level = 'medium'
+        else:
+            risk_level = 'low'
+
+        return {
+            'workspace_path': str(root.resolve()),
+            'exists': True,
+            'repo_size': repo_size,
+            'risk_level': risk_level,
+            'file_count': file_count,
+            'risk_markers': risk_markers,
+            'scan_truncated': file_count >= max_scan,
+        }
+
+    @staticmethod
+    def _recommend_policy_template(*, profile: dict) -> str:
+        repo_size = str(profile.get('repo_size') or '').strip().lower()
+        risk = str(profile.get('risk_level') or '').strip().lower()
+        if repo_size == 'large' or risk == 'high':
+            return 'safe-review'
+        if repo_size == 'small' and risk == 'low':
+            return 'rapid-fix'
+        return _DEFAULT_POLICY_TEMPLATE
+
+    def _collect_task_artifacts(self, *, task_id: str) -> list[dict]:
+        key = self._validate_artifact_task_id(task_id)
+        root = self.artifact_store.root / 'threads' / key
+        if not root.exists() or not root.is_dir():
+            return []
+        out: list[dict] = []
+        wanted = [
+            ('state', root / 'state.json'),
+            ('events', root / 'events.jsonl'),
+            ('summary', root / 'summary.md'),
+            ('final_report', root / 'final_report.md'),
+            ('auto_merge_summary', root / 'artifacts' / 'auto_merge_summary.json'),
+            ('pending_proposal', root / 'artifacts' / 'pending_proposal.json'),
+        ]
+        for name, path in wanted:
+            if path.exists() and path.is_file():
+                out.append({'name': name, 'path': str(path)})
+        return out
+
+    @staticmethod
+    def _run_git_command(*, root: Path, args: list[str]) -> tuple[bool, str]:
+        try:
+            completed = subprocess.run(
+                ['git', *args],
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=5,
+            )
+        except Exception:
+            return False, ''
+        if completed.returncode != 0:
+            return False, (completed.stderr or completed.stdout or '').strip()
+        return True, (completed.stdout or '').strip()
+
+    def _read_git_state(self, root: Path | None) -> dict:
+        if root is None:
+            return {
+                'is_git_repo': False,
+                'branch': None,
+                'worktree_clean': None,
+                'remote_origin': None,
+                'guard_allowed': True,
+                'guard_reason': 'no_target',
+            }
+        if not root.exists() or not root.is_dir():
+            return {
+                'is_git_repo': False,
+                'branch': None,
+                'worktree_clean': None,
+                'remote_origin': None,
+                'guard_allowed': True,
+                'guard_reason': 'missing_path',
+            }
+
+        ok_git, git_flag = self._run_git_command(root=root, args=['rev-parse', '--is-inside-work-tree'])
+        if not ok_git or git_flag.strip().lower() != 'true':
+            return {
+                'is_git_repo': False,
+                'branch': None,
+                'worktree_clean': None,
+                'remote_origin': None,
+                'guard_allowed': True,
+                'guard_reason': 'non_git_repo',
+            }
+
+        ok_branch, branch = self._run_git_command(root=root, args=['branch', '--show-current'])
+        ok_status, status_out = self._run_git_command(root=root, args=['status', '--porcelain'])
+        ok_remote, remote = self._run_git_command(root=root, args=['remote', 'get-url', 'origin'])
+        return {
+            'is_git_repo': True,
+            'branch': branch if ok_branch else None,
+            'worktree_clean': (len(str(status_out or '').strip()) == 0) if ok_status else None,
+            'remote_origin': remote if ok_remote else None,
+            'guard_allowed': True,
+            'guard_reason': 'unvalidated',
+        }
+
+    @staticmethod
+    def _promotion_guard_config() -> dict:
+        enabled = str(os.getenv('AWE_PROMOTION_GUARD_ENABLED', '1') or '1').strip().lower() in {'1', 'true', 'yes', 'on'}
+        # Default is non-blocking for local development; enforce via env when needed.
+        require_clean = str(os.getenv('AWE_PROMOTION_REQUIRE_CLEAN', '0') or '0').strip().lower() in {'1', 'true', 'yes', 'on'}
+        raw_branches = str(os.getenv('AWE_PROMOTION_ALLOWED_BRANCHES', '') or '').strip()
+        allowed_branches = [
+            item.strip()
+            for item in raw_branches.split(',')
+            if item.strip()
+        ]
+        return {
+            'enabled': enabled,
+            'require_clean': require_clean,
+            'allowed_branches': allowed_branches,
+        }
+
+    def _evaluate_promotion_guard(self, *, target_root: Path) -> dict:
+        cfg = self._promotion_guard_config()
+        git = self._read_git_state(target_root)
+        payload = {
+            'enabled': bool(cfg.get('enabled', True)),
+            'target_path': str(target_root),
+            'allowed_branches': list(cfg.get('allowed_branches', [])),
+            'require_clean': bool(cfg.get('require_clean', True)),
+            **git,
+        }
+        if not payload['enabled']:
+            payload['guard_allowed'] = True
+            payload['guard_reason'] = 'guard_disabled'
+            return payload
+        if not bool(payload.get('is_git_repo')):
+            payload['guard_allowed'] = True
+            payload['guard_reason'] = 'non_git_repo'
+            return payload
+        branch = str(payload.get('branch') or '').strip()
+        allowed_branches = payload.get('allowed_branches') or []
+        if allowed_branches and branch and branch not in allowed_branches:
+            payload['guard_allowed'] = False
+            payload['guard_reason'] = f'branch_not_allowed:{branch}'
+            return payload
+        if bool(payload.get('require_clean')) and payload.get('worktree_clean') is False:
+            payload['guard_allowed'] = False
+            payload['guard_reason'] = 'dirty_worktree'
+            return payload
+        payload['guard_allowed'] = True
+        payload['guard_reason'] = 'ok'
+        return payload
+
+    @staticmethod
     def _read_json_file(path: Path | None) -> dict:
         if path is None or not path.exists():
             return {}
@@ -1342,6 +1860,43 @@ class OrchestratorService:
         if final_status == TaskStatus.PASSED and bool(row.get('auto_merge', True)):
             try:
                 target_root = self._resolve_merge_target(row)
+                guard = self._evaluate_promotion_guard(target_root=target_root)
+                self.repository.append_event(
+                    task_id,
+                    event_type='promotion_guard_checked',
+                    payload=guard,
+                    round_number=None,
+                )
+                self.artifact_store.append_event(task_id, {'type': 'promotion_guard_checked', **guard})
+                self.artifact_store.update_state(task_id, {'promotion_guard_last': guard})
+                if not bool(guard.get('guard_allowed', True)):
+                    blocked_reason = f'promotion_guard_blocked: {guard.get("guard_reason") or "blocked"}'
+                    self.repository.append_event(
+                        task_id,
+                        event_type='promotion_guard_blocked',
+                        payload={'reason': blocked_reason, **guard},
+                        round_number=None,
+                    )
+                    self.artifact_store.append_event(
+                        task_id,
+                        {'type': 'promotion_guard_blocked', 'reason': blocked_reason, **guard},
+                    )
+                    updated = self.repository.update_task_status(
+                        task_id,
+                        status=TaskStatus.FAILED_GATE.value,
+                        reason=blocked_reason,
+                        rounds_completed=result.rounds,
+                    )
+                    self.artifact_store.update_state(
+                        task_id,
+                        {
+                            'status': TaskStatus.FAILED_GATE.value,
+                            'last_gate_reason': blocked_reason,
+                            'rounds_completed': result.rounds,
+                        },
+                    )
+                    self.artifact_store.write_final_report(task_id, f'status=failed_gate\nreason={blocked_reason}')
+                    return self._to_view(updated)
                 fusion = self.fusion_manager.run(
                     task_id=task_id,
                     source_root=workspace_root,
@@ -1526,6 +2081,22 @@ class OrchestratorService:
             raise InputValidationError(
                 'merge_target_path must be an existing directory',
                 field='merge_target_path',
+            )
+
+        guard = self._evaluate_promotion_guard(target_root=target_root)
+        self.repository.append_event(
+            task_id,
+            event_type='promotion_guard_checked',
+            payload=guard,
+            round_number=round_no,
+        )
+        self.artifact_store.append_event(task_id, {'type': 'promotion_guard_checked', **guard})
+        self.artifact_store.update_state(task_id, {'promotion_guard_last': guard})
+        if not bool(guard.get('guard_allowed', True)):
+            raise InputValidationError(
+                f'promotion guard blocked: {guard.get("guard_reason") or "blocked"}',
+                field='merge_target_path',
+                code='promotion_guard_blocked',
             )
 
         before_manifest = self.fusion_manager.build_manifest(baseline_snapshot)
@@ -2186,7 +2757,7 @@ class OrchestratorService:
         for raw_provider, raw_model in value.items():
             provider = str(raw_provider or '').strip().lower()
             model = str(raw_model or '').strip()
-            if provider not in SUPPORTED_PROVIDERS:
+            if provider not in _supported_providers():
                 raise InputValidationError(
                     f'invalid provider_models key: {provider}',
                     field='provider_models',
@@ -2232,7 +2803,7 @@ class OrchestratorService:
         for raw_provider, raw_params in value.items():
             provider = str(raw_provider or '').strip().lower()
             params = str(raw_params or '').strip()
-            if provider not in SUPPORTED_PROVIDERS:
+            if provider not in _supported_providers():
                 raise InputValidationError(
                     f'invalid provider_model_params key: {provider}',
                     field='provider_model_params',

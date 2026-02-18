@@ -90,6 +90,12 @@
    - 第 1 轮加固：artifact 事件防路径穿越、Windows 命令路径解析修复、SQL 条件状态更新原子化。
    - 第 2 轮加固：并发事件序号分配、沙盒创建失败回滚清理、沙盒默认私有目录、敏感文件跳过规则。
    - 修复 reviewer 阻塞的 FK 风险：删除任务前先清理 `task_event_counters`，并新增 DB 回归测试。
+18. 已落地此前路线图中的 Q2/Q3 关键能力：
+   - GitHub/PR 深度联动：`GET /api/tasks/{task_id}/github-summary`，输出可直接粘贴 PR 的摘要与工件路径。
+   - 策略模板（按仓库体量/风险）：`GET /api/policy-templates`，并接入 Web 的 Apply Policy 流程。
+   - 可插拔参与者适配器：通过 `AWE_PROVIDER_ADAPTERS_JSON` 扩展内置 Claude/Codex/Gemini 之外的 provider。
+   - 分支感知晋升防护：自动融合与轮次晋升前执行 branch/worktree guard。
+   - 高级可视化分析：`GET /api/analytics` 与面板中的失败分类趋势 + reviewer 偏移信号。
 
 <br/>
 
@@ -289,6 +295,10 @@ $env:AWE_WORKFLOW_BACKEND="langgraph"
 | `AWE_PARTICIPANT_TIMEOUT_RETRIES` | `1` | 参与者超时后的重试次数 |
 | `AWE_MAX_CONCURRENT_RUNNING_TASKS` | `1` | 可同时运行的任务数量 |
 | `AWE_WORKFLOW_BACKEND` | `langgraph` | 工作流后端（推荐 `langgraph`，可回退 `classic`） |
+| `AWE_PROVIDER_ADAPTERS_JSON` | _(无)_ | 额外 provider 适配器 JSON 映射，例如 `{"qwen":"qwen-cli --yolo"}` |
+| `AWE_PROMOTION_GUARD_ENABLED` | `true` | 在自动融合/轮次晋升前启用 promotion guard 检查 |
+| `AWE_PROMOTION_ALLOWED_BRANCHES` | _(空)_ | 可选逗号分隔分支白名单（空表示不限制分支） |
+| `AWE_PROMOTION_REQUIRE_CLEAN` | `false` | guard 启用时是否要求 git 工作区干净 |
 | `AWE_SANDBOX_USE_PUBLIC_BASE` | `false` | 仅在显式设置为 `1/true` 时使用共享/公共沙盒根目录 |
 | `AWE_DRY_RUN` | `false` | 设为 `true` 时不实际调用参与者 |
 | `AWE_SERVICE_NAME` | `awe-agentcheck` | 可观测性中的服务名称 |
@@ -861,16 +871,16 @@ POST /api/tasks
 - [x] 自动融合 + 变更日志 + 快照
 - [x] 监控页多主题与角色视角
 
-### 2026 Q2 &nbsp; <img src="https://img.shields.io/badge/状态-计划中-3b82f6?style=flat-square" alt="计划中"/>
+### 2026 Q2 &nbsp; <img src="https://img.shields.io/badge/状态-已完成-22c55e?style=flat-square" alt="已完成"/>
 
-- [ ] GitHub / PR 深度联动（任务工件回链）
-- [ ] 按仓库体量和风险级别的策略模板
-- [ ] 扩展 Claude/Codex/Gemini 之外的更多参与者适配器
+- [x] GitHub / PR 深度联动（任务工件回链）
+- [x] 按仓库体量和风险级别的策略模板
+- [x] 扩展 Claude/Codex/Gemini 之外的更多参与者适配器
 
-### 2026 Q3 &nbsp; <img src="https://img.shields.io/badge/状态-计划中-3b82f6?style=flat-square" alt="计划中"/>
+### 2026 Q3 &nbsp; <img src="https://img.shields.io/badge/状态-已完成-22c55e?style=flat-square" alt="已完成"/>
 
-- [ ] 沙盒到主仓的策略化自动晋升流水线
-- [ ] 更高级的质量趋势分析和评审偏移检测
+- [x] 沙盒到主仓的策略化自动晋升流水线
+- [x] 更高级的质量趋势分析和评审偏移检测
 
 <br/>
 

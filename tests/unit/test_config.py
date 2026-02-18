@@ -49,3 +49,15 @@ def test_load_settings_invalid_workflow_backend_falls_back_to_langgraph(monkeypa
     monkeypatch.setenv('AWE_WORKFLOW_BACKEND', 'invalid-backend')
     settings = load_settings()
     assert settings.workflow_backend == 'langgraph'
+
+
+def test_load_settings_parses_extra_provider_commands(monkeypatch):
+    monkeypatch.setenv(
+        'AWE_PROVIDER_ADAPTERS_JSON',
+        '{"qwen":"qwen-cli --yolo","deepseek":"deepseek-cli run"}',
+    )
+    settings = load_settings()
+    assert settings.extra_provider_commands == {
+        'qwen': 'qwen-cli --yolo',
+        'deepseek': 'deepseek-cli run',
+    }

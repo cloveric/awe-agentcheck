@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from awe_agentcheck.main import build_app
+from awe_agentcheck.participants import set_extra_providers
 
 
 def test_build_app_falls_back_to_in_memory_repo_on_bad_database_url(monkeypatch):
@@ -55,3 +56,30 @@ def test_build_app_wires_workflow_backend_into_engine(monkeypatch):
 
     assert resp.status_code == 200
     assert captured.get('workflow_backend') == 'langgraph'
+
+
+def test_build_app_wires_extra_provider_adapters_into_runner(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, *, command_overrides, dry_run, timeout_retries):
+            self.commands = dict(command_overrides)
+            captured['command_overrides'] = dict(command_overrides)
+            captured['dry_run'] = dry_run
+            captured['timeout_retries'] = timeout_retries
+
+    monkeypatch.setenv('AWE_DATABASE_URL', 'invalid+driver://bad')
+    monkeypatch.setenv('AWE_PROVIDER_ADAPTERS_JSON', '{"qwen":"qwen-cli --yolo"}')
+    monkeypatch.setattr('awe_agentcheck.main.ParticipantRunner', FakeRunner)
+
+    try:
+        app = build_app()
+        client = TestClient(app)
+        resp = client.get('/healthz')
+
+        assert resp.status_code == 200
+        overrides = captured.get('command_overrides')
+        assert isinstance(overrides, dict)
+        assert overrides.get('qwen') == 'qwen-cli --yolo'
+    finally:
+        set_extra_providers(set())

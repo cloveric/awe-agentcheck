@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from awe_agentcheck.adapters import AdapterResult
-from awe_agentcheck.participants import parse_participant_id
+from awe_agentcheck.participants import parse_participant_id, set_extra_providers
 from awe_agentcheck.repository import InMemoryTaskRepository
 from awe_agentcheck.service import CreateTaskInput, InputValidationError, OrchestratorService
 from awe_agentcheck.storage.artifacts import ArtifactStore
@@ -2027,3 +2027,186 @@ def test_create_task_rejects_invalid_reviewer_participant(tmp_path: Path):
                 workspace_path=str(tmp_path),
             )
         )
+
+
+def test_service_policy_templates_return_recommended_profile(tmp_path: Path):
+    svc = build_service(tmp_path)
+    project = tmp_path / 'policy-repo'
+    project.mkdir()
+    (project / 'src').mkdir()
+    for i in range(8):
+        (project / 'src' / f'module_{i}.py').write_text('print(1)\n', encoding='utf-8')
+    (project / 'deploy-prod.yaml').write_text('kind: Deployment\n', encoding='utf-8')
+
+    payload = svc.get_policy_templates(workspace_path=str(project))
+    assert payload['recommended_template'] in {'balanced-default', 'safe-review', 'rapid-fix'}
+    assert payload['profile']['exists'] is True
+    assert payload['profile']['workspace_path']
+    assert payload['profile']['file_count'] >= 1
+    ids = {item['id'] for item in payload['templates']}
+    assert {'balanced-default', 'safe-review', 'rapid-fix', 'deep-evolve'}.issubset(ids)
+
+
+def test_service_analytics_reports_failure_taxonomy_and_reviewer_drift(tmp_path: Path):
+    svc = build_service(tmp_path)
+    project = tmp_path / 'analytics-repo'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+
+    task = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+            title='Analytics task',
+            description='collect analytics',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            max_rounds=1,
+        )
+    )
+    svc.repository.update_task_status(task.task_id, status='failed_gate', reason='review_blocker', rounds_completed=1)
+    svc.repository.append_event(
+        task.task_id,
+        event_type='review',
+        payload={'participant': 'claude#review-B', 'verdict': 'blocker', 'output': 'security issue'},
+        round_number=1,
+    )
+
+    analytics = svc.get_analytics(limit=100)
+    assert analytics['window_tasks'] >= 1
+    assert analytics['window_failed_gate'] >= 1
+    assert any(item['bucket'] == 'review_blocker' for item in analytics['failure_taxonomy'])
+    assert any(item['participant'] == 'claude#review-B' for item in analytics['reviewer_drift'])
+
+
+def test_service_build_github_summary_includes_markdown_and_artifacts(tmp_path: Path):
+    svc = build_service(tmp_path)
+    project = tmp_path / 'gh-summary-repo'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+
+    task = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+            title='GitHub summary',
+            description='summary generation',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+        )
+    )
+    svc.repository.update_task_status(task.task_id, status='failed_gate', reason='review_blocker', rounds_completed=1)
+    svc.artifact_store.write_summary(task.task_id, 'Found blocker in API auth flow.\n')
+
+    summary = svc.build_github_pr_summary(task.task_id)
+    assert summary['task_id'] == task.task_id
+    assert 'AWE-AgentForge Task Summary' in summary['summary_markdown']
+    assert 'Core Findings' in summary['summary_markdown']
+    assert isinstance(summary['artifacts'], list)
+
+
+def test_service_promote_selected_round_blocks_on_promotion_guard(tmp_path: Path, monkeypatch):
+    project = tmp_path / 'repo-promote-guard'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+    svc = build_service(tmp_path, workflow_engine=FakeWorkflowEngineTwoRoundsWithChanges())
+
+    created = svc.create_task(
+        CreateTaskInput(
+            title='Promote guard task',
+            description='promotion guard blocked',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            auto_merge=False,
+            max_rounds=2,
+            self_loop_mode=1,
+        )
+    )
+    started = svc.start_task(created.task_id)
+    assert started.status.value == 'passed'
+
+    monkeypatch.setattr(
+        svc,
+        '_evaluate_promotion_guard',
+        lambda *, target_root: {
+            'enabled': True,
+            'target_path': str(target_root),
+            'allowed_branches': ['main'],
+            'require_clean': True,
+            'is_git_repo': True,
+            'branch': 'feature/demo',
+            'worktree_clean': True,
+            'remote_origin': None,
+            'guard_allowed': False,
+            'guard_reason': 'branch_not_allowed:feature/demo',
+        },
+    )
+    with pytest.raises(InputValidationError, match='promotion guard blocked'):
+        svc.promote_selected_round(created.task_id, round_number=1, merge_target_path=str(project))
+
+
+def test_service_auto_merge_fails_when_promotion_guard_blocks(tmp_path: Path, monkeypatch):
+    project = tmp_path / 'repo-auto-merge-guard'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+    svc = build_service(tmp_path, workflow_engine=FakeWorkflowEngineWithFileChange())
+
+    created = svc.create_task(
+        CreateTaskInput(
+            title='Auto merge guard task',
+            description='guard blocks merge',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            auto_merge=True,
+            self_loop_mode=1,
+            max_rounds=1,
+        )
+    )
+    monkeypatch.setattr(
+        svc,
+        '_evaluate_promotion_guard',
+        lambda *, target_root: {
+            'enabled': True,
+            'target_path': str(target_root),
+            'allowed_branches': ['main'],
+            'require_clean': True,
+            'is_git_repo': True,
+            'branch': 'feature/demo',
+            'worktree_clean': True,
+            'remote_origin': None,
+            'guard_allowed': False,
+            'guard_reason': 'branch_not_allowed:feature/demo',
+        },
+    )
+
+    finished = svc.start_task(created.task_id)
+    assert finished.status.value == 'failed_gate'
+    assert 'promotion_guard_blocked' in str(finished.last_gate_reason or '')
+
+
+def test_service_accepts_extra_registered_provider_participants(tmp_path: Path):
+    svc = build_service(tmp_path)
+    set_extra_providers({'qwen'})
+    try:
+        task = svc.create_task(
+            CreateTaskInput(
+                sandbox_mode=False,
+                self_loop_mode=1,
+                title='Extra provider task',
+                description='use qwen adapter',
+                author_participant='qwen#author-A',
+                reviewer_participants=['claude#review-B'],
+                workspace_path=str(tmp_path),
+            )
+        )
+        assert task.author_participant == 'qwen#author-A'
+    finally:
+        set_extra_providers(set())

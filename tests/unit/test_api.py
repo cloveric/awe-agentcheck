@@ -159,6 +159,73 @@ def test_api_events_and_cancel(tmp_path: Path):
     assert isinstance(body['failed_system_rate_50'], float)
 
 
+def test_api_policy_templates_endpoint_returns_profile_and_templates(tmp_path: Path):
+    client = build_client(tmp_path)
+    project = tmp_path / 'policy-api-repo'
+    project.mkdir()
+    (project / 'README.md').write_text('hello\n', encoding='utf-8')
+
+    resp = client.get('/api/policy-templates', params={'workspace_path': str(project)})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body['recommended_template'] in {'balanced-default', 'safe-review', 'rapid-fix'}
+    assert body['profile']['exists'] is True
+    assert body['profile']['workspace_path']
+    ids = {item['id'] for item in body['templates']}
+    assert {'balanced-default', 'safe-review', 'rapid-fix', 'deep-evolve'}.issubset(ids)
+
+
+def test_api_analytics_endpoint_returns_failure_and_drift_views(tmp_path: Path):
+    client = build_client(tmp_path)
+    created = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Analytics API Task',
+            'description': 'analytics',
+            'author_participant': 'claude#author-A',
+            'reviewer_participants': ['codex#review-B'],
+            'sandbox_mode': False,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    task_id = created.json()['task_id']
+    client.post(f'/api/tasks/{task_id}/start', json={'background': False})
+
+    resp = client.get('/api/analytics', params={'limit': 100})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body['failure_taxonomy'], list)
+    assert isinstance(body['failure_taxonomy_trend'], list)
+    assert isinstance(body['reviewer_drift'], list)
+    assert 'adverse_rate' in body['reviewer_global']
+
+
+def test_api_github_summary_endpoint_returns_markdown_payload(tmp_path: Path):
+    client = build_client(tmp_path)
+    created = client.post(
+        '/api/tasks',
+        json={
+            'title': 'GitHub Summary API Task',
+            'description': 'summary',
+            'author_participant': 'claude#author-A',
+            'reviewer_participants': ['codex#review-B'],
+            'sandbox_mode': False,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    task_id = created.json()['task_id']
+    client.post(f'/api/tasks/{task_id}/start', json={'background': False})
+
+    resp = client.get(f'/api/tasks/{task_id}/github-summary')
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body['task_id'] == task_id
+    assert 'AWE-AgentForge Task Summary' in body['summary_markdown']
+    assert isinstance(body['artifacts'], list)
+
+
 def test_api_force_fail_marks_task_failed_system(tmp_path: Path):
     client = build_client(tmp_path)
 

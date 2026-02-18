@@ -2243,6 +2243,24 @@
 
         <section class="card">
           <div class="tree-head">
+            <h2 class="card-title">Advanced Analytics</h2>
+          </div>
+          <div id="analyticsSummary" class="history-list"></div>
+        </section>
+
+        <section class="card">
+          <div class="tree-head">
+            <h2 class="card-title">GitHub / PR Summary</h2>
+            <div class="tree-tools">
+              <button id="reloadGithubSummaryBtn" class="tree-tool-btn" type="button">Reload</button>
+            </div>
+          </div>
+          <div id="githubSummaryMeta" class="mini-status">Select a task to generate PR-ready summary.</div>
+          <textarea id="githubSummaryText" readonly style="min-height: 220px;"></textarea>
+        </section>
+
+        <section class="card">
+          <div class="tree-head">
             <h2 class="card-title">Create Task</h2>
             <div class="tree-tools">
               <button id="openCreateHelpBtn" class="tree-tool-btn" type="button">Help</button>
@@ -2277,6 +2295,20 @@
             <div style="flex:1; min-width:220px;">
               <label for="reviewers">Reviewers (comma-separated: claude/codex/gemini)</label>
               <input id="reviewers" value="claude#review-B,gemini#review-C" />
+            </div>
+          </div>
+          <div class="controls-row">
+            <div style="flex:1; min-width:220px;">
+              <label for="policyTemplate">Policy Template</label>
+              <select id="policyTemplate"></select>
+            </div>
+            <div style="flex:1; min-width:220px;">
+              <label>&nbsp;</label>
+              <button id="applyPolicyTemplateBtn" type="button">Apply Policy</button>
+            </div>
+            <div style="flex:2; min-width:260px;">
+              <label for="policyProfileHint">Workspace Profile</label>
+              <input id="policyProfileHint" readonly value="Loading policy profile..." />
             </div>
           </div>
           <div class="controls-row">
@@ -2450,6 +2482,8 @@
       tasks: [],
       historyItems: [],
       stats: null,
+      analytics: null,
+      policyTemplates: null,
       providerModelCatalog: {
         claude: [...DEFAULT_PROVIDER_MODEL_CATALOG.claude],
         codex: [...DEFAULT_PROVIDER_MODEL_CATALOG.codex],
@@ -2460,6 +2494,7 @@
       selectedTaskId: null,
       theme: 'neon',
       eventsByTask: new Map(),
+      githubSummaryByTask: new Map(),
       treeByProject: new Map(),
       treeOpenByProject: new Map(),
       historyCollapsed: false,
@@ -2485,8 +2520,12 @@
       roleList: document.getElementById('roleList'),
       statsLine: document.getElementById('statsLine'),
       kpiStrip: document.getElementById('kpiStrip'),
+      analyticsSummary: document.getElementById('analyticsSummary'),
       taskSelect: document.getElementById('taskSelect'),
       dialogue: document.getElementById('dialogue'),
+      githubSummaryMeta: document.getElementById('githubSummaryMeta'),
+      githubSummaryText: document.getElementById('githubSummaryText'),
+      reloadGithubSummaryBtn: document.getElementById('reloadGithubSummaryBtn'),
       actionStatus: document.getElementById('actionStatus'),
       taskSnapshot: document.getElementById('taskSnapshot'),
       projectHistory: document.getElementById('projectHistory'),
@@ -2517,6 +2556,11 @@
       approveQueueBtn: document.getElementById('approveQueueBtn'),
       approveStartBtn: document.getElementById('approveStartBtn'),
       rejectBtn: document.getElementById('rejectBtn'),
+      policyTemplate: document.getElementById('policyTemplate'),
+      applyPolicyTemplateBtn: document.getElementById('applyPolicyTemplateBtn'),
+      policyProfileHint: document.getElementById('policyProfileHint'),
+      workspacePath: document.getElementById('workspacePath'),
+      selfLoopMode: document.getElementById('selfLoopMode'),
       claudeModel: document.getElementById('claudeModel'),
       codexModel: document.getElementById('codexModel'),
       geminiModel: document.getElementById('geminiModel'),
@@ -2573,6 +2617,11 @@
         field: 'Reviewers',
         en: 'One or more review roles, comma-separated. They challenge and evaluate the author output.',
         zh: '一个或多个审阅角色，逗号分隔。用于质疑与评估作者输出。',
+      },
+      {
+        field: 'Policy Template',
+        en: 'Preset control policy by repo size/risk profile. Click "Apply Policy" to fill recommended controls.',
+        zh: '按仓库规模/风险给出策略模板。点击“Apply Policy”可自动填入推荐控制项。',
       },
       {
         field: 'Claude/Codex/Gemini Model',
@@ -4675,6 +4724,191 @@
       }
     }
 
+    function currentWorkspacePathForPolicy() {
+      const task = selectedTask();
+      if (task && task.workspace_path) {
+        return String(task.workspace_path);
+      }
+      if (state.selectedProject) {
+        return String(state.selectedProject);
+      }
+      if (el.workspacePath && String(el.workspacePath.value || '').trim()) {
+        return String(el.workspacePath.value || '').trim();
+      }
+      return '.';
+    }
+
+    function renderPolicyTemplates() {
+      const payload = state.policyTemplates;
+      if (!el.policyTemplate || !el.policyProfileHint) return;
+      if (!payload || !Array.isArray(payload.templates)) {
+        el.policyTemplate.innerHTML = '<option value="">n/a</option>';
+        el.policyProfileHint.value = 'Policy templates unavailable';
+        return;
+      }
+
+      const current = String(el.policyTemplate.value || '').trim();
+      el.policyTemplate.innerHTML = '';
+      for (const item of payload.templates) {
+        const option = document.createElement('option');
+        option.value = String(item.id || '');
+        option.textContent = `${item.id} | ${item.label}`;
+        el.policyTemplate.appendChild(option);
+      }
+      const validCurrent = payload.templates.some((item) => String(item.id || '') === current);
+      if (validCurrent) {
+        el.policyTemplate.value = current;
+      } else {
+        el.policyTemplate.value = String(payload.recommended_template || '');
+      }
+
+      const profile = payload.profile || {};
+      const exists = profile.exists ? 'yes' : 'no';
+      const size = String(profile.repo_size || 'unknown');
+      const risk = String(profile.risk_level || 'unknown');
+      const files = Number(profile.file_count || 0);
+      const markers = Number(profile.risk_markers || 0);
+      el.policyProfileHint.value = `exists=${exists} | size=${size} | risk=${risk} | files=${files} | riskMarkers=${markers}`;
+    }
+
+    function applySelectedPolicyTemplate() {
+      const payload = state.policyTemplates;
+      if (!payload || !Array.isArray(payload.templates) || !el.policyTemplate) return;
+      const selectedId = String(el.policyTemplate.value || '').trim();
+      const selected = payload.templates.find((item) => String(item.id || '').trim() === selectedId);
+      if (!selected || !selected.defaults) return;
+      const defaults = selected.defaults;
+      const mapNum = (value, fallback) => String(Number.isFinite(Number(value)) ? Number(value) : fallback);
+
+      if (el.sandboxMode) el.sandboxMode.value = mapNum(defaults.sandbox_mode, 1);
+      if (el.selfLoopMode) el.selfLoopMode.value = mapNum(defaults.self_loop_mode, 0);
+      if (el.autoMerge) el.autoMerge.value = mapNum(defaults.auto_merge, 1);
+      if (el.maxRounds) el.maxRounds.value = String(Math.max(1, Number(defaults.max_rounds || 1)));
+      if (el.debateMode) el.debateMode.value = mapNum(defaults.debate_mode, 1);
+      if (el.plainMode) el.plainMode.value = mapNum(defaults.plain_mode, 1);
+      if (el.streamMode) el.streamMode.value = mapNum(defaults.stream_mode, 1);
+      if (el.repairMode && defaults.repair_mode) el.repairMode.value = String(defaults.repair_mode);
+      syncCreateTaskPolicyControls('policyTemplate');
+      if (el.createStatus) {
+        el.createStatus.textContent = `Applied policy template: ${selectedId}`;
+      }
+    }
+
+    async function refreshPolicyTemplates() {
+      const workspacePath = currentWorkspacePathForPolicy();
+      try {
+        const payload = await api('/api/policy-templates?workspace_path=' + encodeURIComponent(workspacePath));
+        state.policyTemplates = payload || null;
+      } catch {
+        state.policyTemplates = null;
+      }
+      renderPolicyTemplates();
+    }
+
+    function renderAnalytics() {
+      if (!el.analyticsSummary) return;
+      const analytics = state.analytics;
+      el.analyticsSummary.innerHTML = '';
+      if (!analytics) {
+        el.analyticsSummary.innerHTML = '<div class="empty">Analytics unavailable.</div>';
+        return;
+      }
+
+      const taxonomy = Array.isArray(analytics.failure_taxonomy) ? analytics.failure_taxonomy : [];
+      const trend = Array.isArray(analytics.failure_taxonomy_trend) ? analytics.failure_taxonomy_trend : [];
+      const drift = Array.isArray(analytics.reviewer_drift) ? analytics.reviewer_drift : [];
+
+      const topTaxonomy = taxonomy.slice(0, 6).map((item) =>
+        `${item.bucket}: ${item.count} (${(Number(item.share || 0) * 100).toFixed(1)}%)`
+      );
+      const recentTrend = trend.slice(-5).map((item) => {
+        const buckets = item.buckets || {};
+        const top = Object.entries(buckets)
+          .sort((a, b) => Number(b[1]) - Number(a[1]))
+          .slice(0, 2)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ');
+        return `${item.day}: total=${item.total}${top ? ` | ${top}` : ''}`;
+      });
+      const topDrift = drift.slice(0, 8).map((item) =>
+        `${item.participant}: drift=${item.drift_score}, adverse=${(Number(item.adverse_rate || 0) * 100).toFixed(1)}%, reviews=${item.reviews}`
+      );
+
+      const blocks = [
+        {
+          title: 'Failure Taxonomy',
+          lines: topTaxonomy.length ? topTaxonomy : ['n/a'],
+        },
+        {
+          title: 'Trend (Recent Days)',
+          lines: recentTrend.length ? recentTrend : ['n/a'],
+        },
+        {
+          title: 'Reviewer Drift',
+          lines: topDrift.length ? topDrift : ['n/a'],
+        },
+      ];
+
+      for (const block of blocks) {
+        const card = document.createElement('article');
+        card.className = 'history-item';
+        card.innerHTML = `
+          <div class="history-head"><span>${escapeHtml(block.title)}</span></div>
+          <div class="history-meta">${escapeHtml(block.lines.join('\n'))}</div>
+        `;
+        el.analyticsSummary.appendChild(card);
+      }
+    }
+
+    async function refreshAnalytics() {
+      try {
+        state.analytics = await api('/api/analytics?limit=300');
+      } catch {
+        state.analytics = null;
+      }
+      renderAnalytics();
+    }
+
+    function renderGithubSummary() {
+      if (!el.githubSummaryText || !el.githubSummaryMeta) return;
+      const task = selectedTask();
+      if (!task) {
+        el.githubSummaryMeta.textContent = 'Select a task to generate PR-ready summary.';
+        el.githubSummaryText.value = '';
+        return;
+      }
+      const payload = state.githubSummaryByTask.get(task.task_id);
+      if (!payload) {
+        el.githubSummaryMeta.textContent = `Task ${task.task_id} | summary not loaded yet`;
+        el.githubSummaryText.value = '';
+        return;
+      }
+      const git = payload.git || {};
+      const branch = git.branch || 'n/a';
+      const guard = String(git.guard_reason || 'n/a');
+      el.githubSummaryMeta.textContent = `Task ${task.task_id} | status=${payload.status || 'unknown'} | branch=${branch} | guard=${guard}`;
+      el.githubSummaryText.value = String(payload.summary_markdown || '');
+    }
+
+    async function refreshGithubSummary({ force = false } = {}) {
+      const task = selectedTask();
+      if (!task || task._history_only) {
+        renderGithubSummary();
+        return;
+      }
+      if (!force && state.githubSummaryByTask.has(task.task_id)) {
+        renderGithubSummary();
+        return;
+      }
+      try {
+        const payload = await api(`/api/tasks/${task.task_id}/github-summary`);
+        state.githubSummaryByTask.set(task.task_id, payload);
+      } catch {
+        state.githubSummaryByTask.delete(task.task_id);
+      }
+      renderGithubSummary();
+    }
+
     function eventActor(event, task) {
       const payload = event.payload || {};
       const type = String(event.type || '');
@@ -5127,6 +5361,9 @@
         el.actionStatus.textContent = `Project tree load failed: ${String(err)}`;
       }
       await refreshConversation({ force: forceEvents });
+      await refreshGithubSummary({ force: forceEvents });
+      await refreshPolicyTemplates();
+      await refreshAnalytics();
     }
 
     async function startSelectedTask() {
@@ -5139,6 +5376,7 @@
           body: JSON.stringify({ background: true }),
         });
         state.eventsByTask.delete(task.task_id);
+        state.githubSummaryByTask.delete(task.task_id);
         const afterStatus = String((updated && updated.status) || beforeStatus || 'unknown');
         if (beforeStatus === 'running' && afterStatus === 'running') {
           el.actionStatus.textContent = `${task.task_id} already running; wait for next event or keep Background Refresh ON.`;
@@ -5161,6 +5399,7 @@
       try {
         await api(`/api/tasks/${task.task_id}/cancel`, { method: 'POST' });
         state.eventsByTask.delete(task.task_id);
+        state.githubSummaryByTask.delete(task.task_id);
         el.actionStatus.textContent = `Cancel requested for ${task.task_id}`;
         await loadData({ forceEvents: true });
       } catch (err) {
@@ -5178,6 +5417,7 @@
           body: JSON.stringify({ reason }),
         });
         state.eventsByTask.delete(task.task_id);
+        state.githubSummaryByTask.delete(task.task_id);
         el.actionStatus.textContent = `Force-failed ${task.task_id}`;
         await loadData({ forceEvents: true });
       } catch (err) {
@@ -5199,6 +5439,7 @@
           }),
         });
         state.eventsByTask.delete(task.task_id);
+        state.githubSummaryByTask.delete(task.task_id);
         const changedCount = Array.isArray(result.changed_files) ? result.changed_files.length : 0;
         el.actionStatus.textContent = `Promoted ${task.task_id} round ${roundNumber} (changed=${changedCount})`;
         await loadData({ forceEvents: true });
@@ -5220,6 +5461,7 @@
           }),
         });
         state.eventsByTask.delete(task.task_id);
+        state.githubSummaryByTask.delete(task.task_id);
         el.actionStatus.textContent = approve
           ? `Approved ${task.task_id}${autoStart ? ' and requested start' : ''}`
           : `Rejected ${task.task_id}`;
@@ -5304,6 +5546,7 @@
         state.selectedProject = normalizeProjectPath(task.project_path || task.workspace_path);
         state.selectedTaskId = task.task_id;
         state.eventsByTask.delete(task.task_id);
+        state.githubSummaryByTask.delete(task.task_id);
         state.treeByProject.delete(state.selectedProject);
         el.createStatus.textContent = `Created ${task.task_id}`;
         await loadData({ forceEvents: true });
@@ -5410,6 +5653,7 @@
     });
     document.getElementById('reloadEventsBtn').addEventListener('click', async () => {
       await refreshConversation({ force: true });
+      await refreshGithubSummary({ force: true });
     });
     document.getElementById('pollBtn').addEventListener('click', () => setPolling(!state.polling));
     if (el.streamDetailBtn) {
@@ -5444,6 +5688,22 @@
     }
     if (el.clearHistoryBtn) {
       el.clearHistoryBtn.addEventListener('click', () => clearProjectHistory());
+    }
+    if (el.reloadGithubSummaryBtn) {
+      el.reloadGithubSummaryBtn.addEventListener('click', async () => {
+        await refreshGithubSummary({ force: true });
+      });
+    }
+    if (el.applyPolicyTemplateBtn) {
+      el.applyPolicyTemplateBtn.addEventListener('click', () => applySelectedPolicyTemplate());
+    }
+    if (el.policyTemplate) {
+      el.policyTemplate.addEventListener('change', () => applySelectedPolicyTemplate());
+    }
+    if (el.workspacePath) {
+      el.workspacePath.addEventListener('change', async () => {
+        await refreshPolicyTemplates();
+      });
     }
     if (el.openCreateHelpBtn) {
       el.openCreateHelpBtn.addEventListener('click', () => setCreateHelpCollapsed(!state.createHelpCollapsed));
@@ -5489,6 +5749,8 @@
       renderTaskSnapshot();
       renderProjectHistory();
       await refreshConversation({ force: true });
+      await refreshGithubSummary({ force: true });
+      await refreshPolicyTemplates();
     });
 
     el.projectSelect.addEventListener('change', async () => {
@@ -5508,6 +5770,8 @@
         el.actionStatus.textContent = `Project tree load failed: ${String(err)}`;
       }
       await refreshConversation({ force: true });
+      await refreshGithubSummary({ force: true });
+      await refreshPolicyTemplates();
     });
 
     el.roleList.addEventListener('click', async (event) => {

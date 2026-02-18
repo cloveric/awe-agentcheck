@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 
@@ -20,6 +21,7 @@ class Settings:
     participant_timeout_retries: int
     max_concurrent_running_tasks: int
     workflow_backend: str
+    extra_provider_commands: dict[str, str]
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -31,6 +33,28 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
     except ValueError:
         return default
     return max(minimum, value)
+
+
+def _env_provider_commands(name: str) -> dict[str, str]:
+    raw = str(os.getenv(name, '') or '').strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, value in parsed.items():
+        provider = str(key or '').strip().lower()
+        command = str(value or '').strip()
+        if not provider or not command:
+            continue
+        if '#' in provider:
+            continue
+        out[provider] = command
+    return out
 
 
 def load_settings() -> Settings:
@@ -59,6 +83,7 @@ def load_settings() -> Settings:
     workflow_backend = str(os.getenv('AWE_WORKFLOW_BACKEND', 'langgraph') or 'langgraph').strip().lower()
     if workflow_backend not in {'langgraph', 'classic'}:
         workflow_backend = 'langgraph'
+    extra_provider_commands = _env_provider_commands('AWE_PROVIDER_ADAPTERS_JSON')
     return Settings(
         database_url=database_url,
         artifact_root=artifact_root,
@@ -73,4 +98,5 @@ def load_settings() -> Settings:
         participant_timeout_retries=participant_timeout_retries,
         max_concurrent_running_tasks=max_concurrent_running_tasks,
         workflow_backend=workflow_backend,
+        extra_provider_commands=extra_provider_commands,
     )

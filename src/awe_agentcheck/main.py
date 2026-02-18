@@ -5,6 +5,7 @@ from awe_agentcheck.adapters import ParticipantRunner
 from awe_agentcheck.config import load_settings
 from awe_agentcheck.db import Database, SqlTaskRepository
 from awe_agentcheck.observability import configure_observability
+from awe_agentcheck.participants import set_extra_providers
 from awe_agentcheck.repository import InMemoryTaskRepository
 from awe_agentcheck.service import OrchestratorService
 from awe_agentcheck.storage.artifacts import ArtifactStore
@@ -31,10 +32,16 @@ def build_app():
             'claude': settings.claude_command,
             'codex': settings.codex_command,
             'gemini': settings.gemini_command,
+            **settings.extra_provider_commands,
         },
         dry_run=settings.dry_run,
         timeout_retries=settings.participant_timeout_retries,
     )
+    commands = getattr(runner, 'commands', None)
+    if isinstance(commands, dict):
+        set_extra_providers(set(commands.keys()))
+    else:
+        set_extra_providers({'claude', 'codex', 'gemini', *settings.extra_provider_commands.keys()})
     workflow = WorkflowEngine(
         runner=runner,
         command_executor=ShellCommandExecutor(),

@@ -165,6 +165,107 @@ class ProviderModelsResponse(BaseModel):
     providers: dict[str, list[str]]
 
 
+class PolicyTemplateDefaultsResponse(BaseModel):
+    sandbox_mode: int
+    self_loop_mode: int
+    auto_merge: int
+    max_rounds: int
+    debate_mode: int
+    plain_mode: int
+    stream_mode: int
+    repair_mode: str
+
+
+class PolicyTemplateItemResponse(BaseModel):
+    id: str
+    label: str
+    description: str
+    defaults: PolicyTemplateDefaultsResponse
+
+
+class PolicyTemplateProfileResponse(BaseModel):
+    workspace_path: str
+    exists: bool
+    repo_size: str
+    risk_level: str
+    file_count: int
+    risk_markers: int
+    scan_truncated: bool | None = None
+
+
+class PolicyTemplatesResponse(BaseModel):
+    recommended_template: str
+    profile: PolicyTemplateProfileResponse
+    templates: list[PolicyTemplateItemResponse]
+
+
+class AnalyticsFailureBucketResponse(BaseModel):
+    bucket: str
+    count: int
+    share: float
+
+
+class AnalyticsFailureTrendRowResponse(BaseModel):
+    day: str
+    total: int
+    buckets: dict[str, int]
+
+
+class AnalyticsReviewerGlobalResponse(BaseModel):
+    reviews: int
+    no_blocker_rate: float
+    blocker_rate: float
+    unknown_rate: float
+    adverse_rate: float
+
+
+class AnalyticsReviewerDriftResponse(BaseModel):
+    participant: str
+    reviews: int
+    no_blocker_rate: float
+    blocker_rate: float
+    unknown_rate: float
+    adverse_rate: float
+    drift_score: float
+
+
+class AnalyticsResponse(BaseModel):
+    generated_at: str
+    window_tasks: int
+    window_failed_gate: int
+    failure_taxonomy: list[AnalyticsFailureBucketResponse]
+    failure_taxonomy_trend: list[AnalyticsFailureTrendRowResponse]
+    reviewer_global: AnalyticsReviewerGlobalResponse
+    reviewer_drift: list[AnalyticsReviewerDriftResponse]
+
+
+class GitHubSummaryArtifactResponse(BaseModel):
+    name: str
+    path: str
+
+
+class GitHubSummaryGitStateResponse(BaseModel):
+    is_git_repo: bool
+    branch: str | None = None
+    worktree_clean: bool | None = None
+    remote_origin: str | None = None
+    guard_allowed: bool
+    guard_reason: str
+    enabled: bool | None = None
+    target_path: str | None = None
+    allowed_branches: list[str] | None = None
+    require_clean: bool | None = None
+
+
+class GitHubSummaryResponse(BaseModel):
+    task_id: str
+    project_path: str
+    status: str
+    git: GitHubSummaryGitStateResponse
+    summary_markdown: str
+    artifacts: list[GitHubSummaryArtifactResponse]
+
+
 class ProjectHistoryDisputeResponse(BaseModel):
     participant: str
     verdict: str
@@ -473,6 +574,30 @@ def create_app(
     @app.get('/api/provider-models', response_model=ProviderModelsResponse)
     def get_provider_models(service: OrchestratorService = Depends(get_service)) -> ProviderModelsResponse:
         return ProviderModelsResponse(providers=service.get_provider_models_catalog())
+
+    @app.get('/api/policy-templates', response_model=PolicyTemplatesResponse)
+    def get_policy_templates(
+        service: OrchestratorService = Depends(get_service),
+        workspace_path: str = Query(default='.', min_length=1),
+    ) -> PolicyTemplatesResponse:
+        payload = service.get_policy_templates(workspace_path=workspace_path)
+        return PolicyTemplatesResponse(**payload)
+
+    @app.get('/api/analytics', response_model=AnalyticsResponse)
+    def get_analytics(
+        service: OrchestratorService = Depends(get_service),
+        limit: int = Query(default=300, ge=1, le=2000),
+    ) -> AnalyticsResponse:
+        payload = service.get_analytics(limit=limit)
+        return AnalyticsResponse(**payload)
+
+    @app.get('/api/tasks/{task_id}/github-summary', response_model=GitHubSummaryResponse)
+    def get_github_summary(task_id: str, service: OrchestratorService = Depends(get_service)) -> GitHubSummaryResponse:
+        try:
+            payload = service.build_github_pr_summary(task_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail='task not found') from exc
+        return GitHubSummaryResponse(**payload)
 
     @app.get('/api/project-history', response_model=ProjectHistoryResponse)
     def get_project_history(

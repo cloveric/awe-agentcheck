@@ -90,6 +90,12 @@
    - round-1 hardening: artifact events traversal guard, Windows command path parsing, SQL conditional status-update atomicity.
    - round-2 hardening: concurrent event sequence reservation, sandbox bootstrap rollback/cleanup, private-by-default sandbox base, secret-file skip rules.
    - fixed reviewer-blocked FK risk by cleaning `task_event_counters` before task deletion; added DB regression test.
+18. Shipped roadmap capabilities previously marked as Q2/Q3:
+   - Richer GitHub/PR integration: `GET /api/tasks/{task_id}/github-summary` with PR-ready markdown and task-artifact links.
+   - Policy templates by repo size/risk profile: `GET /api/policy-templates`, plus Web "Apply Policy" flow.
+   - Pluggable participant adapters: `AWE_PROVIDER_ADAPTERS_JSON` supports extra providers beyond built-in Claude/Codex/Gemini.
+   - Branch-aware promotion guard: auto-merge and round-promote now run branch/worktree guard checks before fusion.
+   - Advanced visual analytics: `GET /api/analytics` and dashboard panel for failure taxonomy trends + reviewer drift signals.
 
 <br/>
 
@@ -289,6 +295,10 @@ $env:AWE_WORKFLOW_BACKEND="langgraph"
 | `AWE_PARTICIPANT_TIMEOUT_RETRIES` | `1` | Retry count when a participant times out |
 | `AWE_MAX_CONCURRENT_RUNNING_TASKS` | `1` | How many tasks can run simultaneously |
 | `AWE_WORKFLOW_BACKEND` | `langgraph` | Workflow backend (`langgraph` preferred, `classic` fallback) |
+| `AWE_PROVIDER_ADAPTERS_JSON` | _(none)_ | JSON map for extra providers, e.g. `{"qwen":"qwen-cli --yolo"}` |
+| `AWE_PROMOTION_GUARD_ENABLED` | `true` | Enable promotion guard checks before auto-merge/promote-round |
+| `AWE_PROMOTION_ALLOWED_BRANCHES` | _(empty)_ | Optional comma-separated allowed branches (empty = allow any branch) |
+| `AWE_PROMOTION_REQUIRE_CLEAN` | `false` | Require clean git worktree for promotion when guard is enabled |
 | `AWE_SANDBOX_USE_PUBLIC_BASE` | `false` | Use shared/public sandbox root only when explicitly set to `1/true` |
 | `AWE_DRY_RUN` | `false` | When `true`, participants are not actually invoked |
 | `AWE_SERVICE_NAME` | `awe-agentcheck` | Service name for observability |
@@ -861,16 +871,16 @@ When a task passes and `auto_merge=1`:
 - [x] Auto-fusion + changelog + snapshot
 - [x] Role/session monitor with multi-theme UI
 
-### 2026 Q2 &nbsp; <img src="https://img.shields.io/badge/status-planned-3b82f6?style=flat-square" alt="planned"/>
+### 2026 Q2 &nbsp; <img src="https://img.shields.io/badge/status-complete-22c55e?style=flat-square" alt="complete"/>
 
-- [ ] Richer GitHub/PR integration (change summary linking to task artifacts)
-- [ ] Policy templates by repo size/risk profile
-- [ ] Pluggable participant adapters beyond built-in Claude/Codex/Gemini
+- [x] Richer GitHub/PR integration (change summary linking to task artifacts)
+- [x] Policy templates by repo size/risk profile
+- [x] Pluggable participant adapters beyond built-in Claude/Codex/Gemini
 
-### 2026 Q3 &nbsp; <img src="https://img.shields.io/badge/status-planned-3b82f6?style=flat-square" alt="planned"/>
+### 2026 Q3 &nbsp; <img src="https://img.shields.io/badge/status-complete-22c55e?style=flat-square" alt="complete"/>
 
-- [ ] Branch-aware auto promotion pipeline (sandbox -> main with policy guard)
-- [ ] Advanced visual analytics (failure taxonomy trends, reviewer drift signals)
+- [x] Branch-aware auto promotion pipeline (sandbox -> main with policy guard)
+- [x] Advanced visual analytics (failure taxonomy trends, reviewer drift signals)
 
 <br/>
 

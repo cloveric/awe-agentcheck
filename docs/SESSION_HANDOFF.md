@@ -1,5 +1,33 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-19, roadmap Q2/Q3 features shipped)
+
+1. GitHub/PR integration landed:
+   - new endpoint `GET /api/tasks/{task_id}/github-summary`
+   - returns PR-ready markdown summary with task status, findings, revisions, disputes, next steps, and artifact paths.
+2. Policy templates by repo size/risk profile landed:
+   - new endpoint `GET /api/policy-templates?workspace_path=...`
+   - returns workspace profile (`repo_size`, `risk_level`, file/risk markers) + template defaults.
+   - dashboard create-form now supports selecting/applying policy templates.
+3. Pluggable provider adapters landed:
+   - participant provider registry now supports dynamic providers beyond built-in claude/codex/gemini.
+   - new env `AWE_PROVIDER_ADAPTERS_JSON` to inject extra provider command adapters.
+   - CLI model/model-param validation now honors configured extra providers.
+4. Branch-aware promotion guard landed:
+   - auto-merge and manual round promotion now execute a promotion guard before fusion.
+   - guard emits `promotion_guard_checked` and can block promotion with explicit reason.
+   - defaults are non-blocking for local dev; strict behavior enabled via env:
+     `AWE_PROMOTION_GUARD_ENABLED`, `AWE_PROMOTION_ALLOWED_BRANCHES`, `AWE_PROMOTION_REQUIRE_CLEAN`.
+5. Advanced visual analytics landed:
+   - new endpoint `GET /api/analytics`
+   - exposes failure taxonomy distribution/trends and reviewer drift signals.
+   - dashboard now includes an Advanced Analytics panel and GitHub/PR summary panel.
+6. Verification:
+   - `py -m ruff check src tests`
+   - `py -m pytest tests/unit/test_config.py tests/unit/test_main.py tests/unit/test_participants.py tests/unit/test_cli.py -q`
+   - `py -m pytest tests/unit/test_service.py tests/unit/test_api.py -q`
+   - `py -m pytest -q`
+
 ## Update (2026-02-18, merged from two codex self-check rounds)
 
 1. Merged round-1 hardening into mainline:

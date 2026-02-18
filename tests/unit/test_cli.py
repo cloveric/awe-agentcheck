@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from awe_agentcheck.cli import build_parser
+from awe_agentcheck.cli import _parse_provider_model_params, _parse_provider_models, build_parser
 
 
 def test_cli_parser_run_subcommand_accepts_author_and_reviewers():
@@ -111,6 +111,20 @@ def test_cli_parser_supports_stats_command():
     assert args.command == 'stats'
 
 
+def test_cli_parser_supports_analytics_command():
+    parser = build_parser()
+    args = parser.parse_args(['analytics', '--limit', '120'])
+    assert args.command == 'analytics'
+    assert args.limit == 120
+
+
+def test_cli_parser_supports_policy_templates_command():
+    parser = build_parser()
+    args = parser.parse_args(['policy-templates', '--workspace-path', 'C:/repo'])
+    assert args.command == 'policy-templates'
+    assert args.workspace_path == 'C:/repo'
+
+
 def test_cli_parser_supports_force_fail_command():
     parser = build_parser()
     args = parser.parse_args(['force-fail', 'task-1', '--reason', 'watchdog_timeout'])
@@ -128,6 +142,13 @@ def test_cli_parser_supports_tree_command():
     assert args.max_entries == 120
 
 
+def test_cli_parser_supports_github_summary_command():
+    parser = build_parser()
+    args = parser.parse_args(['github-summary', 'task-9'])
+    assert args.command == 'github-summary'
+    assert args.task_id == 'task-9'
+
+
 def test_cli_parser_supports_author_decide_command():
     parser = build_parser()
     args = parser.parse_args(['decide', 'task-7', '--approve', '--note', 'ship', '--auto-start'])
@@ -136,3 +157,15 @@ def test_cli_parser_supports_author_decide_command():
     assert args.approve is True
     assert args.note == 'ship'
     assert args.auto_start is True
+
+
+def test_cli_parse_provider_model_supports_extra_provider_from_env(monkeypatch):
+    monkeypatch.setenv('AWE_PROVIDER_ADAPTERS_JSON', '{"qwen":"qwen-cli --yolo"}')
+    parsed = _parse_provider_models(['qwen=qwen-max'])
+    assert parsed['qwen'] == 'qwen-max'
+
+
+def test_cli_parse_provider_model_params_supports_extra_provider_from_env(monkeypatch):
+    monkeypatch.setenv('AWE_PROVIDER_ADAPTERS_JSON', '{"qwen":"qwen-cli --yolo"}')
+    parsed = _parse_provider_model_params(['qwen=--temperature 0.2'])
+    assert parsed['qwen'] == '--temperature 0.2'
