@@ -591,6 +591,30 @@ py -m awe_agentcheck.cli stats
 
 返回通过率、失败分桶、提供者错误计数和平均任务耗时。
 
+### `analytics` — 查看高级分析
+
+```powershell
+py -m awe_agentcheck.cli analytics --limit 300
+```
+
+返回失败分类/趋势和 reviewer 偏移指标，便于可观测性分析。
+
+### `policy-templates` — 获取推荐策略模板
+
+```powershell
+py -m awe_agentcheck.cli policy-templates --workspace-path "."
+```
+
+返回仓库规模/风险画像及推荐控制项组合。
+
+### `github-summary` — 生成 PR 可用摘要
+
+```powershell
+py -m awe_agentcheck.cli github-summary <task-id>
+```
+
+返回可直接粘贴到 GitHub PR 的 markdown 摘要和工件链接。
+
 ### `start` — 启动已有任务
 
 ```powershell
@@ -609,6 +633,14 @@ py -m awe_agentcheck.cli cancel <task-id>
 ```powershell
 py -m awe_agentcheck.cli force-fail <task-id> --reason "手动中止：分支错误"
 ```
+
+### `promote-round` — 提升单轮结果（多轮手动模式）
+
+```powershell
+py -m awe_agentcheck.cli promote-round <task-id> --round 2 --merge-target-path "."
+```
+
+适用于 `max_rounds>1` 且 `auto_merge=0` 的任务，将指定轮次快照融合到目标路径。
 
 ### `events` — 查看任务事件
 
@@ -777,11 +809,16 @@ POST /api/tasks
 | `POST` | `/api/tasks/{id}/start` | 启动任务（`{"background": true}` 异步执行） |
 | `POST` | `/api/tasks/{id}/cancel` | 请求取消任务 |
 | `POST` | `/api/tasks/{id}/force-fail` | 强制失败 `{"reason": "..."}` |
+| `POST` | `/api/tasks/{id}/promote-round` | 将指定轮次融合到目标路径（要求 `max_rounds>1` 且 `auto_merge=0`） |
 | `POST` | `/api/tasks/{id}/author-decision` | 手动模式下批准/拒绝：`{"approve": true, "auto_start": true}` |
 | `GET` | `/api/tasks/{id}/events` | 获取完整事件时间线 |
 | `POST` | `/api/tasks/{id}/gate` | 提交手动门禁结果 |
 | `GET` | `/api/provider-models` | 获取提供者模型目录（供 UI 下拉使用） |
+| `GET` | `/api/policy-templates` | 获取仓库画像与推荐控制策略模板 |
+| `GET` | `/api/analytics` | 获取失败分类/趋势与 reviewer 偏移分析 |
+| `GET` | `/api/tasks/{id}/github-summary` | 生成 GitHub/PR 可用摘要 |
 | `GET` | `/api/project-history` | 项目级历史记录（`core_findings` / `revisions` / `disputes` / `next_steps`） |
+| `POST` | `/api/project-history/clear` | 清理指定范围历史（可选同时清理匹配的 live task） |
 | `GET` | `/api/workspace-tree` | 文件树（`?workspace_path=.&max_depth=4`） |
 | `GET` | `/api/stats` | 聚合统计（通过率、耗时、失败分桶） |
 | `GET` | `/healthz` | 健康检查 |

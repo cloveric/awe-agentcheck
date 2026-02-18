@@ -4755,7 +4755,12 @@
         option.textContent = `${item.id} | ${item.label}`;
         el.policyTemplate.appendChild(option);
       }
-      const validCurrent = payload.templates.some((item) => String(item.id || '') === current);
+      const customOption = document.createElement('option');
+      customOption.value = 'custom';
+      customOption.textContent = 'custom | Keep manual settings';
+      el.policyTemplate.appendChild(customOption);
+
+      const validCurrent = current === 'custom' || payload.templates.some((item) => String(item.id || '') === current);
       if (validCurrent) {
         el.policyTemplate.value = current;
       } else {
@@ -4775,6 +4780,12 @@
       const payload = state.policyTemplates;
       if (!payload || !Array.isArray(payload.templates) || !el.policyTemplate) return;
       const selectedId = String(el.policyTemplate.value || '').trim();
+      if (selectedId === 'custom') {
+        if (el.createStatus) {
+          el.createStatus.textContent = 'Custom policy selected: keeping current manual values.';
+        }
+        return;
+      }
       const selected = payload.templates.find((item) => String(item.id || '').trim() === selectedId);
       if (!selected || !selected.defaults) return;
       const defaults = selected.defaults;

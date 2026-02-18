@@ -591,6 +591,30 @@ py -m awe_agentcheck.cli stats
 
 Returns pass rates, failure buckets, provider error counts, and average task duration.
 
+### `analytics` — Show Advanced Analytics
+
+```powershell
+py -m awe_agentcheck.cli analytics --limit 300
+```
+
+Returns failure taxonomy/trend and reviewer drift metrics for observability analysis.
+
+### `policy-templates` — Get Recommended Policy Presets
+
+```powershell
+py -m awe_agentcheck.cli policy-templates --workspace-path "."
+```
+
+Returns repo profile and suggested task-control presets by size/risk.
+
+### `github-summary` — Generate PR-Ready Summary
+
+```powershell
+py -m awe_agentcheck.cli github-summary <task-id>
+```
+
+Returns markdown summary and artifact links suitable for GitHub PR description.
+
 ### `start` — Start an Existing Task
 
 ```powershell
@@ -609,6 +633,14 @@ py -m awe_agentcheck.cli cancel <task-id>
 ```powershell
 py -m awe_agentcheck.cli force-fail <task-id> --reason "Manual abort: wrong branch"
 ```
+
+### `promote-round` — Promote One Round Snapshot (Manual Multi-Round Mode)
+
+```powershell
+py -m awe_agentcheck.cli promote-round <task-id> --round 2 --merge-target-path "."
+```
+
+Use when `max_rounds>1` and `auto_merge=0`. Promotes one selected round snapshot into target path.
 
 ### `events` — List Task Events
 
@@ -777,11 +809,16 @@ POST /api/tasks
 | `POST` | `/api/tasks/{id}/start` | Start a task (`{"background": true}` for async) |
 | `POST` | `/api/tasks/{id}/cancel` | Request task cancellation |
 | `POST` | `/api/tasks/{id}/force-fail` | Force-fail with `{"reason": "..."}` |
+| `POST` | `/api/tasks/{id}/promote-round` | Promote one selected round into merge target (requires `max_rounds>1` and `auto_merge=0`) |
 | `POST` | `/api/tasks/{id}/author-decision` | Approve/reject in manual mode: `{"approve": true, "auto_start": true}` |
 | `GET` | `/api/tasks/{id}/events` | Get full event timeline |
 | `POST` | `/api/tasks/{id}/gate` | Submit manual gate result |
 | `GET` | `/api/provider-models` | Get provider model catalog for UI dropdowns |
+| `GET` | `/api/policy-templates` | Get workspace profile and recommended control presets |
+| `GET` | `/api/analytics` | Get failure taxonomy/trends and reviewer drift analytics |
+| `GET` | `/api/tasks/{id}/github-summary` | Build GitHub/PR-ready markdown summary |
 | `GET` | `/api/project-history` | Project-level history records (`core_findings`, `revisions`, `disputes`, `next_steps`) |
+| `POST` | `/api/project-history/clear` | Clear scoped history records (optionally includes matching live tasks) |
 | `GET` | `/api/workspace-tree` | File tree (`?workspace_path=.&max_depth=4`) |
 | `GET` | `/api/stats` | Aggregated statistics (pass rates, durations, failure buckets) |
 | `GET` | `/healthz` | Health check |

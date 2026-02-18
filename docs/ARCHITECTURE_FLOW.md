@@ -7,7 +7,7 @@ Date: 2026-02-18
 ```text
 Operator / Script
     |
-    |  REST (create/start/cancel/force-fail/query/tree/history)
+    |  REST (create/start/cancel/force-fail/query/tree/history/history-clear/policy/analytics/github-summary/promote-round)
     v
 FastAPI (awe_agentcheck.api)
     |
@@ -65,6 +65,10 @@ Task-level strategy controls:
 - `auto_merge`:
   - `1` default, auto-fusion on `passed` (merge/changelog/snapshot)
   - `0` disable fusion and keep task outputs in artifacts/sandbox only
+- multi-round candidate mode:
+  - when `max_rounds>1` and `auto_merge=0`, service enforces fresh sandbox isolation
+  - per-round artifacts are captured at gate events (`round-N.patch`, `round-N.md`, round snapshots)
+  - terminal task can use manual `promote-round` to fuse one selected round
 - default sandbox allocation:
   - if sandbox path not provided, allocate unique per-task workspace:
     - `<project>-lab/<timestamp>-<id>`
@@ -123,15 +127,27 @@ start_overnight_until_7.ps1
   - `reason_bucket_counts`
   - `provider_error_counts`
   - recent terminal rates and mean duration
+- API: `/api/analytics`
+  - failure taxonomy
+  - failure taxonomy trend
+  - reviewer global/drift indicators
+- API: `/api/policy-templates`
+  - workspace profile (`repo_size`, `risk_level`, markers)
+  - recommended control presets for create-task form
+- API: `/api/tasks/{task_id}/github-summary`
+  - PR-ready markdown summary + artifact links
 - API: `/api/workspace-tree` for project file structure
 - API: `/api/project-history` for project-level historical ledger:
   - `core_findings`
   - `revisions`
   - `disputes`
   - `next_steps`
+- API: `/api/project-history/clear` for scoped history cleanup
 - API: `/api/tasks/{task_id}/author-decision` for manual approve/reject in waiting state
+- API: `/api/tasks/{task_id}/promote-round` for selected-round fusion in multi-round candidate mode
 - Web console: `http://127.0.0.1:8000/`
 - Artifacts per task: `.agents/threads/<task_id>/`
+- Round artifacts: `.agents/threads/<task_id>/artifacts/rounds/`
 - Overnight logs: `.agents/overnight/`
 
 ## 7) Monitor UI Layout
@@ -153,3 +169,12 @@ Right column
 - If `AWE_DATABASE_URL` is unset, startup scripts default to local SQLite:
   - `.agents/runtime/awe-agentcheck.sqlite3`
 - This keeps project/task history across API restarts.
+
+## 9) Promotion Guard
+
+- Auto-fusion and manual `promote-round` both execute guard evaluation before writing to target path.
+- Guard defaults are configurable by env:
+  - `AWE_PROMOTION_GUARD_ENABLED`
+  - `AWE_PROMOTION_ALLOWED_BRANCHES`
+  - `AWE_PROMOTION_REQUIRE_CLEAN`
+- Guard check emits `promotion_guard_checked`; blocked promotions return explicit guard reason.

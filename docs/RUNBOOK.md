@@ -38,6 +38,11 @@ $env:AWE_COMMAND_TIMEOUT_SECONDS="300"
 $env:AWE_PARTICIPANT_TIMEOUT_RETRIES="1"
 $env:AWE_MAX_CONCURRENT_RUNNING_TASKS="1"
 $env:AWE_WORKFLOW_BACKEND="langgraph"
+$env:AWE_PROMOTION_GUARD_ENABLED="true"
+$env:AWE_PROMOTION_ALLOWED_BRANCHES=""
+$env:AWE_PROMOTION_REQUIRE_CLEAN="false"
+# Optional: extra provider adapters (JSON map, provider -> command template)
+$env:AWE_PROVIDER_ADAPTERS_JSON='{"qwen":"qwen-cli --yolo"}'
 # Optional: set to 1/true only if you explicitly want shared/public sandbox base
 $env:AWE_SANDBOX_USE_PUBLIC_BASE="false"
 ```
@@ -110,6 +115,8 @@ Default policy:
 15. Optional language control via `--conversation-language en|zh` influences prompt output language.
 16. Optional Claude `--agents` behavior via `--claude-team-agents 1` applies to Claude participants only.
 17. `max_rounds` is used only when `evolve_until` is empty; if `evolve_until` is set, deadline takes priority.
+18. If `max_rounds>1` and `auto_merge=0`, runtime forces fresh sandbox isolation and captures per-round artifacts (`round-N.patch`, `round-N.md`, round snapshots).
+19. Promotion back to target path is then a separate explicit action via `promote-round` (guarded by promotion policy checks).
 
 ## 4) Inspect status and timeline
 
@@ -118,6 +125,9 @@ py -m awe_agentcheck.cli tasks --limit 20
 py -m awe_agentcheck.cli status <task_id>
 py -m awe_agentcheck.cli events <task_id>
 py -m awe_agentcheck.cli stats
+py -m awe_agentcheck.cli analytics --limit 300
+py -m awe_agentcheck.cli policy-templates --workspace-path "C:/Users/hangw/awe-agentcheck"
+py -m awe_agentcheck.cli github-summary <task_id>
 py -m awe_agentcheck.cli tree --workspace-path "C:/Users/hangw/awe-agentcheck" --max-depth 3
 ```
 
@@ -129,6 +139,7 @@ py -m awe_agentcheck.cli decide <task_id> --approve --auto-start
 py -m awe_agentcheck.cli decide <task_id> --note "not now"
 py -m awe_agentcheck.cli cancel <task_id>
 py -m awe_agentcheck.cli force-fail <task_id> --reason "watchdog_timeout: operator forced fail"
+py -m awe_agentcheck.cli promote-round <task_id> --round 2 --merge-target-path "C:/Users/hangw/awe-agentcheck"
 ```
 
 ## 6) Web operations
@@ -147,6 +158,10 @@ Capabilities:
 8. Create task advanced controls include `repair_mode`, `plain_mode`, `stream_mode`, `debate_mode`.
 9. Auto polling and extended stats with reason/provider breakdown.
 10. Project history card shows cross-task records for selected project: core findings, revisions, disputes, next steps.
+11. `Project History` card supports scoped `Clear` (can optionally clear matching live tasks in scope).
+12. `GitHub / PR Summary` card provides PR-ready markdown and artifact links for selected task.
+13. `Advanced Analytics` card visualizes failure taxonomy trends and reviewer drift signals.
+14. `Promote Round` control is enabled only for terminal tasks with `max_rounds>1` and `auto_merge=0`.
 
 ## 7) Artifacts
 
@@ -159,6 +174,11 @@ Task outputs are written to:
 - `.agents/threads/<task_id>/state.json`
 - `.agents/threads/<task_id>/artifacts/pending_proposal.json` (manual mode only)
 - `.agents/threads/<task_id>/artifacts/auto_merge_summary.json` (auto-merge on passed)
+- `.agents/threads/<task_id>/artifacts/rounds/round-<n>.patch` (multi-round manual promote mode)
+- `.agents/threads/<task_id>/artifacts/rounds/round-<n>.md` (multi-round manual promote mode)
+- `.agents/threads/<task_id>/artifacts/rounds/round-<nnn>-snapshot/` (per-round workspace snapshot)
+- `.agents/threads/<task_id>/artifacts/round-<n>-artifact.json` (round metadata)
+- `.agents/threads/<task_id>/artifacts/round-<n>-promote-summary.json` (written after promote-round)
 
 Import lab self-evolution markdown plans into main docs:
 
@@ -285,6 +305,22 @@ Project-level history endpoint:
 ```powershell
 Invoke-RestMethod "http://127.0.0.1:8000/api/project-history?limit=50"
 Invoke-RestMethod ("http://127.0.0.1:8000/api/project-history?project_path=" + [uri]::EscapeDataString("C:/Users/hangw/awe-agentcheck"))
+```
+
+Clear scoped history:
+
+```powershell
+Invoke-RestMethod -Method Post "http://127.0.0.1:8000/api/project-history/clear" `
+  -ContentType "application/json" `
+  -Body '{"project_path":"C:/Users/hangw/awe-agentcheck","include_live_tasks":true}'
+```
+
+Advanced analytics / policy / PR summary endpoints:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/analytics?limit=300"
+Invoke-RestMethod ("http://127.0.0.1:8000/api/policy-templates?workspace_path=" + [uri]::EscapeDataString("C:/Users/hangw/awe-agentcheck"))
+Invoke-RestMethod "http://127.0.0.1:8000/api/tasks/<task_id>/github-summary"
 ```
 
 ## 11) Self-test (program tests itself)

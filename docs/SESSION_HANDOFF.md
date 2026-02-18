@@ -1,5 +1,28 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-18, docs + GitHub about sync)
+
+1. Documentation sync completed for newly shipped control-plane capabilities:
+   - README EN/CN now includes missing CLI commands:
+     - `analytics`
+     - `policy-templates`
+     - `github-summary`
+     - `promote-round`
+   - README EN/CN API tables now include:
+     - `POST /api/tasks/{task_id}/promote-round`
+     - `GET /api/policy-templates`
+     - `GET /api/analytics`
+     - `GET /api/tasks/{task_id}/github-summary`
+     - `POST /api/project-history/clear`
+2. `docs/RUNBOOK.md` synced with production behavior:
+   - added promotion-guard env vars and extra-provider adapter env example.
+   - documented multi-round (`max_rounds>1` + `auto_merge=0`) per-round artifacts and manual promote flow.
+   - added web capability notes for `Project History Clear`, `GitHub / PR Summary`, `Advanced Analytics`, and `Promote Round`.
+3. `docs/ARCHITECTURE_FLOW.md` synced:
+   - expanded control-plane REST surface, observability endpoints, round-artifact storage, and promotion guard section.
+4. GitHub About/description text refreshed to match current positioning:
+   - reviewer-first multi-CLI orchestration + policy guardrails + analytics + PR-ready summaries.
+
 ## Update (2026-02-19, roadmap Q2/Q3 features shipped)
 
 1. GitHub/PR integration landed:
