@@ -9,6 +9,7 @@ __pycache__/
 
 # Runtime artifacts
 .agents/
+.tmp-*/
 
 # Local DB
 *.db

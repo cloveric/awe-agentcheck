@@ -42,6 +42,26 @@ def test_medium_gate_fails_when_all_reviewer_verdicts_unknown():
     assert outcome.reason == 'review_unknown'
 
 
+def test_medium_gate_fails_when_single_reviewer_verdict_is_unknown():
+    outcome = evaluate_medium_gate(
+        tests_ok=True,
+        lint_ok=True,
+        reviewer_verdicts=[ReviewVerdict.UNKNOWN],
+    )
+    assert outcome.passed is False
+    assert outcome.reason == 'review_unknown'
+
+
+def test_medium_gate_fails_when_lint_fails():
+    outcome = evaluate_medium_gate(
+        tests_ok=True,
+        lint_ok=False,
+        reviewer_verdicts=[ReviewVerdict.NO_BLOCKER],
+    )
+    assert outcome.passed is False
+    assert outcome.reason == 'lint_failed'
+
+
 def test_medium_gate_prioritizes_test_failure_over_blocker_verdict():
     outcome = evaluate_medium_gate(
         tests_ok=False,
