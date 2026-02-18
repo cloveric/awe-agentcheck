@@ -2421,11 +2421,40 @@
   </div>
 
   <script>
+    const DEFAULT_PROVIDER_MODEL_CATALOG = Object.freeze({
+      claude: [
+        'claude-opus-4-6',
+        'claude-sonnet-4-6',
+        'claude-opus-4-1',
+        'claude-sonnet-4-5',
+        'claude-3-7-sonnet',
+        'claude-3-5-sonnet-latest',
+      ],
+      codex: [
+        'gpt-5.3-codex',
+        'gpt-5.3-codex-spark',
+        'gpt-5-codex',
+        'gpt-5',
+        'gpt-5-mini',
+        'gpt-4.1',
+      ],
+      gemini: [
+        'gemini-3-pro-preview',
+        'gemini-2.5-pro',
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+      ],
+    });
+
     const state = {
       tasks: [],
       historyItems: [],
       stats: null,
-      providerModelCatalog: { claude: [], codex: [], gemini: [] },
+      providerModelCatalog: {
+        claude: [...DEFAULT_PROVIDER_MODEL_CATALOG.claude],
+        codex: [...DEFAULT_PROVIDER_MODEL_CATALOG.codex],
+        gemini: [...DEFAULT_PROVIDER_MODEL_CATALOG.gemini],
+      },
       selectedProject: null,
       selectedRole: 'all',
       selectedTaskId: null,
@@ -2892,6 +2921,26 @@
       renderModelDatalist(el.claudeModelList, catalog.claude || []);
       renderModelDatalist(el.codexModelList, catalog.codex || []);
       renderModelDatalist(el.geminiModelList, catalog.gemini || []);
+    }
+
+    function normalizeProviderModelCatalog(rawCatalog) {
+      const out = {};
+      for (const provider of ['claude', 'codex', 'gemini']) {
+        const seen = new Set();
+        const merged = [
+          ...(DEFAULT_PROVIDER_MODEL_CATALOG[provider] || []),
+          ...(Array.isArray(rawCatalog && rawCatalog[provider]) ? rawCatalog[provider] : []),
+        ];
+        out[provider] = [];
+        for (const raw of merged) {
+          const model = String(raw || '').trim();
+          const key = model.toLowerCase();
+          if (!model || seen.has(key)) continue;
+          seen.add(key);
+          out[provider].push(model);
+        }
+      }
+      return out;
     }
 
     function formatProviderModels(value) {
@@ -4950,11 +4999,7 @@
       }
       if (modelsResult.status === 'fulfilled') {
         const providers = (modelsResult.value && modelsResult.value.providers) || {};
-        state.providerModelCatalog = {
-          claude: Array.isArray(providers.claude) ? providers.claude : [],
-          codex: Array.isArray(providers.codex) ? providers.codex : [],
-          gemini: Array.isArray(providers.gemini) ? providers.gemini : [],
-        };
+        state.providerModelCatalog = normalizeProviderModelCatalog(providers);
         updated = true;
       }
       if (historyResult.status === 'fulfilled') {

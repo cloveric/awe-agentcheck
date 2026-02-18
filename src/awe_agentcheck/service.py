@@ -135,6 +135,7 @@ _DEFAULT_PROVIDER_MODELS = {
     ],
     'codex': [
         'gpt-5.3-codex',
+        'gpt-5.3-codex-spark',
         'gpt-5-codex',
         'gpt-5',
         'gpt-5-mini',
@@ -527,7 +528,13 @@ class OrchestratorService:
             else None
         )
         rows = self.repository.list_tasks(limit=10_000)
-        candidate_ids: list[str] = []
+        row_by_id: dict[str, dict] = {}
+        for row in rows:
+            task_id = str(row.get('task_id') or '').strip()
+            if task_id:
+                row_by_id[task_id] = row
+
+        candidate_ids: set[str] = set()
         skipped_non_terminal = 0
 
         for row in rows:
@@ -546,11 +553,34 @@ class OrchestratorService:
             if (not include_non_terminal) and status not in _TERMINAL_STATUSES:
                 skipped_non_terminal += 1
                 continue
-            candidate_ids.append(task_id)
+            candidate_ids.add(task_id)
 
-        deleted_tasks = self.repository.delete_tasks(candidate_ids)
+        # Also clear history-only task artifacts that may no longer have a row
+        # in repository storage (for example, old imported thread folders).
+        threads_root = self.artifact_store.root / 'threads'
+        if threads_root.exists() and threads_root.is_dir():
+            for child in threads_root.iterdir():
+                if not child.is_dir():
+                    continue
+                task_id = str(child.name or '').strip()
+                if not task_id or task_id in row_by_id:
+                    continue
+                item = self._build_project_history_item(task_id=task_id, row=None, task_dir=child)
+                if item is None:
+                    continue
+                item_project = self._normalize_project_path_key(item.get('project_path'))
+                if requested_project and item_project != requested_project:
+                    continue
+                status = str(item.get('status') or '').strip().lower()
+                if (not include_non_terminal) and status not in _TERMINAL_STATUSES:
+                    skipped_non_terminal += 1
+                    continue
+                candidate_ids.add(task_id)
+
+        delete_order = sorted(candidate_ids)
+        deleted_tasks = self.repository.delete_tasks(delete_order)
         deleted_artifacts = 0
-        for task_id in sorted(set(candidate_ids)):
+        for task_id in delete_order:
             try:
                 if self.artifact_store.remove_task_workspace(task_id):
                     deleted_artifacts += 1

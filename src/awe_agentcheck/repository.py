@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from typing import Protocol
+from uuid import uuid4
 
 
 def _utc_now_iso() -> str:
@@ -133,7 +134,7 @@ class InMemoryTaskRepository:
         test_command: str,
         lint_command: str,
     ) -> dict:
-        task_id = f'task-{len(self.items) + 1}'
+        task_id = f'task-{uuid4().hex[:12]}'
         row = {
             'task_id': task_id,
             'title': title,

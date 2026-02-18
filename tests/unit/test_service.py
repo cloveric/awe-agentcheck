@@ -1926,6 +1926,77 @@ def test_service_clear_project_history_include_non_terminal_removes_all_scoped_t
     assert not (thread_root / t3.task_id).exists()
 
 
+def test_service_clear_project_history_removes_history_only_artifact_records(tmp_path: Path):
+    svc = build_service(tmp_path)
+    project_root = tmp_path / 'repo-history-only'
+    project_root.mkdir()
+
+    history_only_id = 'task-historyonly01'
+    svc.artifact_store.update_state(
+        history_only_id,
+        {
+            'task_id': history_only_id,
+            'project_path': str(project_root),
+            'workspace_path': str(project_root),
+            'status': 'passed',
+        },
+    )
+    svc.artifact_store.append_event(
+        history_only_id,
+        {
+            'type': 'gate_passed',
+            'reason': 'passed',
+        },
+    )
+
+    assert (svc.artifact_store.root / 'threads' / history_only_id).exists()
+    assert svc.repository.get_task(history_only_id) is None
+
+    result = svc.clear_project_history(project_path=str(project_root), include_non_terminal=False)
+    assert result['deleted_tasks'] == 0
+    assert result['deleted_artifacts'] == 1
+    assert result['skipped_non_terminal'] == 0
+
+    assert not (svc.artifact_store.root / 'threads' / history_only_id).exists()
+    assert svc.list_project_history(project_path=str(project_root), limit=20) == []
+
+
+def test_service_create_task_uses_uuid_like_task_id_in_inmemory_repo(tmp_path: Path):
+    svc = build_service(tmp_path)
+    project_root = tmp_path / 'repo-id-format'
+    project_root.mkdir()
+
+    a = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='ID format A',
+            description='check id format',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project_root),
+        )
+    )
+    b = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='ID format B',
+            description='check id format',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project_root),
+        )
+    )
+
+    for task_id in [a.task_id, b.task_id]:
+        assert task_id.startswith('task-')
+        suffix = task_id[5:]
+        assert len(suffix) == 12
+        int(suffix, 16)
+    assert a.task_id != b.task_id
+
+
 def test_create_task_rejects_invalid_author_participant(tmp_path: Path):
     svc = build_service(tmp_path)
     with pytest.raises(ValueError, match='invalid author_participant'):
