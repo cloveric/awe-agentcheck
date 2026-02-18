@@ -3,8 +3,11 @@ import pytest
 
 from awe_agentcheck.automation import (
     acquire_single_instance,
+    extract_self_followup_topic,
     is_provider_limit_reason,
     parse_until,
+    recommend_process_followup_topic,
+    summarize_actionable_text,
     should_retry_start_for_concurrency_limit,
     should_switch_back_to_primary,
     should_switch_to_fallback,
@@ -88,6 +91,55 @@ def test_is_provider_limit_reason_detects_provider_scoped_limit():
 def test_should_retry_start_for_queued_concurrency_limit():
     assert should_retry_start_for_concurrency_limit('queued', 'concurrency_limit') is True
     assert should_retry_start_for_concurrency_limit('running', 'concurrency_limit') is False
+
+
+def test_recommend_process_followup_topic_for_watchdog_timeout():
+    topic = recommend_process_followup_topic('failed_system', 'watchdog_timeout: task exceeded 1200s')
+    assert topic is not None
+    assert 'watchdog' in topic.lower()
+
+
+def test_recommend_process_followup_topic_for_concurrency_limit():
+    topic = recommend_process_followup_topic('queued', 'concurrency_limit')
+    assert topic is not None
+    assert 'concurrency' in topic.lower()
+
+
+def test_summarize_actionable_text_skips_noise_headers():
+    text = (
+        'OpenAI Codex v0.101.0\n'
+        'VERDICT: BLOCKER\n'
+        'Issue: API can deadlock when cancel races with start.\n'
+    )
+    summary = summarize_actionable_text(text)
+    assert 'deadlock' in summary.lower()
+
+
+def test_extract_self_followup_topic_prefers_blocker_review():
+    events = [
+        {
+            'type': 'review',
+            'payload': {
+                'verdict': 'blocker',
+                'output': 'Issue: start/cancel transition can race and leave task stuck running.',
+            },
+        }
+    ]
+    topic = extract_self_followup_topic(events)
+    assert topic is not None
+    assert 'reviewer concern' in topic.lower()
+
+
+def test_extract_self_followup_topic_from_runtime_error():
+    events = [
+        {
+            'type': 'proposal_discussion_error',
+            'payload': {'reason': 'command_timeout provider=codex command=codex exec timeout_seconds=240'},
+        }
+    ]
+    topic = extract_self_followup_topic(events)
+    assert topic is not None
+    assert 'runtime error' in topic.lower()
 
 
 def test_acquire_single_instance_creates_and_releases_lock(tmp_path):

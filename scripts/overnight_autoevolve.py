@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 import sys
 import time
 from pathlib import Path
+from typing import Deque
 
 import httpx
 
 from awe_agentcheck.automation import (
     acquire_single_instance,
+    extract_self_followup_topic,
     is_provider_limit_reason,
     parse_until,
+    recommend_process_followup_topic,
+    summarize_actionable_text,
     should_retry_start_for_concurrency_limit,
     should_switch_back_to_primary,
     should_switch_to_fallback,
@@ -27,6 +32,32 @@ TERMINAL_STATUSES = {'passed', 'failed_gate', 'failed_system', 'canceled'}
 class ParticipantPlan:
     author: str
     reviewers: list[str]
+
+
+def build_task_description(
+    topic: str,
+    *,
+    process_signal: str | None = None,
+    self_signal: str | None = None,
+) -> str:
+    lines: list[str] = [
+        'You are in continuous self-improvement mode.',
+        f'Primary topic: {str(topic or "").strip()}',
+        'Do one concrete improvement only, then verify with tests and lint.',
+        'Output should include: issue, impact, root cause, fix, and validation summary.',
+    ]
+    process_text = str(process_signal or '').strip()
+    if process_text:
+        lines.append(f'Process issue signal from previous run: {process_text}')
+    self_text = str(self_signal or '').strip()
+    if self_text:
+        lines.append(f'Self-loop finding from previous run: {self_text}')
+    lines.append('Prefer smallest reliable change that improves stability and clarity.')
+    return '\n'.join(lines)
+
+
+def _normalize_topic_key(topic: str) -> str:
+    return ' '.join(str(topic or '').strip().lower().split())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,9 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--poll-seconds', type=int, default=5)
     parser.add_argument('--idle-seconds', type=int, default=5)
     parser.add_argument('--task-timeout-seconds', type=int, default=1800)
+    parser.add_argument('--stall-timeout-seconds', type=int, default=360)
+    parser.add_argument('--event-probe-seconds', type=int, default=45)
     parser.add_argument('--max-consecutive-system-failures', type=int, default=5)
     parser.add_argument('--cooldown-seconds', type=int, default=45)
     parser.add_argument('--primary-disable-seconds', type=int, default=3600)
+    parser.add_argument('--max-followup-topics', type=int, default=24)
     parser.add_argument('--test-command', default='py -m pytest -q')
     parser.add_argument('--lint-command', default='py -m ruff check .')
     parser.add_argument('--topic-file', default='')
@@ -98,6 +132,7 @@ def create_task(
     *,
     api_base: str,
     topic: str,
+    description: str,
     workspace_path: str,
     sandbox_mode: int,
     sandbox_workspace_path: str | None,
@@ -113,10 +148,7 @@ def create_task(
 ) -> dict:
     payload = {
         'title': f'AutoEvolve: {topic[:90]}',
-        'description': (
-            'You are in continuous self-improvement mode. '\
-            'Find one concrete improvement, implement, review, and verify.'
-        ),
+        'description': str(description or '').strip() or build_task_description(topic),
         'author_participant': participants.author,
         'reviewer_participants': participants.reviewers,
         'evolution_level': int(max(0, min(2, int(evolution_level)))),
@@ -137,14 +169,13 @@ def create_task(
     return resp.json()
 
 
-def force_fail_for_watchdog_timeout(
+def force_fail_for_reason(
     client: httpx.Client,
     *,
     api_base: str,
     task_id: str,
-    timeout_seconds: int,
+    reason: str,
 ) -> dict | None:
-    reason = f'watchdog_timeout: task exceeded {timeout_seconds}s without terminal status'
     try:
         client.post(
             f'{api_base}/api/tasks/{task_id}/cancel',
@@ -165,6 +196,34 @@ def force_fail_for_watchdog_timeout(
     return None
 
 
+def force_fail_for_watchdog_timeout(
+    client: httpx.Client,
+    *,
+    api_base: str,
+    task_id: str,
+    timeout_seconds: int,
+) -> dict | None:
+    reason = f'watchdog_timeout: task exceeded {timeout_seconds}s without terminal status'
+    return force_fail_for_reason(
+        client,
+        api_base=api_base,
+        task_id=task_id,
+        reason=reason,
+    )
+
+
+def fetch_events(client: httpx.Client, *, api_base: str, task_id: str) -> list[dict]:
+    try:
+        resp = client.get(f'{api_base}/api/tasks/{task_id}/events', timeout=120)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            return [event for event in data if isinstance(event, dict)]
+    except Exception:
+        return []
+    return []
+
+
 def wait_terminal(
     client: httpx.Client,
     *,
@@ -172,10 +231,19 @@ def wait_terminal(
     task_id: str,
     poll_seconds: int,
     task_timeout_seconds: int,
-) -> dict:
+    stall_timeout_seconds: int,
+    event_probe_seconds: int,
+) -> tuple[dict, list[dict]]:
     timeout_window = max(0, int(task_timeout_seconds))
+    stall_window = max(0, int(stall_timeout_seconds))
+    probe_window = max(5, int(event_probe_seconds))
     started_at = time.monotonic()
     watchdog_last_attempt = 0.0
+    last_event_probe = 0.0
+    last_event_count: int | None = None
+    last_event_change = started_at
+    cached_events: list[dict] = []
+
     while True:
         now = time.monotonic()
         if timeout_window > 0 and (now - started_at) >= timeout_window and (now - watchdog_last_attempt) >= max(1, poll_seconds):
@@ -187,7 +255,7 @@ def wait_terminal(
                 timeout_seconds=timeout_window,
             )
             if forced is not None:
-                return forced
+                return forced, cached_events
 
         try:
             resp = client.get(f'{api_base}/api/tasks/{task_id}', timeout=120)
@@ -210,7 +278,30 @@ def wait_terminal(
             time.sleep(max(1, poll_seconds))
             continue
         if data.get('status') in TERMINAL_STATUSES:
-            return data
+            events = fetch_events(client, api_base=api_base, task_id=task_id)
+            if events:
+                cached_events = events
+            return data, cached_events
+
+        if stall_window > 0 and status == 'running' and (now - last_event_probe) >= probe_window:
+            last_event_probe = now
+            events = fetch_events(client, api_base=api_base, task_id=task_id)
+            if events:
+                cached_events = events
+                count = len(events)
+                if last_event_count is None or count > last_event_count:
+                    last_event_count = count
+                    last_event_change = now
+                elif (now - last_event_change) >= stall_window and (now - watchdog_last_attempt) >= max(1, poll_seconds):
+                    watchdog_last_attempt = now
+                    forced = force_fail_for_reason(
+                        client,
+                        api_base=api_base,
+                        task_id=task_id,
+                        reason=f'watchdog_stall: no new task events for {stall_window}s',
+                    )
+                    if forced is not None:
+                        return forced, cached_events
         time.sleep(max(1, poll_seconds))
 
 
@@ -240,6 +331,28 @@ def main(argv: list[str] | None = None) -> int:
     active = primary
     consecutive_system_failures = 0
     primary_disabled_until: datetime | None = None
+    followup_queue: Deque[tuple[str, str, str]] = deque()
+    followup_keys: set[str] = set()
+
+    def enqueue_followup(topic: str, description: str, *, front: bool) -> None:
+        topic_text = str(topic or '').strip()
+        if not topic_text:
+            return
+        topic_text = topic_text[:180]
+        key = _normalize_topic_key(topic_text)
+        if not key or key in followup_keys:
+            return
+        while len(followup_queue) >= max(1, int(args.max_followup_topics)):
+            dropped = followup_queue.pop()
+            followup_keys.discard(dropped[2])
+        item = (topic_text, str(description or '').strip(), key)
+        if front:
+            followup_queue.appendleft(item)
+        else:
+            followup_queue.append(item)
+        followup_keys.add(key)
+        direction = 'front' if front else 'tail'
+        print(f'[overnight] queued follow-up ({direction}): {topic_text}')
 
     print(f'[overnight] running until {deadline.isoformat()}')
     print(f'[overnight] log file: {log_path}')
@@ -260,8 +373,16 @@ def main(argv: list[str] | None = None) -> int:
                         active = fallback
 
                     iteration += 1
-                    topic = topics[topic_index % len(topics)]
-                    topic_index += 1
+                    if followup_queue:
+                        topic, description, queued_key = followup_queue.popleft()
+                        followup_keys.discard(queued_key)
+                        topic_source = 'followup'
+                    else:
+                        topic = topics[topic_index % len(topics)]
+                        description = build_task_description(topic)
+                        topic_index += 1
+                        topic_source = 'base'
+                    print(f'[overnight] iteration={iteration} topic_source={topic_source} topic={topic[:120]}')
 
                     try:
                         current_task_id = 'n/a'
@@ -269,6 +390,7 @@ def main(argv: list[str] | None = None) -> int:
                             client,
                             api_base=api_base,
                             topic=topic,
+                            description=description,
                             workspace_path=args.workspace_path,
                             sandbox_mode=args.sandbox_mode,
                             sandbox_workspace_path=(args.sandbox_workspace_path.strip() or None),
@@ -286,12 +408,14 @@ def main(argv: list[str] | None = None) -> int:
                         current_task_id = task_id
                         print(f'[overnight] iteration={iteration} task={task_id} created')
 
-                        final_state = wait_terminal(
+                        final_state, final_events = wait_terminal(
                             client,
                             api_base=api_base,
                             task_id=task_id,
                             poll_seconds=args.poll_seconds,
                             task_timeout_seconds=args.task_timeout_seconds,
+                            stall_timeout_seconds=args.stall_timeout_seconds,
+                            event_probe_seconds=args.event_probe_seconds,
                         )
                         status = str(final_state.get('status', 'unknown'))
                         reason = final_state.get('last_gate_reason')
@@ -306,6 +430,24 @@ def main(argv: list[str] | None = None) -> int:
                             participants=active,
                         )
                         print(f'[overnight] task={task_id} status={status} rounds={rounds} reason={reason}')
+
+                        process_followup = recommend_process_followup_topic(status, reason)
+                        if process_followup:
+                            process_signal = summarize_actionable_text(str(reason or status))
+                            process_description = build_task_description(
+                                process_followup,
+                                process_signal=process_signal,
+                            )
+                            enqueue_followup(process_followup, process_description, front=True)
+
+                        self_followup = extract_self_followup_topic(final_events)
+                        if self_followup:
+                            self_signal = summarize_actionable_text(self_followup)
+                            self_description = build_task_description(
+                                self_followup,
+                                self_signal=self_signal,
+                            )
+                            enqueue_followup(self_followup, self_description, front=False)
 
                         if should_switch_to_fallback(status, reason):
                             active = fallback
@@ -362,6 +504,14 @@ def main(argv: list[str] | None = None) -> int:
                             else:
                                 active = primary
                                 print('[overnight] switched back to primary participants due to codex-related error')
+                        process_followup = recommend_process_followup_topic('failed_system', str(exc))
+                        if process_followup:
+                            process_signal = summarize_actionable_text(str(exc))
+                            process_description = build_task_description(
+                                process_followup,
+                                process_signal=process_signal,
+                            )
+                            enqueue_followup(process_followup, process_description, front=True)
 
                     time.sleep(max(1, args.idle_seconds))
     except RuntimeError as exc:

@@ -25,6 +25,15 @@
 7. Overnight launcher stability hardened:
    - `scripts/start_overnight_until_7.ps1` now waits for `/healthz` before launching worker.
    - default restart behavior now resets active `AutoEvolve:*` tasks (best-effort) to avoid startup `concurrency_limit` queue buildup.
+8. Overnight self-loop strategy expanded to dual-channel follow-up:
+   - process channel: task terminal status/reason is mapped to next-round process-hardening topic.
+   - finding channel: latest review/gate/runtime error events are summarized into next-round fix topics.
+9. Added stall watchdog for active running tasks:
+   - `scripts/overnight_autoevolve.py` periodically probes `/api/tasks/{id}/events`.
+   - if no new events for configured window, task is force-failed with `watchdog_stall` and loop proceeds.
+10. Added helper coverage:
+   - `src/awe_agentcheck/automation.py`: process follow-up recommendation + event-to-topic extraction.
+   - `tests/unit/test_automation.py`: tests for new recommendation/summarization/extraction behavior.
 
 ## Update (2026-02-18, reviewer-first + consensus semantics sync)
 

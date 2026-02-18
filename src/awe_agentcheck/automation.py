@@ -5,6 +5,7 @@ from datetime import datetime
 from contextlib import contextmanager
 import os
 from pathlib import Path
+import re
 from typing import Callable, Iterator
 
 
@@ -57,6 +58,114 @@ def should_retry_start_for_concurrency_limit(status: str, reason: str | None) ->
     s = (status or '').strip().lower()
     r = (reason or '').strip().lower()
     return s == 'queued' and 'concurrency_limit' in r
+
+
+def recommend_process_followup_topic(status: str, reason: str | None) -> str | None:
+    s = (status or '').strip().lower()
+    r = (reason or '').strip().lower()
+
+    if not s and not r:
+        return None
+    if 'watchdog_stall' in r or 'watchdog_timeout' in r:
+        return 'Harden watchdog stall/timeout recovery and task cancellation'
+    if 'concurrency_limit' in r:
+        return 'Improve start queue handoff and running-slot concurrency flow'
+    if 'provider_limit' in r:
+        return 'Improve provider-limit fallback, cooldown, and retry behavior'
+    if 'command_timeout' in r:
+        return 'Reduce participant command timeout risk and improve retry strategy'
+    if 'command_not_found' in r:
+        return 'Harden CLI executable detection and command bootstrapping'
+    if 'auto_merge_error' in r:
+        return 'Improve auto-merge failure recovery and snapshot/changelog safety'
+    if s == 'failed_gate' and 'proposal_consensus_not_reached' in r:
+        return 'Improve proposal consensus loop clarity and disagreement resolution'
+    if s == 'failed_system':
+        return 'Stabilize workflow system-failure handling and recovery'
+    return None
+
+
+_NOISE_LINE_PATTERNS = (
+    r'^\s*VERDICT\s*:\s*',
+    r'^\s*NEXT_ACTION\s*:\s*',
+    r'^\s*OpenAI Codex v',
+    r'^\s*Reading prompt from stdin',
+    r'^\s*tokens used\s*$',
+    r'^\s*workdir\s*:',
+    r'^\s*model\s*:',
+    r'^\s*provider\s*:',
+    r'^\s*approval\s*:',
+    r'^\s*sandbox\s*:',
+    r'^\s*reasoning effort\s*:',
+    r'^\s*reasoning summaries\s*:',
+    r'^\s*session id\s*:',
+    r'^\s*mcp\s*:',
+    r'^\s*[-]{4,}\s*$',
+    r'^\s*[{}\[\],]+\s*$',
+)
+_NOISE_LINE_REGEX = [re.compile(p, re.IGNORECASE) for p in _NOISE_LINE_PATTERNS]
+
+
+def summarize_actionable_text(text: str, *, max_chars: int = 180) -> str:
+    content = str(text or '').replace('\r\n', '\n')
+    if not content.strip():
+        return ''
+
+    for raw in content.split('\n'):
+        line = str(raw or '').strip()
+        if not line:
+            continue
+        if len(line) < 8:
+            continue
+        if any(rx.match(line) for rx in _NOISE_LINE_REGEX):
+            continue
+        if line.lower() in {'n/a', 'none', 'null', 'unknown'}:
+            continue
+        cleaned = re.sub(r'\s+', ' ', line).strip()
+        if len(cleaned) > max_chars:
+            return cleaned[: max_chars - 3].rstrip() + '...'
+        return cleaned
+
+    compact = re.sub(r'\s+', ' ', content).strip()
+    if len(compact) > max_chars:
+        return compact[: max_chars - 3].rstrip() + '...'
+    return compact
+
+
+def extract_self_followup_topic(events: list[dict]) -> str | None:
+    for raw in reversed(list(events or [])):
+        if not isinstance(raw, dict):
+            continue
+        event_type = str(raw.get('type') or '').strip().lower()
+        payload = raw.get('payload')
+        payload_data = payload if isinstance(payload, dict) else {}
+
+        if event_type in {
+            'review_error',
+            'discussion_error',
+            'implementation_error',
+            'proposal_discussion_error',
+            'proposal_precheck_review_error',
+            'proposal_review_error',
+        }:
+            reason = summarize_actionable_text(str(payload_data.get('reason') or raw.get('reason') or ''))
+            if reason:
+                return f'Fix loop runtime error: {reason}'
+
+        if event_type == 'gate_failed':
+            reason = summarize_actionable_text(str(payload_data.get('reason') or raw.get('reason') or ''))
+            if reason:
+                return f'Address gate failure cause: {reason}'
+
+        if event_type in {'review', 'proposal_review', 'debate_review'}:
+            verdict = str(payload_data.get('verdict') or '').strip().lower()
+            if verdict not in {'blocker', 'unknown'}:
+                continue
+            summary = summarize_actionable_text(str(payload_data.get('output') or raw.get('output') or ''))
+            if summary:
+                return f'Address reviewer concern: {summary}'
+
+    return None
 
 
 def _pid_exists_default(pid: int) -> bool:
