@@ -2488,6 +2488,7 @@ class OrchestratorService:
         ignored_heads = {
             '.git',
             '.agents',
+            '.claude',
             '.venv',
             '__pycache__',
             '.pytest_cache',
@@ -2501,7 +2502,10 @@ class OrchestratorService:
             return True
         if normalized.endswith('.pyc') or normalized.endswith('.pyo'):
             return True
-        leaf = Path(normalized).name.lower()
+        leaf = Path(normalized).name
+        if OrchestratorService._is_windows_reserved_device_name(leaf):
+            return True
+        leaf = leaf.lower()
         if leaf == '.env' or leaf.startswith('.env.'):
             return True
         if leaf.endswith('.pem') or leaf.endswith('.key'):
@@ -2509,6 +2513,18 @@ class OrchestratorService:
         if re.search(r'(^|[._-])(token|tokens|secret|secrets|apikey|api-key|access-key)([._-]|$)', leaf):
             return True
         return False
+
+    @staticmethod
+    def _is_windows_reserved_device_name(filename: str) -> bool:
+        # Windows blocks these names even with extensions (for example, `nul.txt`).
+        normalized = str(filename or '').strip().rstrip(' .').lower()
+        if not normalized:
+            return False
+        normalized = normalized.split(':', 1)[0]
+        stem = normalized.split('.', 1)[0]
+        if stem in {'con', 'prn', 'aux', 'nul'}:
+            return True
+        return bool(re.fullmatch(r'(com|lpt)[1-9]', stem))
 
     @staticmethod
     def _bootstrap_sandbox_workspace(project_root: Path, sandbox_root: Path) -> None:

@@ -699,6 +699,56 @@ def test_service_create_task_sandbox_bootstrap_skips_secret_files(tmp_path: Path
     assert not (sandbox / 'service.pem').exists()
 
 
+def test_service_sandbox_ignore_filters_windows_reserved_device_names():
+    assert OrchestratorService._is_sandbox_ignored('nul')
+    assert OrchestratorService._is_sandbox_ignored('NUL.txt')
+    assert OrchestratorService._is_sandbox_ignored('src/COM1.log')
+    assert OrchestratorService._is_sandbox_ignored('docs/lpt9.md')
+    assert OrchestratorService._is_sandbox_ignored('aux.')
+    assert not OrchestratorService._is_sandbox_ignored('null.txt')
+    assert not OrchestratorService._is_sandbox_ignored('docs/com10.log')
+    assert not OrchestratorService._is_sandbox_ignored('src/lpt-notes.txt')
+
+
+def test_service_sandbox_bootstrap_skips_windows_reserved_filenames(tmp_path: Path, monkeypatch):
+    project = tmp_path / 'proj-reserved-bootstrap'
+    sandbox = tmp_path / 'sandbox-reserved-bootstrap'
+    project.mkdir()
+    sandbox.mkdir()
+
+    copied: list[tuple[Path, Path]] = []
+
+    def fake_walk(_root):
+        yield str(project), [], ['README.md', 'nul', 'COM1.txt', 'notes.txt']
+
+    def fake_copy2(src, dst):
+        copied.append((Path(src), Path(dst)))
+
+    monkeypatch.setattr('awe_agentcheck.service.os.walk', fake_walk)
+    monkeypatch.setattr('awe_agentcheck.service.shutil.copy2', fake_copy2)
+
+    OrchestratorService._bootstrap_sandbox_workspace(project, sandbox)
+
+    copied_rel = sorted(dst.relative_to(sandbox).as_posix() for _, dst in copied)
+    assert copied_rel == ['README.md', 'notes.txt']
+
+
+def test_service_sandbox_bootstrap_skips_claude_directory(tmp_path: Path):
+    project = tmp_path / 'proj-claude-filter'
+    sandbox = tmp_path / 'sandbox-claude-filter'
+    project.mkdir()
+    sandbox.mkdir()
+    (project / 'README.md').write_text('keep\n', encoding='utf-8')
+    claude_dir = project / '.claude'
+    claude_dir.mkdir()
+    (claude_dir / 'memory.json').write_text('{"k":"v"}\n', encoding='utf-8')
+
+    OrchestratorService._bootstrap_sandbox_workspace(project, sandbox)
+
+    assert (sandbox / 'README.md').exists()
+    assert not (sandbox / '.claude').exists()
+
+
 def test_service_start_task_default_sandbox_is_cleaned_after_passed_auto_merge(tmp_path: Path, monkeypatch):
     project = tmp_path / 'proj-cleanup'
     project.mkdir()
