@@ -2213,6 +2213,8 @@
             <button id="rejectBtn" class="btn-warn">Reject</button>
             <button id="cancelBtn" class="btn-warn">Cancel</button>
             <button id="forceFailBtn">Force Fail</button>
+            <input id="promoteRound" type="number" min="1" value="1" style="width:96px;" />
+            <button id="promoteRoundBtn" class="btn-main">Promote Round</button>
             <button id="reloadEventsBtn">Reload Conversation Only</button>
             <button id="streamDetailBtn">Stream Details: OFF</button>
           </div>
@@ -2474,6 +2476,8 @@
       startBtn: document.getElementById('startBtn'),
       cancelBtn: document.getElementById('cancelBtn'),
       forceFailBtn: document.getElementById('forceFailBtn'),
+      promoteRoundBtn: document.getElementById('promoteRoundBtn'),
+      promoteRound: document.getElementById('promoteRound'),
       forceReason: document.getElementById('forceReason'),
       connBadge: document.getElementById('connBadge'),
       themeSelect: document.getElementById('themeSelect'),
@@ -4231,6 +4235,8 @@
         if (el.startBtn) el.startBtn.disabled = true;
         if (el.cancelBtn) el.cancelBtn.disabled = true;
         if (el.forceFailBtn) el.forceFailBtn.disabled = true;
+        if (el.promoteRoundBtn) el.promoteRoundBtn.disabled = true;
+        if (el.promoteRound) el.promoteRound.disabled = true;
         if (el.approveQueueBtn) el.approveQueueBtn.disabled = true;
         if (el.approveStartBtn) el.approveStartBtn.disabled = true;
         if (el.rejectBtn) el.rejectBtn.disabled = true;
@@ -4294,6 +4300,11 @@
       const waitingManual = !historyOnly && status === 'waiting_manual';
       const canStart = !historyOnly && status === 'queued';
       const canOperate = !historyOnly && isActiveStatus(status);
+      const terminalStatuses = new Set(['passed', 'failed_gate', 'failed_system', 'canceled']);
+      const canPromote = !historyOnly
+        && terminalStatuses.has(status)
+        && Number(task.auto_merge === false ? 0 : 1) === 0
+        && Number(task.max_rounds || 1) > 1;
       if (el.startBtn) {
         el.startBtn.disabled = !canStart;
         if (historyOnly) {
@@ -4304,6 +4315,19 @@
       }
       if (el.cancelBtn) el.cancelBtn.disabled = !canOperate;
       if (el.forceFailBtn) el.forceFailBtn.disabled = !canOperate;
+      if (el.promoteRoundBtn) {
+        el.promoteRoundBtn.disabled = !canPromote;
+        el.promoteRoundBtn.title = canPromote
+          ? ''
+          : 'Promote is available only for terminal tasks with max_rounds>1 and auto_merge=0.';
+      }
+      if (el.promoteRound) {
+        el.promoteRound.disabled = !canPromote;
+        if (canPromote && (!String(el.promoteRound.value || '').trim() || Number(el.promoteRound.value || 0) < 1)) {
+          const fallbackRound = Math.max(1, Number(task.rounds_completed || task.max_rounds || 1));
+          el.promoteRound.value = String(fallbackRound);
+        }
+      }
       if (el.approveQueueBtn) el.approveQueueBtn.disabled = !waitingManual;
       if (el.approveStartBtn) el.approveStartBtn.disabled = !waitingManual;
       if (el.rejectBtn) el.rejectBtn.disabled = !waitingManual;
@@ -5025,6 +5049,28 @@
       }
     }
 
+    async function promoteSelectedRound() {
+      const task = selectedTask();
+      if (!task) return;
+      const roundNumber = Math.max(1, Number((el.promoteRound && el.promoteRound.value) || 1));
+      const mergeTargetRaw = String((el.mergeTargetPath && el.mergeTargetPath.value) || '').trim();
+      try {
+        const result = await api(`/api/tasks/${task.task_id}/promote-round`, {
+          method: 'POST',
+          body: JSON.stringify({
+            round: roundNumber,
+            merge_target_path: (mergeTargetRaw || null),
+          }),
+        });
+        state.eventsByTask.delete(task.task_id);
+        const changedCount = Array.isArray(result.changed_files) ? result.changed_files.length : 0;
+        el.actionStatus.textContent = `Promoted ${task.task_id} round ${roundNumber} (changed=${changedCount})`;
+        await loadData({ forceEvents: true });
+      } catch (err) {
+        el.actionStatus.textContent = `Promote failed: ${String(err)}`;
+      }
+    }
+
     async function submitAuthorDecision(approve, autoStart = false) {
       const task = selectedTask();
       if (!task) return;
@@ -5239,6 +5285,9 @@
     document.getElementById('rejectBtn').addEventListener('click', () => submitAuthorDecision(false, false));
     document.getElementById('cancelBtn').addEventListener('click', () => cancelSelectedTask());
     document.getElementById('forceFailBtn').addEventListener('click', () => forceFailSelectedTask());
+    if (el.promoteRoundBtn) {
+      el.promoteRoundBtn.addEventListener('click', () => promoteSelectedRound());
+    }
     document.getElementById('createBtn').addEventListener('click', () => createTask(false));
     document.getElementById('createAndStartBtn').addEventListener('click', () => createTask(true));
     if (el.expandTreeBtn) {

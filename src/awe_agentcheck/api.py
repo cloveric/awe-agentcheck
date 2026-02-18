@@ -68,6 +68,25 @@ class ForceFailRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=4000)
 
 
+class PromoteRoundRequest(BaseModel):
+    round: int = Field(ge=1)
+    merge_target_path: str | None = Field(default=None, max_length=400)
+
+
+class PromoteRoundResponse(BaseModel):
+    task_id: str
+    round: int
+    source_snapshot_path: str
+    target_path: str
+    changed_files: list[str]
+    copied_files: list[str]
+    deleted_files: list[str]
+    snapshot_path: str
+    changelog_path: str
+    merged_at: str
+    mode: str
+
+
 class TaskResponse(BaseModel):
     task_id: str
     title: str
@@ -628,6 +647,22 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail='task not found') from exc
         return _to_task_response(task)
+
+    @app.post('/api/tasks/{task_id}/promote-round', response_model=PromoteRoundResponse)
+    def promote_round(
+        task_id: str,
+        payload: PromoteRoundRequest,
+        service: OrchestratorService = Depends(get_service),
+    ) -> PromoteRoundResponse:
+        try:
+            result = service.promote_selected_round(
+                task_id,
+                round_number=int(payload.round),
+                merge_target_path=payload.merge_target_path,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail='task not found') from exc
+        return PromoteRoundResponse(**result)
 
     @app.get('/api/tasks/{task_id}/events', response_model=list[EventResponse])
     def list_events(task_id: str, service: OrchestratorService = Depends(get_service)) -> list[EventResponse]:

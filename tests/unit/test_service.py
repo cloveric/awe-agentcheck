@@ -58,6 +58,22 @@ class FakeWorkflowEngineWithFileChange:
         return RunResult(status='passed', rounds=1, gate_reason='passed')
 
 
+class FakeWorkflowEngineTwoRoundsWithChanges:
+    def run(self, config, *, on_event, should_cancel):
+        target = config.cwd / 'src' / 'round.txt'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('round-1\n', encoding='utf-8')
+        on_event({'type': 'discussion', 'round': 1, 'provider': config.author.provider, 'output': 'plan-1'})
+        on_event({'type': 'implementation', 'round': 1, 'provider': config.author.provider, 'output': 'impl-1'})
+        on_event({'type': 'gate_failed', 'round': 1, 'reason': 'tests_failed'})
+
+        target.write_text('round-2\n', encoding='utf-8')
+        on_event({'type': 'discussion', 'round': 2, 'provider': config.author.provider, 'output': 'plan-2'})
+        on_event({'type': 'implementation', 'round': 2, 'provider': config.author.provider, 'output': 'impl-2'})
+        on_event({'type': 'gate_passed', 'round': 2, 'reason': 'passed'})
+        return RunResult(status='passed', rounds=2, gate_reason='passed')
+
+
 class ProposalRunnerWithReviewerFailure:
     def run(self, *, participant, prompt, cwd, timeout_seconds=900, **kwargs):
         if participant.participant_id == 'gemini#review-C':
@@ -236,6 +252,36 @@ def test_service_create_task_accepts_evolution_fields(tmp_path: Path):
     )
     assert task.evolution_level == 2
     assert task.evolve_until == '2026-02-13T06:00:00'
+
+
+def test_service_create_task_forces_fresh_sandbox_for_multi_round_no_auto_merge(tmp_path: Path):
+    project = tmp_path / 'proj-force-sandbox'
+    project.mkdir()
+    (project / 'README.md').write_text('hello\n', encoding='utf-8')
+    requested = tmp_path / 'requested-lab'
+    requested.mkdir()
+
+    svc = build_service(tmp_path)
+    task = svc.create_task(
+        CreateTaskInput(
+            title='Force sandbox',
+            description='multi round no auto merge',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            sandbox_workspace_path=str(requested),
+            auto_merge=False,
+            max_rounds=2,
+            self_loop_mode=1,
+        )
+    )
+
+    assert task.sandbox_mode is True
+    assert task.workspace_path != str(project)
+    assert task.workspace_path != str(requested)
+    assert Path(task.workspace_path).exists()
+    assert '-lab' in Path(task.workspace_path).as_posix()
 
 
 def test_service_create_task_accepts_provider_models_and_claude_team_agents(tmp_path: Path):
@@ -846,6 +892,61 @@ def test_service_start_task_can_disable_auto_merge(tmp_path: Path):
     assert result.status.value == 'passed'
     assert not (target / 'src' / 'hello.txt').exists()
     assert not (target / 'CHANGELOG.auto.md').exists()
+
+
+def test_service_multi_round_no_auto_merge_writes_round_artifacts_and_supports_promote(tmp_path: Path):
+    project = tmp_path / 'project-round-artifacts'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+
+    svc = build_service(tmp_path, workflow_engine=FakeWorkflowEngineTwoRoundsWithChanges())
+    created = svc.create_task(
+        CreateTaskInput(
+            title='Round artifacts',
+            description='capture patches and promote selected round',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            auto_merge=False,
+            max_rounds=2,
+            self_loop_mode=1,
+        )
+    )
+    assert created.sandbox_mode is True
+
+    result = svc.start_task(created.task_id)
+    assert result.status.value == 'passed'
+
+    rounds_root = tmp_path / '.agents' / 'threads' / created.task_id / 'artifacts' / 'rounds'
+    assert (rounds_root / 'round-1.patch').exists()
+    assert (rounds_root / 'round-1.md').exists()
+    assert (rounds_root / 'round-2.patch').exists()
+    assert (rounds_root / 'round-2.md').exists()
+    assert (rounds_root / 'round-000-snapshot').exists()
+    assert (rounds_root / 'round-001-snapshot').exists()
+    assert (rounds_root / 'round-002-snapshot').exists()
+
+    events = svc.list_events(created.task_id)
+    ready_events = [e for e in events if e['type'] == 'round_artifact_ready']
+    assert len(ready_events) >= 2
+    assert {int(e.get('round') or 0) for e in ready_events} >= {1, 2}
+
+    promoted_round_1 = svc.promote_selected_round(
+        created.task_id,
+        round_number=1,
+        merge_target_path=str(project),
+    )
+    assert promoted_round_1['round'] == 1
+    assert (project / 'src' / 'round.txt').read_text(encoding='utf-8') == 'round-1\n'
+
+    promoted_round_2 = svc.promote_selected_round(
+        created.task_id,
+        round_number=2,
+        merge_target_path=str(project),
+    )
+    assert promoted_round_2['round'] == 2
+    assert (project / 'src' / 'round.txt').read_text(encoding='utf-8') == 'round-2\n'
 
 
 def test_service_start_task_runs_workflow_and_records_events(tmp_path: Path):

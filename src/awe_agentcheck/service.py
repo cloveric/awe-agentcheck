@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import difflib
 import json
 import os
 from pathlib import Path
@@ -249,6 +250,12 @@ class OrchestratorService:
         sandbox_workspace_path = self._normalize_merge_target_path(payload.sandbox_workspace_path)
         sandbox_generated = False
         auto_merge = bool(payload.auto_merge)
+        max_rounds = max(1, min(20, int(payload.max_rounds)))
+        multi_round_manual_promote = max_rounds > 1 and not auto_merge
+        if multi_round_manual_promote:
+            # Hard rule: multi-round no-auto-merge must run in a fresh sandbox.
+            sandbox_mode = True
+            sandbox_workspace_path = None
         merge_target_path = self._normalize_merge_target_path(payload.merge_target_path)
         if auto_merge and sandbox_mode and not merge_target_path:
             merge_target_path = str(project_root)
@@ -304,7 +311,7 @@ class OrchestratorService:
                 auto_merge=auto_merge,
                 merge_target_path=merge_target_path,
                 workspace_path=str(workspace_root),
-                max_rounds=payload.max_rounds,
+                max_rounds=max_rounds,
                 test_command=payload.test_command,
                 lint_command=payload.lint_command,
             )
@@ -1167,6 +1174,14 @@ class OrchestratorService:
 
         set_task_context(task_id=task_id)
         _log.info('task_started task_id=%s', task_id)
+        workspace_root = Path(str(row.get('workspace_path') or Path.cwd()))
+        round_artifacts_enabled = int(row.get('max_rounds', 1)) > 1 and not bool(row.get('auto_merge', True))
+        round_snapshot_holder: list[Path | None] = [None]
+        if round_artifacts_enabled:
+            round_snapshot_holder[0] = self._initialize_round_artifact_baseline(
+                task_id=task_id,
+                workspace_root=workspace_root,
+            )
 
         def on_event(event: dict) -> None:
             self.repository.append_event(
@@ -1189,6 +1204,38 @@ class OrchestratorService:
                     round_number=max(round_no, 1),
                     content=content,
                 )
+            if round_artifacts_enabled and event_type in {'gate_passed', 'gate_failed'} and round_no > 0:
+                previous_snapshot = round_snapshot_holder[0]
+                if previous_snapshot is not None:
+                    try:
+                        round_payload, new_snapshot = self._capture_round_artifacts(
+                            task_id=task_id,
+                            round_no=round_no,
+                            previous_snapshot=previous_snapshot,
+                            workspace_root=workspace_root,
+                            gate_reason=str(event.get('reason') or ''),
+                            gate_status=event_type,
+                        )
+                        round_snapshot_holder[0] = new_snapshot
+                        self.repository.append_event(
+                            task_id,
+                            event_type='round_artifact_ready',
+                            payload=round_payload,
+                            round_number=round_no,
+                        )
+                        self.artifact_store.append_event(task_id, {'type': 'round_artifact_ready', **round_payload})
+                    except Exception as exc:
+                        error_payload = {
+                            'round': round_no,
+                            'reason': str(exc or 'round_artifact_error').strip() or 'round_artifact_error',
+                        }
+                        self.repository.append_event(
+                            task_id,
+                            event_type='round_artifact_error',
+                            payload=error_payload,
+                            round_number=round_no,
+                        )
+                        self.artifact_store.append_event(task_id, {'type': 'round_artifact_error', **error_payload})
 
         def should_cancel() -> bool:
             return self.repository.is_cancel_requested(task_id)
@@ -1196,7 +1243,6 @@ class OrchestratorService:
         try:
             author = parse_participant_id(row['author_participant'])
             reviewers = [parse_participant_id(v) for v in row['reviewer_participants']]
-            workspace_root = Path(str(row.get('workspace_path') or Path.cwd()))
             baseline_manifest = self.fusion_manager.build_manifest(workspace_root)
 
             result = self.workflow_engine.run(
@@ -1397,6 +1443,101 @@ class OrchestratorService:
             round_number=None,
         )
         return self._to_view(row)
+
+    def promote_selected_round(
+        self,
+        task_id: str,
+        *,
+        round_number: int,
+        merge_target_path: str | None = None,
+    ) -> dict:
+        row = self.repository.get_task(task_id)
+        if row is None:
+            raise KeyError(task_id)
+
+        if bool(row.get('auto_merge', True)):
+            raise InputValidationError(
+                'promote_selected_round is available only when auto_merge=0',
+                field='auto_merge',
+            )
+        if int(row.get('max_rounds', 1)) <= 1:
+            raise InputValidationError(
+                'promote_selected_round is available only when max_rounds>1',
+                field='max_rounds',
+            )
+        if str(row.get('status') or '') not in _TERMINAL_STATUSES:
+            raise InputValidationError(
+                'promote_selected_round requires terminal task status',
+                field='status',
+            )
+
+        round_no = max(1, int(round_number))
+        rounds_root = self._round_artifacts_root(task_id)
+        source_snapshot = self._round_snapshot_dir(rounds_root, round_no)
+        if not source_snapshot.exists() or not source_snapshot.is_dir():
+            raise InputValidationError(
+                f'round snapshot not found for round {round_no}',
+                field='round',
+            )
+        baseline_snapshot = self._round_snapshot_dir(rounds_root, 0)
+        if not baseline_snapshot.exists() or not baseline_snapshot.is_dir():
+            raise InputValidationError(
+                'round baseline snapshot missing',
+                field='round',
+            )
+
+        target_text = (
+            self._normalize_merge_target_path(merge_target_path)
+            or self._normalize_merge_target_path(row.get('merge_target_path'))
+            or str(row.get('project_path') or row.get('workspace_path') or '').strip()
+        )
+        target_root = Path(str(target_text)).resolve()
+        if not target_root.exists() or not target_root.is_dir():
+            raise InputValidationError(
+                'merge_target_path must be an existing directory',
+                field='merge_target_path',
+            )
+
+        before_manifest = self.fusion_manager.build_manifest(baseline_snapshot)
+        fusion = self.fusion_manager.run(
+            task_id=f'{task_id}-round-{round_no}',
+            source_root=source_snapshot,
+            target_root=target_root,
+            before_manifest=before_manifest,
+        )
+        payload = {
+            'task_id': task_id,
+            'round': round_no,
+            'source_snapshot_path': str(source_snapshot),
+            'target_path': str(target_root),
+            'changed_files': fusion.changed_files,
+            'copied_files': fusion.copied_files,
+            'deleted_files': fusion.deleted_files,
+            'snapshot_path': fusion.snapshot_path,
+            'changelog_path': fusion.changelog_path,
+            'merged_at': fusion.merged_at,
+            'mode': fusion.mode,
+        }
+        self.repository.append_event(
+            task_id,
+            event_type='manual_round_promoted',
+            payload=payload,
+            round_number=round_no,
+        )
+        self.artifact_store.append_event(task_id, {'type': 'manual_round_promoted', **payload})
+        self.artifact_store.write_artifact_json(
+            task_id,
+            name=f'round-{round_no}-promote-summary',
+            payload=payload,
+        )
+        self.artifact_store.update_state(
+            task_id,
+            {
+                'last_promoted_round': round_no,
+                'last_promote_summary': payload,
+            },
+        )
+        return payload
 
     def _prepare_author_confirmation(self, task_id: str, row: dict, *, auto_approve: bool = False) -> TaskView:
         summary = (
@@ -2160,6 +2301,179 @@ class OrchestratorService:
         except Exception as exc:
             payload['error'] = str(exc)
         return payload
+
+    def _round_artifacts_root(self, task_id: str) -> Path:
+        key = self._validate_artifact_task_id(task_id)
+        root = (self.artifact_store.root / 'threads' / key / 'artifacts' / 'rounds').resolve(strict=False)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    @staticmethod
+    def _round_snapshot_dir(rounds_root: Path, round_no: int) -> Path:
+        return rounds_root / f'round-{int(round_no):03d}-snapshot'
+
+    def _initialize_round_artifact_baseline(self, *, task_id: str, workspace_root: Path) -> Path:
+        rounds_root = self._round_artifacts_root(task_id)
+        baseline = self._round_snapshot_dir(rounds_root, 0)
+        if baseline.exists():
+            shutil.rmtree(baseline, ignore_errors=True)
+        baseline.mkdir(parents=True, exist_ok=True)
+        self._copy_workspace_snapshot(source_root=workspace_root, target_root=baseline)
+        return baseline
+
+    def _capture_round_artifacts(
+        self,
+        *,
+        task_id: str,
+        round_no: int,
+        previous_snapshot: Path,
+        workspace_root: Path,
+        gate_reason: str,
+        gate_status: str,
+    ) -> tuple[dict, Path]:
+        rounds_root = self._round_artifacts_root(task_id)
+        next_snapshot = self._round_snapshot_dir(rounds_root, round_no)
+        if next_snapshot.exists():
+            shutil.rmtree(next_snapshot, ignore_errors=True)
+        next_snapshot.mkdir(parents=True, exist_ok=True)
+        self._copy_workspace_snapshot(source_root=workspace_root, target_root=next_snapshot)
+
+        before_manifest = self.fusion_manager.build_manifest(previous_snapshot)
+        after_manifest = self.fusion_manager.build_manifest(next_snapshot)
+        changed_paths = sorted(
+            [rel for rel in set(before_manifest) | set(after_manifest) if before_manifest.get(rel) != after_manifest.get(rel)]
+        )
+        added_files = sorted([rel for rel in after_manifest if rel not in before_manifest])
+        deleted_files = sorted([rel for rel in before_manifest if rel not in after_manifest])
+        modified_files = sorted(
+            [
+                rel
+                for rel in changed_paths
+                if rel in before_manifest and rel in after_manifest and before_manifest.get(rel) != after_manifest.get(rel)
+            ]
+        )
+
+        patch_text = self._build_patch_text(
+            from_root=previous_snapshot,
+            to_root=next_snapshot,
+            changed_paths=changed_paths,
+        )
+        patch_path = rounds_root / f'round-{int(round_no)}.patch'
+        if patch_text.strip():
+            patch_path.write_text(patch_text, encoding='utf-8')
+        else:
+            patch_path.write_text('# no file-level changes detected for this round\n', encoding='utf-8')
+
+        summary_path = rounds_root / f'round-{int(round_no)}.md'
+        lines = [
+            f'# Round {int(round_no)} Summary',
+            '',
+            f'- status: `{gate_status}`',
+            f'- reason: `{gate_reason or "n/a"}`',
+            f'- changed_files: `{len(changed_paths)}`',
+            f'- added_files: `{len(added_files)}`',
+            f'- modified_files: `{len(modified_files)}`',
+            f'- deleted_files: `{len(deleted_files)}`',
+            f'- patch: `{patch_path}`',
+            f'- snapshot: `{next_snapshot}`',
+            '',
+        ]
+        if changed_paths:
+            lines.append('## Changed Paths')
+            lines.append('')
+            for rel in changed_paths[:200]:
+                lines.append(f'- `{rel}`')
+            if len(changed_paths) > 200:
+                lines.append(f'- ... ({len(changed_paths) - 200} more)')
+            lines.append('')
+        summary_path.write_text('\n'.join(lines), encoding='utf-8')
+
+        meta_payload = {
+            'round': int(round_no),
+            'status': gate_status,
+            'reason': gate_reason or None,
+            'changed_paths': changed_paths,
+            'added_files': added_files,
+            'modified_files': modified_files,
+            'deleted_files': deleted_files,
+            'patch_path': str(patch_path),
+            'summary_path': str(summary_path),
+            'snapshot_path': str(next_snapshot),
+            'created_at': datetime.now().isoformat(),
+        }
+        self.artifact_store.write_artifact_json(
+            task_id,
+            name=f'round-{int(round_no)}-artifact',
+            payload=meta_payload,
+        )
+        return meta_payload, next_snapshot
+
+    def _copy_workspace_snapshot(self, *, source_root: Path, target_root: Path) -> None:
+        source = Path(source_root)
+        target = Path(target_root)
+        for src in self._iter_workspace_files(source):
+            rel = src.relative_to(source)
+            dst = target / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
+    def _iter_workspace_files(self, root: Path):
+        base = Path(root)
+        for path in base.rglob('*'):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(base).as_posix()
+            if self._is_sandbox_ignored(rel):
+                continue
+            yield path
+
+    def _build_patch_text(self, *, from_root: Path, to_root: Path, changed_paths: list[str]) -> str:
+        output: list[str] = []
+        for rel in changed_paths:
+            old_path = from_root / rel
+            new_path = to_root / rel
+            old_text, old_binary = self._read_text_for_patch(old_path)
+            new_text, new_binary = self._read_text_for_patch(new_path)
+            if old_binary or new_binary:
+                output.append(f'diff --git a/{rel} b/{rel}')
+                output.append('Binary files differ')
+                output.append('')
+                continue
+            old_lines = old_text.splitlines()
+            new_lines = new_text.splitlines()
+            from_name = '/dev/null' if not old_path.exists() else f'a/{rel}'
+            to_name = '/dev/null' if not new_path.exists() else f'b/{rel}'
+            diff_lines = list(
+                difflib.unified_diff(
+                    old_lines,
+                    new_lines,
+                    fromfile=from_name,
+                    tofile=to_name,
+                    lineterm='',
+                )
+            )
+            if not diff_lines:
+                continue
+            output.extend(diff_lines)
+            output.append('')
+        return '\n'.join(output).rstrip() + '\n' if output else ''
+
+    @staticmethod
+    def _read_text_for_patch(path: Path) -> tuple[str, bool]:
+        if not path.exists() or not path.is_file():
+            return '', False
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return '', True
+        if len(data) > 2 * 1024 * 1024:
+            return '', True
+        if b'\x00' in data:
+            return '', True
+        try:
+            return data.decode('utf-8'), False
+        except UnicodeDecodeError:
+            return '', True
 
     @staticmethod
     def _is_sandbox_ignored(rel_path: str) -> bool:

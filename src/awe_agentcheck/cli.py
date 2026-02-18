@@ -60,6 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
     force_fail.add_argument('task_id', help='Task id')
     force_fail.add_argument('--reason', required=True, help='Failure reason')
 
+    promote_round = sub.add_parser('promote-round', help='Promote one round artifact into merge target')
+    promote_round.add_argument('task_id', help='Task id')
+    promote_round.add_argument('--round', dest='round_number', required=True, type=int, help='Round number to promote')
+    promote_round.add_argument('--merge-target-path', default='', help='Optional merge target path override')
+
     events = sub.add_parser('events', help='List task events')
     events.add_argument('task_id', help='Task id')
 
@@ -181,6 +186,14 @@ def main(argv: list[str] | None = None) -> int:
             response = client.post(
                 f'{base}/api/tasks/{args.task_id}/force-fail',
                 json={'reason': args.reason},
+            )
+        elif args.command == 'promote-round':
+            response = client.post(
+                f'{base}/api/tasks/{args.task_id}/promote-round',
+                json={
+                    'round': int(args.round_number),
+                    'merge_target_path': (args.merge_target_path.strip() or None),
+                },
             )
         elif args.command == 'events':
             response = client.get(f'{base}/api/tasks/{args.task_id}/events')

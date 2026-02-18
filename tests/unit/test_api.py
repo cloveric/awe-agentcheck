@@ -22,17 +22,34 @@ class FakeWorkflowEngine:
         return RunResult(status='passed', rounds=1, gate_reason='passed')
 
 
+class FakeWorkflowEngineTwoRoundsWithChanges:
+    def run(self, config, *, on_event, should_cancel):
+        target = config.cwd / 'src' / 'round.txt'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('round-1\n', encoding='utf-8')
+        on_event({'type': 'discussion', 'round': 1, 'provider': config.author.provider, 'output': 'plan-1'})
+        on_event({'type': 'implementation', 'round': 1, 'provider': config.author.provider, 'output': 'impl-1'})
+        on_event({'type': 'gate_failed', 'round': 1, 'reason': 'tests_failed'})
+
+        target.write_text('round-2\n', encoding='utf-8')
+        on_event({'type': 'discussion', 'round': 2, 'provider': config.author.provider, 'output': 'plan-2'})
+        on_event({'type': 'implementation', 'round': 2, 'provider': config.author.provider, 'output': 'impl-2'})
+        on_event({'type': 'gate_passed', 'round': 2, 'reason': 'passed'})
+        return RunResult(status='passed', rounds=2, gate_reason='passed')
+
+
 def build_client(
     tmp_path: Path,
     *,
     api_access_token: str | None = None,
     allow_remote_api: bool | None = None,
+    workflow_engine=None,
     client: tuple[str, int] = ('testclient', 50000),
 ) -> TestClient:
     service = OrchestratorService(
         repository=InMemoryTaskRepository(),
         artifact_store=ArtifactStore(tmp_path / '.agents'),
-        workflow_engine=FakeWorkflowEngine(),
+        workflow_engine=workflow_engine or FakeWorkflowEngine(),
     )
     app = create_app(
         service=service,
@@ -274,6 +291,7 @@ def test_api_create_task_accepts_evolution_fields(tmp_path: Path):
             'sandbox_mode': False,
             'self_loop_mode': 1,
             'auto_merge': False,
+            'max_rounds': 1,
             'merge_target_path': str(tmp_path),
             'auto_start': False,
         },
@@ -288,6 +306,79 @@ def test_api_create_task_accepts_evolution_fields(tmp_path: Path):
     assert body['self_loop_mode'] == 1
     assert body['auto_merge'] is False
     assert body['merge_target_path'] == str(tmp_path)
+
+
+def test_api_create_task_forces_sandbox_for_multi_round_no_auto_merge(tmp_path: Path):
+    client = build_client(tmp_path)
+    project = tmp_path / 'repo-force-sandbox'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+
+    resp = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Force sandbox mode',
+            'description': 'multi round no auto merge',
+            'author_participant': 'claude#author-A',
+            'reviewer_participants': ['codex#review-B'],
+            'workspace_path': str(project),
+            'sandbox_mode': False,
+            'auto_merge': False,
+            'max_rounds': 2,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body['sandbox_mode'] is True
+    assert body['workspace_path'] != str(project)
+    assert body['sandbox_generated'] is True
+
+
+def test_api_promote_round_endpoint_merges_selected_round(tmp_path: Path):
+    project = tmp_path / 'repo-promote-round'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+    client = build_client(tmp_path, workflow_engine=FakeWorkflowEngineTwoRoundsWithChanges())
+
+    created = client.post(
+        '/api/tasks',
+        json={
+            'title': 'Promote round task',
+            'description': 'promote selected round',
+            'author_participant': 'codex#author-A',
+            'reviewer_participants': ['claude#review-B'],
+            'workspace_path': str(project),
+            'sandbox_mode': False,
+            'auto_merge': False,
+            'max_rounds': 2,
+            'self_loop_mode': 1,
+            'auto_start': False,
+        },
+    )
+    assert created.status_code == 201
+    task_id = created.json()['task_id']
+
+    started = client.post(f'/api/tasks/{task_id}/start', json={'background': False})
+    assert started.status_code == 200
+    assert started.json()['status'] == 'passed'
+
+    promoted_1 = client.post(
+        f'/api/tasks/{task_id}/promote-round',
+        json={'round': 1, 'merge_target_path': str(project)},
+    )
+    assert promoted_1.status_code == 200
+    assert promoted_1.json()['round'] == 1
+    assert (project / 'src' / 'round.txt').read_text(encoding='utf-8') == 'round-1\n'
+
+    promoted_2 = client.post(
+        f'/api/tasks/{task_id}/promote-round',
+        json={'round': 2, 'merge_target_path': str(project)},
+    )
+    assert promoted_2.status_code == 200
+    assert promoted_2.json()['round'] == 2
+    assert (project / 'src' / 'round.txt').read_text(encoding='utf-8') == 'round-2\n'
 
 
 def test_api_create_task_accepts_provider_models_and_claude_team_agents(tmp_path: Path):
