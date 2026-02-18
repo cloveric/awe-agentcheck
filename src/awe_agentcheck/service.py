@@ -1075,17 +1075,6 @@ class OrchestratorService:
         if row['status'] == TaskStatus.WAITING_MANUAL.value:
             return self._to_view(row)
 
-        if int(row.get('self_loop_mode', 0)) == 0 and str(row.get('last_gate_reason') or '') != 'author_approved':
-            row = self.repository.update_task_status(
-                task_id,
-                status=TaskStatus.RUNNING.value,
-                reason=None,
-                rounds_completed=row.get('rounds_completed', 0),
-            )
-            self.repository.append_event(task_id, event_type='task_running', payload={'status': 'running'}, round_number=None)
-            self.artifact_store.update_state(task_id, {'status': 'running'})
-            return self._prepare_author_confirmation(task_id, row)
-
         if self.max_concurrent_running_tasks > 0:
             running_now = self._count_running_tasks(exclude_task_id=task_id)
             if running_now >= self.max_concurrent_running_tasks:
@@ -1114,9 +1103,36 @@ class OrchestratorService:
                 )
                 return self._to_view(deferred)
 
-        row = self.repository.update_task_status(task_id, status=TaskStatus.RUNNING.value, reason=None, rounds_completed=row.get('rounds_completed', 0))
-        self.repository.append_event(task_id, event_type='task_running', payload={'status': 'running'}, round_number=None)
-        self.artifact_store.update_state(task_id, {'status': 'running'})
+        # All modes require proposal consensus before implementation.
+        needs_consensus = str(row.get('last_gate_reason') or '') != 'author_approved'
+        if needs_consensus:
+            row = self.repository.update_task_status(
+                task_id,
+                status=TaskStatus.RUNNING.value,
+                reason=None,
+                rounds_completed=row.get('rounds_completed', 0),
+            )
+            self.repository.append_event(task_id, event_type='task_running', payload={'status': 'running'}, round_number=None)
+            self.artifact_store.update_state(task_id, {'status': 'running'})
+            auto_approve = int(row.get('self_loop_mode', 0)) == 1
+            prepared = self._prepare_author_confirmation(task_id, row, auto_approve=auto_approve)
+            if not auto_approve:
+                return prepared
+            if prepared.status != TaskStatus.RUNNING:
+                return prepared
+            row = self.repository.get_task(task_id)
+            if row is None:
+                raise KeyError(task_id)
+        else:
+            row = self.repository.update_task_status(
+                task_id,
+                status=TaskStatus.RUNNING.value,
+                reason=None,
+                rounds_completed=row.get('rounds_completed', 0),
+            )
+            self.repository.append_event(task_id, event_type='task_running', payload={'status': 'running'}, round_number=None)
+            self.artifact_store.update_state(task_id, {'status': 'running'})
+
         set_task_context(task_id=task_id)
         _log.info('task_started task_id=%s', task_id)
 
@@ -1350,7 +1366,7 @@ class OrchestratorService:
         )
         return self._to_view(row)
 
-    def _prepare_author_confirmation(self, task_id: str, row: dict) -> TaskView:
+    def _prepare_author_confirmation(self, task_id: str, row: dict, *, auto_approve: bool = False) -> TaskView:
         summary = (
             f"Task: {str(row.get('title') or '')}\n"
             "Generated proposal requires author approval before implementation."
@@ -1502,7 +1518,8 @@ class OrchestratorService:
 
                 proposal_seed = discussion_text or str(row.get('title') or '').strip()
                 current_seed = proposal_seed
-                reviewer_first_mode = bool(config.debate_mode) and bool(reviewers)
+                # Consensus stage is reviewer-first for all modes.
+                reviewer_first_mode = bool(reviewers)
                 max_alignment_attempts = 1 if OrchestratorService._is_audit_intent(config) else 3
 
                 while consensus_rounds < target_rounds:
@@ -1655,6 +1672,35 @@ class OrchestratorService:
                         )
                         review_payload = list(round_latest_reviews)
                         no_blocker, blocker, unknown = self._proposal_verdict_counts(round_latest_reviews)
+                        usable_reviews = self._proposal_review_usable_count(round_latest_reviews)
+                        if usable_reviews < len(reviewers):
+                            unavailable_payload = {
+                                'round': round_no,
+                                'attempt': attempt,
+                                'reviewers_total': len(round_latest_reviews),
+                                'reviewers_usable': usable_reviews,
+                                'latest_reviews': round_latest_reviews,
+                            }
+                            self.repository.append_event(
+                                task_id,
+                                event_type='proposal_review_unavailable',
+                                payload=unavailable_payload,
+                                round_number=round_no,
+                            )
+                            self.artifact_store.append_event(
+                                task_id,
+                                {'type': 'proposal_review_unavailable', **unavailable_payload},
+                            )
+                            current_seed = self._append_proposal_feedback_context(
+                                merged_after_review,
+                                reviewer_id='proposal_review_unavailable',
+                                review_text=(
+                                    f"usable reviewer outputs {usable_reviews}/{len(reviewers)}; "
+                                    "need actionable reviewer findings before author execution."
+                                ),
+                            )
+                            continue
+
                         if self._proposal_consensus_reached(round_latest_reviews, expected_reviewers=len(reviewers)):
                             consensus_reached = True
                             consensus_rounds += 1
@@ -1773,6 +1819,38 @@ class OrchestratorService:
             {'type': 'author_confirmation_required', **pending_payload},
         )
         self.artifact_store.write_artifact_json(task_id, name='pending_proposal', payload=pending_payload)
+
+        if auto_approve:
+            decision_payload = {
+                'decision': 'approved',
+                'note': 'auto_approved_by_self_loop_mode',
+            }
+            self.repository.append_event(
+                task_id,
+                event_type='author_decision',
+                payload=decision_payload,
+                round_number=None,
+            )
+            self.artifact_store.append_event(task_id, {'type': 'author_decision', **decision_payload})
+            self.repository.set_cancel_requested(task_id, requested=False)
+            approved = self.repository.update_task_status(
+                task_id,
+                status=TaskStatus.RUNNING.value,
+                reason='author_approved',
+                rounds_completed=consensus_rounds,
+            )
+            self.artifact_store.update_state(
+                task_id,
+                {
+                    'status': TaskStatus.RUNNING.value,
+                    'last_gate_reason': 'author_approved',
+                    'cancel_requested': False,
+                    'pending_proposal': pending_payload,
+                    'author_decision': decision_payload,
+                },
+            )
+            return self._to_view(approved)
+
         self.artifact_store.update_state(
             task_id,
             {
@@ -2111,11 +2189,14 @@ class OrchestratorService:
             if stage_text == 'proposal_precheck_review'
             else "Stage: proposal review. Evaluate the updated proposal and unresolved risks."
         )
-        audit_guidance = (
-            "Task mode is audit/discovery. Do NOT block only because user request is broad or no specific bug id is provided. "
-            "Convert broad request into concrete review scope, checks, and priorities."
+        scope_guidance = (
+            "If user request is broad, do not block only for broad wording."
+            " Convert it into concrete review scope, checks, and priorities, then continue."
+        )
+        depth_guidance = (
+            "Task mode is audit/discovery: run repository checks as needed and cite evidence."
             if audit_intent
-            else "For non-audit tasks, require concrete scope before allowing implementation."
+            else "Keep checks focused on current feature scope and known risk paths."
         )
         return (
             f"Task: {config.title}\n"
@@ -2124,7 +2205,8 @@ class OrchestratorService:
             f"{language_instruction}\n"
             f"{plain_instruction}\n"
             f"{stage_guidance}\n"
-            f"{audit_guidance}\n"
+            f"{scope_guidance}\n"
+            f"{depth_guidance}\n"
             "Keep output concise but complete enough to justify verdict.\n"
             "Do not include command logs, internal process narration, or tool/skill references.\n"
             "If evidence is insufficient, return VERDICT: UNKNOWN quickly.\n"
@@ -2154,11 +2236,15 @@ class OrchestratorService:
         return (
             f"Task: {config.title}\n"
             "You are the author responding to reviewer-first proposal feedback.\n"
+            "Reviewer leads this phase. Do not invent unrelated changes.\n"
             f"{language_instruction}\n"
             f"{plain_instruction}\n"
             f"Reviewer verdict snapshot: no_blocker={no_blocker}, blocker={blocker}, unknown={unknown}\n"
             "Produce an updated implementation proposal for manual approval.\n"
             "Address reviewer concerns explicitly and keep plan incremental.\n"
+            "Only propose changes that map to reviewer findings and user intent.\n"
+            "If a reviewer suggestion is unsafe, explain why and give a safer replacement.\n"
+            "Do not add default secrets/tokens, hidden bypasses, or broad unrelated refactors.\n"
             f"{audit_author_guidance}\n"
             "Do not ask follow-up questions.\n"
             f"Context:\n{clipped}\n"
@@ -2253,8 +2339,6 @@ class OrchestratorService:
         stage_text = str(stage or '').strip().lower()
         if stage_text not in {'proposal_precheck_review', 'proposal_review'}:
             return verdict, review_text
-        if not OrchestratorService._is_audit_intent(config):
-            return verdict, review_text
         if verdict not in {ReviewVerdict.UNKNOWN, ReviewVerdict.BLOCKER}:
             return verdict, review_text
         if not OrchestratorService._looks_like_scope_ambiguity(review_text):
@@ -2263,8 +2347,8 @@ class OrchestratorService:
             return verdict, review_text
 
         guidance = (
-            "[system_note] Audit intent detected: scope-ambiguity is treated as non-blocking. "
-            "Reviewer should continue with concrete inspection scope (files/modules), checks, and priorities."
+            "[system_note] Scope ambiguity is non-blocking: reviewer must convert broad user intent into "
+            "concrete scope (files/modules), checks, and priorities, then continue."
         )
         merged = str(review_text or '').strip()
         if guidance not in merged:

@@ -85,3 +85,26 @@ def test_run_in_place_no_changes_returns_no_changes_mode(tmp_path: Path):
     assert result.changed_files == []
     assert result.snapshot_path == ""
     assert result.changelog_path == ""
+
+
+def test_hash_file_uses_stable_sha256_hex(tmp_path: Path):
+    file_path = tmp_path / "payload.txt"
+    file_path.write_text("same\n", encoding="utf-8")
+
+    digest_1 = AutoFusionManager._hash_file(file_path)
+    digest_2 = AutoFusionManager._hash_file(file_path)
+
+    assert digest_1 == digest_2
+    assert len(digest_1) == 64
+    assert all(ch in "0123456789abcdef" for ch in digest_1)
+
+
+def test_hash_file_changes_when_content_changes(tmp_path: Path):
+    file_path = tmp_path / "payload.txt"
+    file_path.write_text("v1\n", encoding="utf-8")
+    digest_1 = AutoFusionManager._hash_file(file_path)
+
+    file_path.write_text("v2\n", encoding="utf-8")
+    digest_2 = AutoFusionManager._hash_file(file_path)
+
+    assert digest_1 != digest_2

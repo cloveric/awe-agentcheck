@@ -431,9 +431,9 @@ def decode_task_meta(raw: str) -> dict:
         repair_mode = str(parsed.get('repair_mode') or 'balanced').strip().lower() or 'balanced'
         if repair_mode not in {'minimal', 'balanced', 'structural'}:
             repair_mode = 'balanced'
-        plain_mode = bool(parsed.get('plain_mode', True))
-        stream_mode = bool(parsed.get('stream_mode', True))
-        debate_mode = bool(parsed.get('debate_mode', True))
+        plain_mode = _coerce_meta_bool(parsed.get('plain_mode', True), default=True)
+        stream_mode = _coerce_meta_bool(parsed.get('stream_mode', True), default=True)
+        debate_mode = _coerce_meta_bool(parsed.get('debate_mode', True), default=True)
         merge_target_path = parsed.get('merge_target_path')
         merge_target_text = (str(merge_target_path).strip() if merge_target_path else None)
         sandbox_mode = bool(parsed.get('sandbox_mode', False))
@@ -471,3 +471,14 @@ def decode_task_meta(raw: str) -> dict:
         out['self_loop_mode'] = self_loop_mode_int
         return out
     return dict(default)
+
+
+def _coerce_meta_bool(value, *, default: bool) -> bool:
+    text = str(value).strip().lower()
+    if text in {'1', 'true', 'yes', 'on'}:
+        return True
+    if text in {'0', 'false', 'no', 'off'}:
+        return False
+    if text in {'', 'none', 'null'}:
+        return bool(default)
+    return bool(value)

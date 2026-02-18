@@ -115,6 +115,13 @@ class ProposalOrderWorkflowEngine:
         self.participant_timeout_seconds = 20
 
 
+class AutoConsensusWorkflowEngine(FakeWorkflowEngine):
+    def __init__(self):
+        super().__init__()
+        self.runner = ProposalRunnerOrderProbe()
+        self.participant_timeout_seconds = 20
+
+
 class ProposalRunnerPrecheckUnavailable:
     def __init__(self):
         self.calls: list[str] = []
@@ -131,6 +138,44 @@ class ProposalPrecheckUnavailableWorkflowEngine:
     def __init__(self):
         self.runner = ProposalRunnerPrecheckUnavailable()
         self.participant_timeout_seconds = 240
+
+
+class ProposalRunnerReviewUnavailable:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def run(self, *, participant, prompt, cwd, timeout_seconds=900, **kwargs):
+        pid = str(participant.participant_id)
+        self.calls.append(pid)
+        if pid.startswith('codex#author'):
+            return AdapterResult(
+                output='Author aligns with reviewer suggestions and provides revision plan.',
+                verdict='unknown',
+                next_action=None,
+                returncode=0,
+                duration_seconds=0.1,
+            )
+        if 'Stage: precheck.' in str(prompt):
+            return AdapterResult(
+                output='VERDICT: NO_BLOCKER\nIssue: Scope ready.\nImpact: Review can proceed.\nNext: Provide concrete edits.',
+                verdict='no_blocker',
+                next_action=None,
+                returncode=0,
+                duration_seconds=0.1,
+            )
+        return AdapterResult(
+            output='',
+            verdict='no_blocker',
+            next_action=None,
+            returncode=0,
+            duration_seconds=0.1,
+        )
+
+
+class ProposalReviewUnavailableWorkflowEngine:
+    def __init__(self):
+        self.runner = ProposalRunnerReviewUnavailable()
+        self.participant_timeout_seconds = 60
 
 
 def build_service(tmp_path: Path, workflow_engine=None, *, max_concurrent_running_tasks: int = 1) -> OrchestratorService:
@@ -1277,6 +1322,42 @@ def test_service_manual_mode_uses_reviewer_first_before_author_proposal(tmp_path
     assert calls.index('codex#author-A') < len(calls) - 1
 
 
+def test_service_self_loop_auto_mode_still_uses_reviewer_consensus_first(tmp_path: Path):
+    engine = AutoConsensusWorkflowEngine()
+    svc = OrchestratorService(
+        repository=InMemoryTaskRepository(),
+        artifact_store=ArtifactStore(tmp_path / '.agents'),
+        workflow_engine=engine,
+    )
+    created = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='Self-loop reviewer-first',
+            description='review and fix',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            max_rounds=1,
+        )
+    )
+
+    started = svc.start_task(created.task_id)
+    assert started.status.value == 'passed'
+
+    calls = engine.runner.calls
+    assert calls
+    assert calls[0] == 'claude#review-B'
+    assert 'codex#author-A' in calls
+
+    events = svc.list_events(created.task_id)
+    assert any(e['type'] == 'author_confirmation_required' for e in events)
+    assert any(
+        e['type'] == 'author_decision'
+        and str(e.get('payload', {}).get('decision')) == 'approved'
+        for e in events
+    )
+
+
 def test_service_manual_mode_fails_fast_when_precheck_reviews_unavailable(tmp_path: Path):
     engine = ProposalPrecheckUnavailableWorkflowEngine()
     svc = OrchestratorService(
@@ -1305,6 +1386,35 @@ def test_service_manual_mode_fails_fast_when_precheck_reviews_unavailable(tmp_pa
     assert any(e['type'] == 'proposal_precheck_review_error' for e in events)
     assert any(e['type'] == 'proposal_precheck_unavailable' for e in events)
     assert not any(e['type'] == 'proposal_discussion_started' for e in events)
+
+
+def test_service_manual_mode_requires_actionable_proposal_review_before_execution(tmp_path: Path):
+    engine = ProposalReviewUnavailableWorkflowEngine()
+    svc = OrchestratorService(
+        repository=InMemoryTaskRepository(),
+        artifact_store=ArtifactStore(tmp_path / '.agents'),
+        workflow_engine=engine,
+    )
+    created = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=0,
+            title='Fix concrete parser bug',
+            description='review and implement a parser fix',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            max_rounds=1,
+        )
+    )
+
+    started = svc.start_task(created.task_id)
+    assert started.status.value == 'failed_gate'
+    assert started.last_gate_reason == 'proposal_consensus_not_reached'
+    assert engine.runner.calls[0] == 'claude#review-B'
+
+    events = svc.list_events(created.task_id)
+    assert any(e['type'] == 'proposal_review_unavailable' for e in events)
+    assert not any(e['type'] == 'task_started' for e in events)
 
 
 def test_service_manual_mode_proposal_reviewer_timeout_follows_participant_timeout(tmp_path: Path):
@@ -1367,6 +1477,32 @@ def test_service_proposal_review_prompt_supports_audit_depth_guidance(tmp_path: 
     assert 'Keep output concise but complete enough to justify verdict.' in prompt
     assert 'VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN' in prompt
 
+
+
+def test_service_scope_ambiguity_is_non_blocking_for_proposal_review(tmp_path: Path):
+    cfg = RunConfig(
+        task_id='t-proposal-scope-ambiguity',
+        title='Review project bugs',
+        description='check and improve quality',
+        author=parse_participant_id('codex#author-A'),
+        reviewers=[parse_participant_id('claude#review-B')],
+        evolution_level=0,
+        evolve_until=None,
+        cwd=tmp_path,
+        max_rounds=1,
+        test_command='py -m pytest -q',
+        lint_command='py -m ruff check .',
+        conversation_language='zh',
+        plain_mode=True,
+    )
+    verdict, output = OrchestratorService._normalize_proposal_reviewer_result(
+        config=cfg,
+        stage='proposal_precheck_review',
+        verdict='unknown',
+        review_text='VERDICT: UNKNOWN\n问题: 计划太泛，缺少具体范围。\n影响: 无法判断改动。\n下一步: 请先说明具体bug。',
+    )
+    assert verdict == 'no_blocker'
+    assert 'Scope ambiguity is non-blocking' in output
 
 
 def test_service_clear_project_history_removes_terminal_tasks_only(tmp_path: Path):

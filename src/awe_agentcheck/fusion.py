@@ -218,7 +218,7 @@ class AutoFusionManager:
 
     @staticmethod
     def _hash_file(path: Path) -> str:
-        hasher = hashlib.sha1()
+        hasher = hashlib.sha256()
         with path.open("rb") as f:
             while True:
                 chunk = f.read(1024 * 1024)
