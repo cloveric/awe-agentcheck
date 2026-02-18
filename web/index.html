@@ -2471,6 +2471,8 @@
       apiHealthy: false,
       apiFailureCount: 0,
       lastDialogueSignature: '',
+      avatarVariantCache: new Map(),
+      avatarSessionSalt: `${Date.now()}-${Math.floor(Math.random() * 1e9)}`,
       selectionNeedsValidation: false,
     };
 
@@ -2982,6 +2984,31 @@
       };
     }
 
+    function normalizeAvatarProvider(provider) {
+      const raw = String(provider || '').trim().toLowerCase();
+      return ['claude', 'codex', 'gemini'].includes(raw) ? raw : 'system';
+    }
+
+    function avatarVariantInfo(roleId, provider, scope, variantCount) {
+      const key = normalizeAvatarProvider(provider);
+      const role = String(roleId || 'system').trim() || 'system';
+      const scopeKey = String(scope || state.theme || 'pixel').trim().toLowerCase();
+      const count = Math.max(1, Number(variantCount || 1));
+      const cacheKey = `${scopeKey}|${key}|${role}`;
+      const cached = state.avatarVariantCache.get(cacheKey);
+      if (cached && Number(cached.variantCount) === count) {
+        return cached;
+      }
+      const seeded = seededRandom(hashText(`${cacheKey}|${state.avatarSessionSalt}`));
+      const info = {
+        variantCount: count,
+        variant: Math.floor(seeded() * count),
+        noise: Math.floor(seeded() * 1000000000),
+      };
+      state.avatarVariantCache.set(cacheKey, info);
+      return info;
+    }
+
     function avatarPalette(provider, rng) {
       const key = String(provider || '').toLowerCase();
       const isPixelTheme = state.theme === 'pixel';
@@ -3203,9 +3230,10 @@
     }
 
     function generateAvatarSvgPixel(roleId, provider) {
-      const rawKey = String(provider || '').toLowerCase();
-      const key = ['claude', 'codex', 'gemini'].includes(rawKey) ? rawKey : 'system';
-      const seed = `px-modern-human|${key}|${roleId}`;
+      const key = normalizeAvatarProvider(provider);
+      const style = avatarVariantInfo(roleId, key, 'pixel', 5);
+      const variant = Number(style.variant || 0);
+      const seed = `px-modern-human|${key}|${roleId}|${style.noise}`;
       const rng = seededRandom(hashText(seed));
       const size = 24;
       const grid = Array.from({ length: size }, () => Array(size).fill(null));
@@ -3344,6 +3372,27 @@
         fillRect(11, 4, 12, 4, p.accent);
       }
 
+      if (variant === 1) {
+        // Variant: cleaner glasses profile.
+        strokeRect(8, 9, 10, 10, p.accent);
+        strokeRect(13, 9, 15, 10, p.accent);
+        fillRect(11, 9, 12, 9, p.accent);
+      } else if (variant === 2) {
+        // Variant: stronger brow and jaw.
+        fillRect(8, 7, 10, 7, p.line);
+        fillRect(13, 7, 15, 7, p.line);
+        fillRect(9, 14, 14, 15, p.skinShade);
+      } else if (variant === 3) {
+        // Variant: side comms headset.
+        fillRect(5, 9, 6, 12, p.accent);
+        fillRect(17, 9, 18, 12, p.accent);
+        fillRect(18, 12, 20, 12, p.accent);
+      } else if (variant === 4) {
+        // Variant: chest badge + collar.
+        fillRect(9, 18, 14, 18, p.accent);
+        fillRect(10, 19, 13, 20, p.accent);
+      }
+
       strokeRect(6, 16, 17, 23, p.line);
 
       const rects = [`<rect width="${size}" height="${size}" fill="${p.bg}"></rect>`];
@@ -3358,9 +3407,10 @@
     }
 
     function generateAvatarSvgStarWars(roleId, provider) {
-      const rawKey = String(provider || '').toLowerCase();
-      const key = ['claude', 'codex', 'gemini'].includes(rawKey) ? rawKey : 'system';
-      const seed = `sw|${key}|${roleId}`;
+      const key = normalizeAvatarProvider(provider);
+      const style = avatarVariantInfo(roleId, key, 'pixel-sw', 5);
+      const variant = Number(style.variant || 0);
+      const seed = `sw|${key}|${roleId}|${style.noise}`;
       const rng = seededRandom(hashText(seed));
       const size = 24;
       const grid = Array.from({ length: size }, () => Array(size).fill(null));
@@ -3501,6 +3551,26 @@
         drawVerticalSaber(19, 9, 20, p.saber, p.saberCore);
       }
 
+      if (variant === 1) {
+        // Variant: shoulder pauldron.
+        fillRect(5, 13, 8, 15, p.armor);
+        fillRect(15, 13, 18, 15, p.armorShade);
+      } else if (variant === 2) {
+        // Variant: tactical chest panel.
+        fillRect(9, 17, 14, 19, p.accent);
+        fillRect(10, 18, 13, 18, p.visor);
+      } else if (variant === 3) {
+        // Variant: comm antenna.
+        fillRect(4, 5, 4, 13, p.armorShade);
+        fillRect(3, 5, 5, 6, p.accent);
+      } else if (variant === 4) {
+        // Variant: visor stripe and belt nodes.
+        fillRect(8, 8, 15, 8, p.accent);
+        px(9, 20, p.accent);
+        px(12, 20, p.accent);
+        px(15, 20, p.accent);
+      }
+
       const rects = [`<rect width="${size}" height="${size}" fill="${p.bg}"></rect>`];
       for (let y = 0; y < size; y += 1) {
         for (let x = 0; x < size; x += 1) {
@@ -3513,9 +3583,10 @@
     }
 
     function generateAvatarSvgThreeKingdoms(roleId, provider) {
-      const rawKey = String(provider || '').toLowerCase();
-      const key = ['claude', 'codex', 'gemini'].includes(rawKey) ? rawKey : 'system';
-      const seed = `sg|${key}|${roleId}`;
+      const key = normalizeAvatarProvider(provider);
+      const style = avatarVariantInfo(roleId, key, 'pixel-sg', 5);
+      const variant = Number(style.variant || 0);
+      const seed = `sg|${key}|${roleId}|${style.noise}`;
       const rng = seededRandom(hashText(seed));
       const size = 24;
       const grid = Array.from({ length: size }, () => Array(size).fill(null));
@@ -3693,6 +3764,26 @@
         fillRect(3, 7, 3, 20, p.propShade);
         fillRect(1, 7, 2, 9, p.prop);
         fillRect(1, 10, 2, 12, p.propShade);
+      }
+
+      if (variant === 1) {
+        // Variant: shoulder cape layers.
+        fillRect(6, 14, 8, 17, p.robeShade);
+        fillRect(15, 14, 17, 17, p.robeShade);
+      } else if (variant === 2) {
+        // Variant: formal chest knot.
+        fillRect(10, 17, 13, 18, p.prop);
+        fillRect(11, 19, 12, 20, p.propShade);
+      } else if (variant === 3) {
+        // Variant: hairpin/crown trim.
+        fillRect(9, 3, 14, 3, p.crownShade);
+        px(11, 2, p.crown);
+        px(12, 2, p.crown);
+      } else if (variant === 4) {
+        // Variant: side ornament and belt seal.
+        fillRect(19, 10, 21, 12, p.seal);
+        fillRect(20, 11, 20, 11, p.sealShade);
+        fillRect(9, 20, 14, 20, p.scrollBand);
       }
 
       const rects = [`<rect width="${size}" height="${size}" fill="${p.bg}"></rect>`];
