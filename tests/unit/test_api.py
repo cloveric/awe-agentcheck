@@ -781,6 +781,53 @@ def test_api_project_history_clear_removes_terminal_records_only(tmp_path: Path)
     assert task_c['task_id'] in ids
 
 
+def test_api_project_history_clear_include_non_terminal_removes_live_tasks_too(tmp_path: Path):
+    client = build_client(tmp_path)
+    payload = {
+        'description': 'history clear all',
+        'author_participant': 'codex#author-A',
+        'reviewer_participants': ['claude#review-B'],
+        'workspace_path': str(tmp_path),
+        'sandbox_mode': False,
+        'self_loop_mode': 1,
+        'auto_merge': False,
+        'auto_start': False,
+    }
+    a = client.post('/api/tasks', json={**payload, 'title': 'History all A'})
+    b = client.post('/api/tasks', json={**payload, 'title': 'History all B'})
+    c = client.post('/api/tasks', json={**payload, 'title': 'History all C'})
+    assert a.status_code == 201
+    assert b.status_code == 201
+    assert c.status_code == 201
+
+    task_a = a.json()
+    task_b = b.json()
+    task_c = c.json()
+    project_path = task_a['project_path']
+
+    started_a = client.post(f"/api/tasks/{task_a['task_id']}/start", json={'background': False})
+    assert started_a.status_code == 200
+    assert started_a.json()['status'] == 'passed'
+    # Keep B/C queued (non-terminal) to verify include_non_terminal behavior.
+
+    cleared = client.post(
+        '/api/project-history/clear',
+        json={'project_path': project_path, 'include_non_terminal': True},
+    )
+    assert cleared.status_code == 200
+    body = cleared.json()
+    assert body['project_path'] == project_path
+    assert body['deleted_tasks'] == 3
+    assert body['skipped_non_terminal'] == 0
+
+    tasks = client.get('/api/tasks', params={'limit': 50})
+    assert tasks.status_code == 200
+    ids = {item['task_id'] for item in tasks.json()}
+    assert task_a['task_id'] not in ids
+    assert task_b['task_id'] not in ids
+    assert task_c['task_id'] not in ids
+
+
 def test_api_events_fallback_to_artifact_history_when_task_missing_from_repository(tmp_path: Path):
     repository = InMemoryTaskRepository()
     artifact_store = ArtifactStore(tmp_path / '.agents')

@@ -5095,17 +5095,20 @@
 
     async function clearProjectHistory() {
       const normalizedProject = normalizeProjectPath(state.selectedProject || '');
-      const scoped = historyItemsInSelectedProject();
-      if (!scoped.length) {
-        el.actionStatus.textContent = 'No history records to clear for current scope.';
+      const scopedHistory = historyItemsInSelectedProject();
+      const scopedLive = tasksInSelectedProject();
+      if (!scopedHistory.length && !scopedLive.length) {
+        el.actionStatus.textContent = 'No history records or live tasks to clear for current scope.';
         return;
       }
 
       const scopeLabel = normalizedProject || 'all projects';
       const hint = normalizedProject
-        ? 'Only terminal history tasks in this project will be removed.'
-        : 'Terminal history tasks across all projects will be removed.';
-      const ok = window.confirm(`Clear Project History?\nScope: ${scopeLabel}\nRecords: ${scoped.length}\n${hint}\nRunning/queued tasks are kept by default.`);
+        ? 'History records and task rows in this project will be removed.'
+        : 'History records and task rows across all projects will be removed.';
+      const ok = window.confirm(
+        `Clear Project History?\nScope: ${scopeLabel}\nHistory records: ${scopedHistory.length}\nLive tasks: ${scopedLive.length}\n${hint}\nThis also clears old live tasks (including queued/running/waiting_manual) in scope.`
+      );
       if (!ok) {
         return;
       }
@@ -5115,13 +5118,13 @@
           method: 'POST',
           body: JSON.stringify({
             project_path: normalizedProject || null,
-            include_non_terminal: false,
+            include_non_terminal: true,
           }),
         });
         const deleted = Number(result.deleted_tasks || 0);
         const skipped = Number(result.skipped_non_terminal || 0);
         const artifacts = Number(result.deleted_artifacts || 0);
-        el.actionStatus.textContent = `History cleared: deleted=${deleted}, artifacts=${artifacts}, skipped_active=${skipped}.`;
+        el.actionStatus.textContent = `History/task cleanup completed: deleted=${deleted}, artifacts=${artifacts}, skipped=${skipped}.`;
         await loadData({ forceEvents: true });
       } catch (err) {
         el.actionStatus.textContent = `Clear history failed: ${String(err)}`;
