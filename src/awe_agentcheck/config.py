@@ -50,7 +50,8 @@ def load_settings() -> Settings:
         'codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh',
     )
     gemini_command = os.getenv('AWE_GEMINI_COMMAND', 'gemini --yolo')
-    participant_timeout_seconds = _env_int('AWE_PARTICIPANT_TIMEOUT_SECONDS', 240, minimum=10)
+    # Default to a long participant timeout for deep audit/review tasks.
+    participant_timeout_seconds = _env_int('AWE_PARTICIPANT_TIMEOUT_SECONDS', 3600, minimum=10)
     command_timeout_seconds = _env_int('AWE_COMMAND_TIMEOUT_SECONDS', 300, minimum=10)
     participant_timeout_retries = _env_int('AWE_PARTICIPANT_TIMEOUT_RETRIES', 1, minimum=0)
     max_concurrent_running_tasks = _env_int('AWE_MAX_CONCURRENT_RUNNING_TASKS', 1, minimum=0)

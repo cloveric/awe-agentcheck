@@ -16,7 +16,7 @@ param(
   [ValidateRange(0,2)][int]$EvolutionLevel = 0,
   [ValidateRange(0,1)][int]$SelfLoopMode = 1,
   [int]$MaxRounds = 3,
-  [int]$ParticipantTimeoutSeconds = 240,
+  [int]$ParticipantTimeoutSeconds = 3600,
   [int]$CommandTimeoutSeconds = 300,
   [int]$TaskTimeoutSeconds = 1800,
   [int]$PrimaryDisableSeconds = 3600,

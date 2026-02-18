@@ -1361,7 +1361,7 @@ class OrchestratorService:
 
         try:
             runner = getattr(self.workflow_engine, 'runner', None)
-            timeout = int(getattr(self.workflow_engine, 'participant_timeout_seconds', 240))
+            timeout = int(getattr(self.workflow_engine, 'participant_timeout_seconds', 3600))
             review_timeout = self._review_timeout_seconds(timeout)
             author = parse_participant_id(str(row['author_participant']))
             reviewers = [parse_participant_id(v) for v in row.get('reviewer_participants', [])]

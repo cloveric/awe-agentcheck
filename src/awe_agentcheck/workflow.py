@@ -87,7 +87,7 @@ class WorkflowEngine:
         *,
         runner: ParticipantRunner,
         command_executor: ShellCommandExecutor,
-        participant_timeout_seconds: int = 240,
+        participant_timeout_seconds: int = 3600,
         command_timeout_seconds: int = 300,
     ):
         self.runner = runner

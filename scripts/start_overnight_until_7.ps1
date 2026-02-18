@@ -20,7 +20,7 @@ param(
   [ValidateRange(0,1)][int]$DebateMode = 0,
   [ValidateSet('minimal','balanced','structural')][string]$RepairMode = 'balanced',
   [int]$MaxRounds = 3,
-  [int]$ParticipantTimeoutSeconds = 240,
+  [int]$ParticipantTimeoutSeconds = 3600,
   [int]$CommandTimeoutSeconds = 300,
   [int]$TaskTimeoutSeconds = 1800,
   [int]$PrimaryDisableSeconds = 3600,
