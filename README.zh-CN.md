@@ -127,6 +127,21 @@
    - 自动融合前新增严格 head-SHA 一致性约束；目标仓在运行期间漂移会阻断融合（`head_sha_mismatch`）。
    - 对 `WorkflowEngine` 的通过任务新增结构化证据清单工件：`evidence_manifest.json`。
    - 失败任务会自动沉淀为回归任务到 `.agents/regressions/failure_tasks.json`，基准工具默认可直接纳入（`--include-regression`）。
+27. 新增结构化 reviewer 控制输出解析（P0）：
+   - reviewer 输出优先支持 JSON control schema，同时保留 `VERDICT:` / `NEXT_ACTION:` 正则兜底。
+   - 降低模型输出风格变化导致的 verdict 漂移问题。
+28. 新增 `architecture_audit` 阶段（P0）：
+   - 输出 `architecture_audit` 事件，覆盖 LOC 阈值、职责混杂启发式、脚本跨平台覆盖检查。
+   - 支持 `AWE_ARCH_AUDIT_MODE=off|warn|hard`（默认：evolution level 1 为 `warn`，level 2 为 `hard`）。
+29. 参与者适配器重构为 provider registry（P1）：
+   - 统一注册 provider 的命令模板、模型参数 flag 策略、能力开关。
+   - `AWE_PROVIDER_ADAPTERS_JSON` 增加的 provider 会自动带默认策略接入。
+30. 启动渐进式拆分（P1）：
+   - policy template 目录迁移到 `src/awe_agentcheck/policy_templates.py`（行为不变）。
+   - `web/index.html` 内联资源拆分为 `web/assets/dashboard.css` + `web/assets/dashboard.js`。
+31. 新增静态资源路由：
+   - `GET /web/assets/{asset_name}` 安全提供拆分后的 Dashboard 资源。
+   - 通过 root-relative guard 防止路径穿越。
 
 <br/>
 
@@ -326,6 +341,7 @@ $env:AWE_WORKFLOW_BACKEND="langgraph"
 | `AWE_PARTICIPANT_TIMEOUT_RETRIES` | `1` | 参与者超时后的重试次数 |
 | `AWE_MAX_CONCURRENT_RUNNING_TASKS` | `1` | 可同时运行的任务数量 |
 | `AWE_WORKFLOW_BACKEND` | `langgraph` | 工作流后端（推荐 `langgraph`，可回退 `classic`） |
+| `AWE_ARCH_AUDIT_MODE` | _(随 evolution level 自动)_ | 架构审计执行级别：`off`、`warn`、`hard` |
 | `AWE_PROVIDER_ADAPTERS_JSON` | _(无)_ | 额外 provider 适配器 JSON 映射，例如 `{"qwen":"qwen-cli --yolo"}` |
 | `AWE_PROMOTION_GUARD_ENABLED` | `true` | 在自动融合/轮次晋升前启用 promotion guard 检查 |
 | `AWE_PROMOTION_ALLOWED_BRANCHES` | _(空)_ | 可选逗号分隔分支白名单（空表示不限制分支） |

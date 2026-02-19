@@ -167,6 +167,17 @@ class PreCompletionChecklistResult:
     evidence_paths: list[str]
 
 
+@dataclass(frozen=True)
+class ArchitectureAuditResult:
+    enabled: bool
+    passed: bool
+    mode: str
+    reason: str
+    thresholds: dict[str, int]
+    violations: list[dict[str, object]]
+    scanned_files: int
+
+
 class WorkflowEngine:
     def __init__(
         self,
@@ -738,6 +749,58 @@ class WorkflowEngine:
                     return RunResult(status='failed_gate', rounds=round_no, gate_reason=checklist.reason)
                 continue
 
+            architecture_audit = self._run_architecture_audit(config=config)
+            emit(
+                {
+                    'type': 'architecture_audit',
+                    'round': round_no,
+                    'enabled': architecture_audit.enabled,
+                    'passed': architecture_audit.passed,
+                    'mode': architecture_audit.mode,
+                    'severity': 'error' if architecture_audit.mode == 'hard' and not architecture_audit.passed else 'warning',
+                    'reason': architecture_audit.reason,
+                    'thresholds': dict(architecture_audit.thresholds),
+                    'violations': list(architecture_audit.violations),
+                    'scanned_files': architecture_audit.scanned_files,
+                }
+            )
+            if architecture_audit.enabled and architecture_audit.mode == 'hard' and not architecture_audit.passed:
+                _log.warning('architecture_audit_failed round=%d reason=%s', round_no, architecture_audit.reason)
+                emit(
+                    {
+                        'type': 'gate_failed',
+                        'round': round_no,
+                        'reason': architecture_audit.reason,
+                        'stage': 'architecture_audit',
+                    }
+                )
+                progress = self._assess_loop_progress(
+                    loop_tracker=loop_tracker,
+                    gate_reason=architecture_audit.reason,
+                    implementation_output=str(implementation.output or ''),
+                    review_outputs=review_outputs,
+                    tests_ok=bool(test_result.ok),
+                    lint_ok=bool(lint_result.ok),
+                )
+                if progress.get('triggered'):
+                    strategy_hint = str(progress.get('hint') or '').strip() or strategy_hint
+                    emit(
+                        {
+                            'type': 'strategy_shifted',
+                            'round': round_no,
+                            'hint': strategy_hint,
+                            'signals': dict(progress.get('signals') or {}),
+                            'shift_count': int(progress.get('shift_count') or 0),
+                        }
+                    )
+                previous_gate_reason = architecture_audit.reason
+                terminal_reason = str(progress.get('terminal_reason') or '').strip()
+                if terminal_reason:
+                    return RunResult(status='failed_gate', rounds=round_no, gate_reason=terminal_reason)
+                if not deadline_mode and round_no >= config.max_rounds:
+                    return RunResult(status='failed_gate', rounds=round_no, gate_reason=architecture_audit.reason)
+                continue
+
             gate = evaluate_medium_gate(
                 tests_ok=test_result.ok,
                 lint_ok=lint_result.ok,
@@ -785,11 +848,59 @@ class WorkflowEngine:
             raise RuntimeError('langgraph_backend_unavailable: install "langgraph"')
 
         graph = StateGraph(dict)
+        graph.add_node('preflight', self._langgraph_preflight_node)
         graph.add_node('execute', self._langgraph_execute_node)
-        graph.set_entry_point('execute')
-        graph.add_edge('execute', END)
+        graph.add_node('finalize', self._langgraph_finalize_node)
+        graph.set_entry_point('preflight')
+        graph.add_conditional_edges(
+            'preflight',
+            self._langgraph_preflight_route,
+            {
+                'execute': 'execute',
+                'finalize': 'finalize',
+            },
+        )
+        graph.add_edge('execute', 'finalize')
+        graph.add_edge('finalize', END)
         self._langgraph_compiled = graph.compile()
         return self._langgraph_compiled
+
+    def _langgraph_preflight_node(self, state: dict) -> dict:
+        config = state.get('config')
+        if not isinstance(config, RunConfig):
+            return {
+                'preflight_ok': False,
+                'preflight_error': 'langgraph_execution_error: invalid config payload',
+                'config': state.get('config'),
+                'on_event': state.get('on_event'),
+                'should_cancel': state.get('should_cancel'),
+            }
+        if not str(config.task_id or '').strip():
+            return {
+                'preflight_ok': False,
+                'preflight_error': 'langgraph_preflight_error: missing task_id',
+                'config': config,
+                'on_event': state.get('on_event'),
+                'should_cancel': state.get('should_cancel'),
+            }
+        if int(config.max_rounds) <= 0:
+            return {
+                'preflight_ok': False,
+                'preflight_error': 'langgraph_preflight_error: invalid max_rounds',
+                'config': config,
+                'on_event': state.get('on_event'),
+                'should_cancel': state.get('should_cancel'),
+            }
+        return {
+            'preflight_ok': True,
+            'config': config,
+            'on_event': state.get('on_event'),
+            'should_cancel': state.get('should_cancel'),
+        }
+
+    @staticmethod
+    def _langgraph_preflight_route(state: dict) -> str:
+        return 'execute' if bool(state.get('preflight_ok')) else 'finalize'
 
     def _langgraph_execute_node(self, state: dict) -> dict:
         config = state.get('config')
@@ -801,6 +912,15 @@ class WorkflowEngine:
             should_cancel=state.get('should_cancel'),
         )
         return {'result': result}
+
+    def _langgraph_finalize_node(self, state: dict) -> dict:
+        if ('preflight_ok' in state) and (not bool(state.get('preflight_ok'))):
+            err = str(state.get('preflight_error') or 'langgraph_preflight_error')
+            return {'result': RunResult(status='failed_system', rounds=0, gate_reason=err)}
+        result = state.get('result')
+        if isinstance(result, RunResult):
+            return {'result': result}
+        return {'result': RunResult(status='failed_system', rounds=0, gate_reason='langgraph_execution_error: missing RunResult payload')}
 
     @staticmethod
     def _normalize_workflow_backend(value: str | None) -> str:
@@ -865,15 +985,7 @@ class WorkflowEngine:
 
     @staticmethod
     def _workspace_tree_excerpt(root: Path, *, max_depth: int, max_entries: int) -> str:
-        ignore_dirs = {
-            '.git',
-            '.agents',
-            '.venv',
-            '__pycache__',
-            '.pytest_cache',
-            '.ruff_cache',
-            'node_modules',
-        }
+        ignore_dirs = WorkflowEngine._default_ignore_dirs()
         lines: list[str] = []
         visited = 0
         truncated = False
@@ -912,6 +1024,186 @@ class WorkflowEngine:
         if truncated:
             lines.append(f'- [truncated] showing first {max_entries} entries')
         return '\n'.join(lines)
+
+    @staticmethod
+    def _default_ignore_dirs() -> set[str]:
+        return {
+            '.git',
+            '.agents',
+            '.venv',
+            '__pycache__',
+            '.pytest_cache',
+            '.ruff_cache',
+            'node_modules',
+        }
+
+    @staticmethod
+    def _architecture_thresholds_for_level(level: int) -> dict[str, int]:
+        normalized = max(0, min(2, int(level)))
+        if normalized >= 2:
+            return {
+                'python_file_lines_max': 1000,
+                'frontend_file_lines_max': 2000,
+                'python_responsibility_keywords_max': 8,
+            }
+        return {
+            'python_file_lines_max': 1200,
+            'frontend_file_lines_max': 2500,
+            'python_responsibility_keywords_max': 10,
+        }
+
+    @staticmethod
+    def _run_architecture_audit(*, config: RunConfig) -> ArchitectureAuditResult:
+        level = max(0, min(2, int(config.evolution_level)))
+        if level < 1:
+            return ArchitectureAuditResult(
+                enabled=False,
+                passed=True,
+                mode='off',
+                reason='skipped',
+                thresholds={},
+                violations=[],
+                scanned_files=0,
+            )
+
+        root = Path(config.cwd).resolve(strict=False)
+        thresholds = WorkflowEngine._architecture_thresholds_for_level(level)
+        mode = WorkflowEngine._architecture_audit_mode(level)
+        ignore_dirs = WorkflowEngine._default_ignore_dirs()
+        frontend_ext = {'.html', '.css', '.scss', '.js', '.jsx', '.ts', '.tsx', '.vue', '.svelte'}
+        responsibility_keywords = (
+            'sandbox',
+            'policy',
+            'analytics',
+            'evolution',
+            'proposal',
+            'merge',
+            'history',
+            'review',
+            'workflow',
+            'database',
+            'api',
+            'session',
+            'theme',
+            'avatar',
+            'benchmark',
+            'preflight',
+            'runtime',
+        )
+        violations: list[dict[str, object]] = []
+        scanned_files = 0
+
+        if not root.exists() or not root.is_dir():
+            return ArchitectureAuditResult(
+                enabled=True,
+                passed=False,
+                mode=mode,
+                reason='architecture_audit_workspace_missing',
+                thresholds=thresholds,
+                violations=[],
+                scanned_files=0,
+            )
+
+        for dirpath, dirs, files in os.walk(root):
+            base = Path(dirpath)
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
+            for name in files:
+                path = base / name
+                ext = path.suffix.lower()
+                if ext not in {'.py', *frontend_ext}:
+                    continue
+                scanned_files += 1
+                try:
+                    file_text = path.read_text(encoding='utf-8', errors='ignore')
+                except OSError:
+                    continue
+                line_count = int(file_text.count('\n') + 1) if file_text else 0
+                try:
+                    rel = path.relative_to(root).as_posix()
+                except ValueError:
+                    rel = path.as_posix()
+                if ext == '.py' and line_count > int(thresholds['python_file_lines_max']):
+                    violations.append(
+                        {
+                            'kind': 'python_file_too_large',
+                            'path': rel,
+                            'lines': int(line_count),
+                            'limit': int(thresholds['python_file_lines_max']),
+                            'suggestion': 'Split responsibilities into smaller modules.',
+                        }
+                    )
+                if ext == '.py' and line_count > max(300, int(thresholds['python_file_lines_max']) // 2):
+                    lowered = file_text.lower()
+                    responsibility_hits = sum(1 for k in responsibility_keywords if k in lowered)
+                    responsibility_limit = int(thresholds['python_responsibility_keywords_max'])
+                    if responsibility_hits > responsibility_limit:
+                        violations.append(
+                            {
+                                'kind': 'python_mixed_responsibilities',
+                                'path': rel,
+                                'lines': int(line_count),
+                                'responsibility_hits': int(responsibility_hits),
+                                'limit': int(responsibility_limit),
+                                'suggestion': 'Extract domain concerns into focused modules.',
+                            }
+                        )
+                if ext in frontend_ext and line_count > int(thresholds['frontend_file_lines_max']):
+                    violations.append(
+                        {
+                            'kind': 'frontend_file_too_large',
+                            'path': rel,
+                            'lines': int(line_count),
+                            'limit': int(thresholds['frontend_file_lines_max']),
+                            'suggestion': 'Split UI into smaller files/components.',
+                        }
+                    )
+
+        scripts_dir = root / 'scripts'
+        if scripts_dir.exists() and scripts_dir.is_dir():
+            ps1_files = {
+                p.stem.lower()
+                for p in scripts_dir.glob('*.ps1')
+                if p.is_file()
+            }
+            sh_files = {
+                p.stem.lower()
+                for p in scripts_dir.glob('*.sh')
+                if p.is_file()
+            }
+            missing_shell = sorted(name for name in ps1_files if name not in sh_files)
+            if missing_shell:
+                violations.append(
+                    {
+                        'kind': 'script_cross_platform_gap',
+                        'path': 'scripts',
+                        'missing_shell_variants': missing_shell,
+                        'suggestion': 'Add matching .sh wrappers for cross-platform usage.',
+                    }
+                )
+
+        if not violations:
+            reason = 'passed'
+        elif mode == 'hard':
+            reason = 'architecture_threshold_exceeded'
+        else:
+            reason = 'architecture_threshold_warning'
+        return ArchitectureAuditResult(
+            enabled=True,
+            passed=not violations,
+            mode=mode,
+            reason=reason,
+            thresholds=thresholds,
+            violations=violations,
+            scanned_files=int(scanned_files),
+        )
+
+    @staticmethod
+    def _architecture_audit_mode(level: int) -> str:
+        raw = str(os.getenv('AWE_ARCH_AUDIT_MODE', '') or '').strip().lower()
+        if raw in {'off', 'warn', 'hard'}:
+            return raw
+        normalized = max(0, min(2, int(level)))
+        return 'hard' if normalized >= 2 else 'warn'
 
     @staticmethod
     def _inject_prompt_extras(
@@ -976,6 +1268,16 @@ class WorkflowEngine:
             return (
                 'Reviewer concern persists. Limit scope to reviewer blockers only, address each blocker with evidence, '
                 'and avoid unrelated edits.'
+            )
+        if reason == 'architecture_threshold_exceeded':
+            return (
+                'Architecture audit failed on oversized files. Prioritize splitting large files by responsibility, '
+                'add targeted tests around moved logic, then rerun verification.'
+            )
+        if reason == 'architecture_threshold_warning':
+            return (
+                'Architecture audit reports warning-level debt. Keep current fix scoped, then schedule a follow-up '
+                'split plan with concrete module boundaries and validation.'
             )
         return (
             f'Loop detected (gate_repeat={gate_repeat}, impl_repeat={impl_repeat}, '
@@ -1379,6 +1681,7 @@ class WorkflowEngine:
             if audit_mode
             else "Review current context and provide concrete risk findings."
         )
+        checklist_guidance = WorkflowEngine._review_checklist_guidance(config.evolution_level)
         base = (
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
@@ -1388,6 +1691,7 @@ class WorkflowEngine:
             "Debate mode step: review the current plan/context and provide concise, concrete concerns.\n"
             "Focus on correctness, regression risk, reliability, security, and test gaps.\n"
             f"{depth_guidance}\n"
+            f"{checklist_guidance}\n"
             "If you run checks, include 1-3 evidence points with file paths.\n"
             "Do not include command logs, internal process narration, or tool/skill references.\n"
             "If context is insufficient, return one short line starting with: insufficient_context: ...\n"
@@ -1501,12 +1805,14 @@ class WorkflowEngine:
             enabled=bool(config.plain_mode),
             language=config.conversation_language,
         )
+        control_schema_instruction = WorkflowEngine._control_output_schema_instruction()
         audit_mode = WorkflowEngine._is_audit_discovery_task(config)
         depth_guidance = (
             "Task mode is audit/discovery: allow deeper checks and provide concrete evidence with file paths."
             if audit_mode
             else "Keep review focused on implementation summary and stated scope."
         )
+        checklist_guidance = WorkflowEngine._review_checklist_guidance(config.evolution_level)
         mode_guidance = ''
         if level >= 1:
             mode_guidance = (
@@ -1525,11 +1831,13 @@ class WorkflowEngine:
             "Mark BLOCKER only for correctness, regression, security, or data-loss risks.\n"
             "Do not mark BLOCKER for style-only, process-only, or preference-only feedback.\n"
             f"{depth_guidance}\n"
+            f"{checklist_guidance}\n"
             "Keep output concise but complete enough to justify verdict.\n"
             "Do not include command logs, internal process narration, or tool/skill references.\n"
             "If evidence is insufficient, return VERDICT: UNKNOWN quickly.\n"
             f"{mode_guidance}"
             "Output must include one line: VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN.\n"
+            f"{control_schema_instruction}\n"
             f"{plain_review_format}\n"
             "Reference at least one concrete repo-relative file path when possible.\n"
             "Do not ask follow-up questions. Keep response concise.\n"
@@ -1743,4 +2051,23 @@ class WorkflowEngine:
             "Impact: <one sentence>\n"
             "Next: <one sentence>\n"
             "Keep wording simple and concrete; no internal workflow terms."
+        )
+
+    @staticmethod
+    def _review_checklist_guidance(level: int) -> str:
+        normalized = max(0, min(2, int(level)))
+        if normalized < 1:
+            return "Checklist: focus on correctness, security, and regression evidence."
+        return (
+            "Required checklist (cover every item with evidence path or explicit 'n/a'): "
+            "security; concurrency/state transitions; DB lock/retry handling; architecture size/responsibility "
+            "(oversized files/modules); frontend maintainability (single-file UI bloat); cross-platform runtime/scripts."
+        )
+
+    @staticmethod
+    def _control_output_schema_instruction() -> str:
+        return (
+            "Preferred control output schema (JSON, one object): "
+            '{"verdict":"NO_BLOCKER|BLOCKER|UNKNOWN","next_action":"pass|retry|stop","issue":"...","impact":"...","next":"..."}'
+            " Keep VERDICT line for backward compatibility."
         )

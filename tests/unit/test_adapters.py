@@ -4,7 +4,7 @@ import pytest
 import subprocess
 
 from awe_agentcheck.adapters import DEFAULT_COMMANDS, ParticipantRunner, parse_verdict, parse_next_action
-from awe_agentcheck.participants import parse_participant_id
+from awe_agentcheck.participants import Participant, parse_participant_id
 
 
 def test_parse_verdict_from_control_line():
@@ -17,9 +17,19 @@ def test_parse_verdict_defaults_unknown():
     assert parse_verdict(output) == 'unknown'
 
 
+def test_parse_verdict_prefers_json_schema_payload():
+    output = '{"verdict":"BLOCKER","next_action":"retry"}\nVERDICT: NO_BLOCKER'
+    assert parse_verdict(output) == 'blocker'
+
+
 def test_parse_next_action_from_control_line():
     output = "NEXT_ACTION: retry\n"
     assert parse_next_action(output) == 'retry'
+
+
+def test_parse_next_action_from_json_schema_payload():
+    output = '{"verdict":"NO_BLOCKER","next_action":"pass"}'
+    assert parse_next_action(output) == 'pass'
 
 
 def test_default_commands_include_gemini_provider():
@@ -309,6 +319,28 @@ def test_participant_runner_appends_provider_model_params_tokens(tmp_path: Path,
     assert 'model_reasoning_effort=high' in captured['argv']
     assert '--temperature' in captured['argv']
     assert '0.1' in captured['argv']
+
+
+def test_participant_runner_supports_extra_provider_with_registry_defaults(tmp_path: Path, monkeypatch):
+    captured = {'argv': None}
+
+    def fake_run(argv, **kwargs):
+        captured['argv'] = list(argv)
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout='VERDICT: NO_BLOCKER', stderr='')
+
+    monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
+    runner = ParticipantRunner(command_overrides={'qwen': 'qwen-cli --fast'}, dry_run=False)
+    runner.run(
+        participant=Participant(participant_id='qwen#review-Z', provider='qwen', alias='review-Z'),
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=1,
+        model='qwen-max',
+    )
+
+    assert captured['argv'] is not None
+    assert '-m' in captured['argv']
+    assert 'qwen-max' in captured['argv']
 
 
 def test_participant_runner_deduplicates_conflicting_gemini_approval_flags(tmp_path: Path, monkeypatch):

@@ -260,6 +260,21 @@ def test_api_index_serves_monitor_layout(tmp_path: Path):
     assert 'id="projectSelect"' in body
     assert 'id="roleList"' in body
     assert 'id="dialogue"' in body
+    assert '/web/assets/dashboard.css' in body
+    assert '/web/assets/dashboard.js' in body
+
+
+def test_api_serves_web_assets_from_split_files(tmp_path: Path):
+    client = build_client(tmp_path)
+    css = client.get('/web/assets/dashboard.css')
+    js = client.get('/web/assets/dashboard.js')
+    bad = client.get('/web/assets/../../etc/passwd')
+
+    assert css.status_code == 200
+    assert js.status_code == 200
+    assert 'display' in css.text
+    assert 'function' in js.text
+    assert bad.status_code == 404
 
 
 def test_api_create_task_rejects_missing_workspace(tmp_path: Path):

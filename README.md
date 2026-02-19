@@ -127,6 +127,21 @@
    - strict auto-merge head-SHA discipline: merge target drift during run blocks fusion (`head_sha_mismatch`).
    - structured `evidence_manifest.json` is written for passed `WorkflowEngine` runs.
    - failed tasks now auto-emit regression tasks to `.agents/regressions/failure_tasks.json`, and benchmark harness can include them by default (`--include-regression`).
+27. Added structured reviewer control parsing (P0):
+   - reviewer output now supports JSON control schema first, with legacy `VERDICT:` / `NEXT_ACTION:` regex as fallback.
+   - reduces format drift failures when model output style changes.
+28. Added `architecture_audit` stage (P0):
+   - emits `architecture_audit` event with LOC thresholds, mixed-responsibility heuristics, and cross-platform script coverage checks.
+   - supports enforcement mode `off|warn|hard` via `AWE_ARCH_AUDIT_MODE` (default: `warn` at evolution level 1, `hard` at evolution level 2).
+29. Refactored participant adapter into provider registry (P1):
+   - registry now carries provider command template, model-flag strategy, and capability toggles.
+   - extra providers from `AWE_PROVIDER_ADAPTERS_JSON` are auto-registered with sane defaults.
+30. Started gradual monolith split (P1):
+   - moved policy template catalog into `src/awe_agentcheck/policy_templates.py` (behavior unchanged).
+   - split `web/index.html` inline payload into `web/assets/dashboard.css` + `web/assets/dashboard.js`.
+31. Added explicit static asset serving route:
+   - `GET /web/assets/{asset_name}` now serves split dashboard resources safely.
+   - path traversal is blocked by root-relative guard checks.
 
 <br/>
 
@@ -326,6 +341,7 @@ $env:AWE_WORKFLOW_BACKEND="langgraph"
 | `AWE_PARTICIPANT_TIMEOUT_RETRIES` | `1` | Retry count when a participant times out |
 | `AWE_MAX_CONCURRENT_RUNNING_TASKS` | `1` | How many tasks can run simultaneously |
 | `AWE_WORKFLOW_BACKEND` | `langgraph` | Workflow backend (`langgraph` preferred, `classic` fallback) |
+| `AWE_ARCH_AUDIT_MODE` | _(auto by evolution level)_ | Architecture audit enforcement mode: `off`, `warn`, `hard` |
 | `AWE_PROVIDER_ADAPTERS_JSON` | _(none)_ | JSON map for extra providers, e.g. `{"qwen":"qwen-cli --yolo"}` |
 | `AWE_PROMOTION_GUARD_ENABLED` | `true` | Enable promotion guard checks before auto-merge/promote-round |
 | `AWE_PROMOTION_ALLOWED_BRANCHES` | _(empty)_ | Optional comma-separated allowed branches (empty = allow any branch) |

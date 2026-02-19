@@ -38,6 +38,8 @@ $env:AWE_COMMAND_TIMEOUT_SECONDS="300"
 $env:AWE_PARTICIPANT_TIMEOUT_RETRIES="1"
 $env:AWE_MAX_CONCURRENT_RUNNING_TASKS="1"
 $env:AWE_WORKFLOW_BACKEND="langgraph"
+# Optional: architecture audit enforcement (off|warn|hard). Default follows evolution level.
+$env:AWE_ARCH_AUDIT_MODE=""
 $env:AWE_PROMOTION_GUARD_ENABLED="true"
 $env:AWE_PROMOTION_ALLOWED_BRANCHES=""
 $env:AWE_PROMOTION_REQUIRE_CLEAN="false"

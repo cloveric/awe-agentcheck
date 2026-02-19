@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from queue import Empty, Queue
+import json
 import os
 import random
 import re
@@ -28,11 +29,6 @@ _LIMIT_PATTERNS = (
     'quota exceeded',
     'insufficient_quota',
 )
-_MODEL_FLAG_BY_PROVIDER = {
-    'claude': '--model',
-    'codex': '-m',
-    'gemini': '-m',
-}
 _MIN_ATTEMPT_TIMEOUT_SECONDS = 0.05
 
 
@@ -45,14 +41,115 @@ class AdapterResult:
     duration_seconds: float
 
 
+DEFAULT_PROVIDER_REGISTRY = {
+    'claude': {
+        'command': 'claude -p --dangerously-skip-permissions --strict-mcp-config --effort low --model claude-opus-4-6',
+        'model_flag': '--model',
+        'capabilities': {
+            'claude_team_agents': True,
+            'codex_multi_agents': False,
+        },
+    },
+    'codex': {
+        'command': 'codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh',
+        'model_flag': '-m',
+        'capabilities': {
+            'claude_team_agents': False,
+            'codex_multi_agents': True,
+        },
+    },
+    'gemini': {
+        'command': 'gemini --yolo',
+        'model_flag': '-m',
+        'capabilities': {
+            'claude_team_agents': False,
+            'codex_multi_agents': False,
+        },
+    },
+}
 DEFAULT_COMMANDS = {
-    'claude': 'claude -p --dangerously-skip-permissions --strict-mcp-config --effort low --model claude-opus-4-6',
-    'codex': 'codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh',
-    'gemini': 'gemini --yolo',
+    provider: str(spec.get('command') or '').strip()
+    for provider, spec in DEFAULT_PROVIDER_REGISTRY.items()
 }
 
 
+def _normalize_verdict_value(value: str | None) -> str:
+    text = str(value or '').strip().lower()
+    aliases = {
+        'no_blocker': 'no_blocker',
+        'no-blocker': 'no_blocker',
+        'ok': 'no_blocker',
+        'pass': 'no_blocker',
+        'passed': 'no_blocker',
+        'blocker': 'blocker',
+        'blocked': 'blocker',
+        'fail': 'blocker',
+        'failed': 'blocker',
+        'unknown': 'unknown',
+        'unsure': 'unknown',
+        'uncertain': 'unknown',
+    }
+    return aliases.get(text, 'unknown')
+
+
+def _normalize_next_action_value(value: str | None) -> str | None:
+    text = str(value or '').strip().lower()
+    if text in {'retry', 'pass', 'stop'}:
+        return text
+    return None
+
+
+def _iter_json_candidates(output: str) -> list[str]:
+    text = str(output or '').strip()
+    if not text:
+        return []
+    candidates: list[str] = [text]
+    fence_re = re.compile(r'```(?:json)?\s*(\{.*?\})\s*```', re.IGNORECASE | re.DOTALL)
+    for m in fence_re.finditer(text):
+        payload = str(m.group(1) or '').strip()
+        if payload:
+            candidates.append(payload)
+    for line in text.splitlines():
+        line_text = str(line or '').strip()
+        if line_text.startswith('{') and line_text.endswith('}'):
+            candidates.append(line_text)
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _parse_json_control_payload(output: str) -> dict[str, str | None]:
+    for candidate in _iter_json_candidates(output):
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        verdict = _normalize_verdict_value(parsed.get('verdict'))
+        next_action = _normalize_next_action_value(parsed.get('next_action'))
+        has_control = ('verdict' in parsed) or ('next_action' in parsed)
+        if has_control:
+            return {
+                'verdict': verdict,
+                'next_action': next_action,
+            }
+    return {
+        'verdict': None,
+        'next_action': None,
+    }
+
+
 def parse_verdict(output: str) -> str:
+    json_payload = _parse_json_control_payload(output)
+    json_verdict = str(json_payload.get('verdict') or '').strip().lower()
+    if json_verdict in {'no_blocker', 'blocker', 'unknown'}:
+        return json_verdict
     for line in (output or '').splitlines():
         m = _VERDICT_RE.match(line)
         if m:
@@ -61,6 +158,10 @@ def parse_verdict(output: str) -> str:
 
 
 def parse_next_action(output: str) -> str | None:
+    json_payload = _parse_json_control_payload(output)
+    json_action = _normalize_next_action_value(str(json_payload.get('next_action') or '').strip())
+    if json_action is not None:
+        return json_action
     for line in (output or '').splitlines():
         m = _NEXT_RE.match(line)
         if m:
@@ -76,9 +177,37 @@ class ParticipantRunner:
         dry_run: bool = False,
         timeout_retries: int = 1,
     ):
-        self.commands = dict(DEFAULT_COMMANDS)
+        self.provider_registry = {
+            provider: {
+                'command': str(spec.get('command') or '').strip(),
+                'model_flag': str(spec.get('model_flag') or '').strip(),
+                'capabilities': dict(spec.get('capabilities') or {}),
+            }
+            for provider, spec in DEFAULT_PROVIDER_REGISTRY.items()
+        }
         if command_overrides:
-            self.commands.update(command_overrides)
+            for raw_provider, raw_command in command_overrides.items():
+                provider = str(raw_provider or '').strip().lower()
+                command = str(raw_command or '').strip()
+                if not provider or not command:
+                    continue
+                existing = dict(self.provider_registry.get(provider) or {})
+                if not existing:
+                    existing = {
+                        'command': '',
+                        'model_flag': '-m',
+                        'capabilities': {
+                            'claude_team_agents': False,
+                            'codex_multi_agents': False,
+                        },
+                    }
+                existing['command'] = command
+                self.provider_registry[provider] = existing
+        self.commands = {
+            provider: str(spec.get('command') or '').strip()
+            for provider, spec in self.provider_registry.items()
+            if str(spec.get('command') or '').strip()
+        }
         self.dry_run = dry_run
         self.timeout_retries = max(0, int(timeout_retries))
 
@@ -110,13 +239,16 @@ class ParticipantRunner:
                 duration_seconds=0.01,
             )
 
-        command = self.commands.get(participant.provider)
+        provider = str(participant.provider or '').strip().lower()
+        command = self.commands.get(provider)
         if not command:
-            raise ValueError(f'no command configured for provider: {participant.provider}')
+            raise ValueError(f'no command configured for provider: {provider}')
+        provider_spec = dict(self.provider_registry.get(provider) or {})
 
         argv = self._build_argv(
             command=command,
-            provider=participant.provider,
+            provider=provider,
+            provider_spec=provider_spec,
             model=model,
             model_params=model_params,
             claude_team_agents=claude_team_agents,
@@ -146,7 +278,7 @@ class ParticipantRunner:
             attempts_made += 1
             runtime_argv, runtime_input = self._prepare_runtime_invocation(
                 argv=argv,
-                provider=participant.provider,
+                provider=provider,
                 prompt=current_prompt,
             )
             try:
@@ -174,7 +306,7 @@ class ParticipantRunner:
                 break
             except FileNotFoundError as exc:
                 raise RuntimeError(
-                    f'command_not_found provider={participant.provider} command={effective_command}'
+                    f'command_not_found provider={provider} command={effective_command}'
                 ) from exc
             except subprocess.TimeoutExpired as exc:
                 last_timeout = exc
@@ -185,7 +317,7 @@ class ParticipantRunner:
                     break
         if completed is None:
             reason = (
-                f'command_timeout provider={participant.provider} command={effective_command} '
+                f'command_timeout provider={provider} command={effective_command} '
                 f'timeout_seconds={timeout_seconds} attempts={attempts} attempts_made={attempts_made}'
             )
             if last_timeout is not None:
@@ -200,11 +332,11 @@ class ParticipantRunner:
             output = '\n'.join([p for p in [output, stderr] if p]).strip()
 
         if self._is_provider_limit_output(output):
-            raise RuntimeError(f'provider_limit provider={participant.provider} command={effective_command}')
+            raise RuntimeError(f'provider_limit provider={provider} command={effective_command}')
 
         verdict = parse_verdict(output)
         next_action = parse_next_action(output)
-        normalized_output = self._normalize_output_for_provider(provider=participant.provider, output=output)
+        normalized_output = self._normalize_output_for_provider(provider=provider, output=output)
 
         return AdapterResult(
             output=normalized_output,
@@ -303,6 +435,7 @@ class ParticipantRunner:
         *,
         command: str,
         provider: str,
+        provider_spec: dict[str, object] | None,
         model: str | None,
         model_params: str | None,
         claude_team_agents: bool,
@@ -312,7 +445,8 @@ class ParticipantRunner:
 
         model_text = str(model or '').strip()
         if model_text and not ParticipantRunner._has_model_flag(argv):
-            flag = _MODEL_FLAG_BY_PROVIDER.get(str(provider or '').strip().lower())
+            spec = dict(provider_spec or {})
+            flag = str(spec.get('model_flag') or '').strip()
             if flag:
                 argv.extend([flag, model_text])
 
@@ -324,12 +458,15 @@ class ParticipantRunner:
         if provider_text == 'gemini':
             argv = ParticipantRunner._normalize_gemini_approval_flags(argv)
 
+        capabilities = dict((provider_spec or {}).get('capabilities') or {})
         if provider_text == 'claude':
-            if claude_team_agents and not ParticipantRunner._has_agents_flag(argv):
+            supports_team_agents = bool(capabilities.get('claude_team_agents', False))
+            if claude_team_agents and supports_team_agents and not ParticipantRunner._has_agents_flag(argv):
                 argv.extend(['--agents', '{}'])
 
         if provider_text == 'codex':
-            if codex_multi_agents and not ParticipantRunner._has_codex_multi_agent_flag(argv):
+            supports_multi_agents = bool(capabilities.get('codex_multi_agents', False))
+            if codex_multi_agents and supports_multi_agents and not ParticipantRunner._has_codex_multi_agent_flag(argv):
                 argv.extend(['--enable', 'multi_agent'])
 
         return argv

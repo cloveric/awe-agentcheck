@@ -21,6 +21,11 @@ from awe_agentcheck.domain.models import ReviewVerdict, TaskStatus
 from awe_agentcheck.fusion import AutoFusionManager
 from awe_agentcheck.observability import get_logger, set_task_context
 from awe_agentcheck.participants import get_supported_providers, parse_participant_id
+from awe_agentcheck.policy_templates import (
+    DEFAULT_POLICY_TEMPLATE,
+    DEFAULT_RISK_POLICY_CONTRACT,
+    POLICY_TEMPLATE_CATALOG,
+)
 from awe_agentcheck.repository import TaskRepository
 from awe_agentcheck.storage.artifacts import ArtifactStore
 from awe_agentcheck.workflow import RunConfig, ShellCommandExecutor, WorkflowEngine
@@ -167,86 +172,8 @@ _DEFAULT_PROVIDER_MODELS = {
 _SUPPORTED_CONVERSATION_LANGUAGES = {'en', 'zh'}
 _SUPPORTED_REPAIR_MODES = {'minimal', 'balanced', 'structural'}
 _ARTIFACT_TASK_ID_RE = re.compile(r'^[A-Za-z0-9._-]+$')
-_DEFAULT_POLICY_TEMPLATE = 'balanced-default'
 _PROPOSAL_STALL_RETRY_LIMIT = 10
 _PROPOSAL_REPEAT_ROUNDS_LIMIT = 4
-_DEFAULT_RISK_POLICY_CONTRACT: dict[str, object] = {
-    'version': '1',
-    'riskTierRules': {
-        'high': ['src/awe_agentcheck/api.py', 'src/awe_agentcheck/service.py'],
-        'low': ['**'],
-    },
-    'mergePolicy': {
-        'high': {
-            'requiredChecks': ['risk-policy-gate', 'harness-smoke', 'head-sha-gate', 'evidence-manifest'],
-        },
-        'low': {
-            'requiredChecks': ['risk-policy-gate', 'head-sha-gate'],
-        },
-    },
-}
-_POLICY_TEMPLATE_CATALOG: dict[str, dict] = {
-    'balanced-default': {
-        'id': 'balanced-default',
-        'label': 'Balanced Default',
-        'description': 'General-purpose profile for most repositories.',
-        'defaults': {
-            'sandbox_mode': 1,
-            'self_loop_mode': 0,
-            'auto_merge': 1,
-            'max_rounds': 1,
-            'debate_mode': 1,
-            'plain_mode': 1,
-            'stream_mode': 1,
-            'repair_mode': 'balanced',
-        },
-    },
-    'safe-review': {
-        'id': 'safe-review',
-        'label': 'Safe Review',
-        'description': 'Conservative profile for high-risk or large repositories.',
-        'defaults': {
-            'sandbox_mode': 1,
-            'self_loop_mode': 0,
-            'auto_merge': 0,
-            'max_rounds': 2,
-            'debate_mode': 1,
-            'plain_mode': 1,
-            'stream_mode': 1,
-            'repair_mode': 'minimal',
-        },
-    },
-    'rapid-fix': {
-        'id': 'rapid-fix',
-        'label': 'Rapid Fix',
-        'description': 'Fast patch profile for small/low-risk repositories.',
-        'defaults': {
-            'sandbox_mode': 1,
-            'self_loop_mode': 1,
-            'auto_merge': 1,
-            'max_rounds': 1,
-            'debate_mode': 1,
-            'plain_mode': 1,
-            'stream_mode': 1,
-            'repair_mode': 'minimal',
-        },
-    },
-    'deep-evolve': {
-        'id': 'deep-evolve',
-        'label': 'Deep Evolve',
-        'description': 'Multi-round structural evolution with stronger scrutiny.',
-        'defaults': {
-            'sandbox_mode': 1,
-            'self_loop_mode': 1,
-            'auto_merge': 0,
-            'max_rounds': 3,
-            'debate_mode': 1,
-            'plain_mode': 1,
-            'stream_mode': 1,
-            'repair_mode': 'structural',
-        },
-    },
-}
 
 
 def _supported_providers() -> set[str]:
@@ -637,8 +564,8 @@ class OrchestratorService:
         profile = self._analyze_workspace_profile(workspace_path)
         recommended = self._recommend_policy_template(profile=profile)
         templates = []
-        for key in sorted(_POLICY_TEMPLATE_CATALOG):
-            item = _POLICY_TEMPLATE_CATALOG[key]
+        for key in sorted(POLICY_TEMPLATE_CATALOG):
+            item = POLICY_TEMPLATE_CATALOG[key]
             templates.append(
                 {
                     'id': item['id'],
@@ -1476,7 +1403,7 @@ class OrchestratorService:
             return 'safe-review'
         if repo_size == 'small' and risk == 'low':
             return 'rapid-fix'
-        return _DEFAULT_POLICY_TEMPLATE
+        return DEFAULT_POLICY_TEMPLATE
 
     @staticmethod
     def _risk_contract_file_candidates(project_root: Path) -> list[Path]:
@@ -1504,7 +1431,7 @@ class OrchestratorService:
         return out
 
     def _load_risk_policy_contract(self, *, project_root: Path) -> dict[str, object]:
-        contract: dict[str, object] = dict(_DEFAULT_RISK_POLICY_CONTRACT)
+        contract: dict[str, object] = dict(DEFAULT_RISK_POLICY_CONTRACT)
         merge_policy = dict(contract.get('mergePolicy', {})) if isinstance(contract.get('mergePolicy'), dict) else {}
         contract['mergePolicy'] = merge_policy
         for candidate in self._risk_contract_file_candidates(project_root):
@@ -4693,6 +4620,8 @@ class OrchestratorService:
             enabled=bool(config.plain_mode),
             language=config.conversation_language,
         )
+        control_schema_instruction = WorkflowEngine._control_output_schema_instruction()
+        checklist_guidance = WorkflowEngine._review_checklist_guidance(config.evolution_level)
         stage_text = str(stage or 'proposal_review').strip().lower()
         audit_intent = OrchestratorService._is_audit_intent(config)
         stage_guidance = (
@@ -4720,10 +4649,12 @@ class OrchestratorService:
             f"{stage_guidance}\n"
             f"{scope_guidance}\n"
             f"{depth_guidance}\n"
+            f"{checklist_guidance}\n"
             "Keep output concise but complete enough to justify verdict.\n"
             "Do not include command logs, internal process narration, or tool/skill references.\n"
             "If evidence is insufficient, return VERDICT: UNKNOWN quickly.\n"
             "Output one line: VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN.\n"
+            f"{control_schema_instruction}\n"
             f"{plain_review_format}\n"
             "Reference concrete repo-relative file paths where possible.\n"
             f"Plan:\n{clipped}\n"

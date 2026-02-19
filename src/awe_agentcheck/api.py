@@ -524,6 +524,24 @@ def create_app(
             return FileResponse(web_path)
         return JSONResponse({'name': 'awe-agentcheck', 'status': 'ok'})
 
+    @app.get('/web/assets/{asset_name:path}')
+    def web_asset(asset_name: str):
+        root = (Path.cwd() / 'web' / 'assets').resolve(strict=False)
+        target = (root / str(asset_name or '')).resolve(strict=False)
+        try:
+            target.relative_to(root)
+        except ValueError:
+            return JSONResponse(
+                status_code=404,
+                content=_validation_error_payload(code='not_found', message='asset not found'),
+            )
+        if not target.exists() or not target.is_file():
+            return JSONResponse(
+                status_code=404,
+                content=_validation_error_payload(code='not_found', message='asset not found'),
+            )
+        return FileResponse(target)
+
     @app.post('/api/tasks', response_model=TaskResponse, status_code=201)
     def create_task(
         payload: CreateTaskRequest,

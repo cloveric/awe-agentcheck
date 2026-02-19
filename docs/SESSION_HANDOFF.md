@@ -1,5 +1,34 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-19, reviewer-json + architecture-audit + registry + split-web + langgraph-nodes)
+
+1. Reviewer control parsing hardened (P0):
+   - `adapters.py` now supports JSON control schema first:
+     - `{"verdict":"NO_BLOCKER|BLOCKER|UNKNOWN","next_action":"pass|retry|stop",...}`
+   - legacy `VERDICT:` / `NEXT_ACTION:` regex parsing remains as fallback.
+2. `architecture_audit` stage added (P0):
+   - workflow now emits `architecture_audit` event each round with:
+     - Python/frontend LOC thresholds
+     - mixed-responsibility heuristic for large Python files
+     - scripts cross-platform coverage gap (`.ps1` without matching `.sh`)
+   - enforcement mode:
+     - `AWE_ARCH_AUDIT_MODE=off|warn|hard`
+     - default fallback: `warn` for `evolution_level=1`, `hard` for `evolution_level=2`
+3. Adapter provider registry refactor (P1):
+   - command template/model-flag/capabilities now come from a provider registry.
+   - `AWE_PROVIDER_ADAPTERS_JSON` providers are auto-registered with defaults.
+4. Progressive split started (P1):
+   - policy templates moved to `src/awe_agentcheck/policy_templates.py` (service behavior unchanged).
+   - dashboard inline payload split:
+     - `web/assets/dashboard.css`
+     - `web/assets/dashboard.js`
+   - API now serves static assets at `GET /web/assets/{asset_name}` with traversal guard.
+5. LangGraph integration moved off single-node wrapper:
+   - backend graph now uses multi-node flow: `preflight -> execute -> finalize` with conditional routing.
+6. Verified:
+   - `py -m pytest -q tests/unit/test_adapters.py tests/unit/test_workflow.py tests/unit/test_api.py`
+   - `py -m ruff check src/awe_agentcheck/adapters.py src/awe_agentcheck/workflow.py src/awe_agentcheck/service.py src/awe_agentcheck/api.py src/awe_agentcheck/policy_templates.py tests/unit/test_adapters.py tests/unit/test_workflow.py tests/unit/test_api.py`
+
 ## Update (2026-02-19, hardening 1-5: head-sha/risk/preflight/evidence/regression loop)
 
 1. Added start-path singleflight dedupe:

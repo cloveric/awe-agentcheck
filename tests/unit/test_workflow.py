@@ -462,6 +462,27 @@ def test_review_prompt_includes_strict_blocker_criteria(tmp_path: Path):
     assert 'Keep output concise but complete enough to justify verdict.' in prompt
 
 
+def test_review_prompt_includes_required_checklist_for_evolution_level_1(tmp_path: Path):
+    cfg = RunConfig(
+        task_id='t6-e1',
+        title='Checklist test',
+        description='review deeply',
+        author=parse_participant_id('claude#author-A'),
+        reviewers=[parse_participant_id('codex#review-B')],
+        evolution_level=1,
+        evolve_until=None,
+        cwd=tmp_path,
+        max_rounds=1,
+        test_command='py -m pytest -q',
+        lint_command='py -m ruff check .',
+    )
+    prompt = WorkflowEngine._review_prompt(cfg, 1, 'impl summary')
+    assert 'Required checklist' in prompt
+    assert 'architecture size/responsibility' in prompt
+    assert 'cross-platform runtime/scripts' in prompt
+    assert 'Preferred control output schema (JSON' in prompt
+
+
 def test_prompts_include_language_instruction_for_chinese(tmp_path: Path):
     cfg = RunConfig(
         task_id='t6-zh',
@@ -1050,6 +1071,84 @@ def test_workflow_stream_mode_emits_participant_stream_events(tmp_path: Path):
 
     assert result.status == 'passed'
     assert any(e.get('type') == 'participant_stream' for e in sink.events)
+
+
+def test_workflow_evolution_level_1_emits_architecture_warnings_without_hard_fail(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv('AWE_ARCH_AUDIT_MODE', raising=False)
+    huge = tmp_path / 'oversized.py'
+    huge.write_text('\n'.join(['x = 1'] * 1305), encoding='utf-8')
+    runner = FakeRunner([
+        _ok_result(),  # discussion
+        _ok_result(),  # implementation
+        _ok_result(),  # review
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-e1-arch',
+            title='Architecture warning',
+            description='scan and improve',
+            author=parse_participant_id('claude#author-A'),
+            reviewers=[parse_participant_id('codex#review-B')],
+            evolution_level=1,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'passed'
+    audits = [e for e in sink.events if e.get('type') == 'architecture_audit']
+    assert audits
+    last = audits[-1]
+    assert last.get('mode') == 'warn'
+    assert last.get('passed') is False
+    assert str(last.get('reason') or '') == 'architecture_threshold_warning'
+
+
+def test_workflow_evolution_level_2_hard_fails_on_architecture_thresholds(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv('AWE_ARCH_AUDIT_MODE', raising=False)
+    huge = tmp_path / 'oversized.py'
+    huge.write_text('\n'.join(['x = 1'] * 1305), encoding='utf-8')
+    runner = FakeRunner([
+        _ok_result(),  # discussion
+        _ok_result(),  # implementation
+        _ok_result(),  # review
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-e2-arch',
+            title='Architecture hard gate',
+            description='scan and improve',
+            author=parse_participant_id('claude#author-A'),
+            reviewers=[parse_participant_id('codex#review-B')],
+            evolution_level=2,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'failed_gate'
+    assert result.gate_reason == 'architecture_threshold_exceeded'
+    assert any(
+        str(e.get('type') or '') == 'gate_failed'
+        and str(e.get('stage') or '') == 'architecture_audit'
+        for e in sink.events
+    )
 
 
 def test_workflow_langgraph_backend_executes_classic_flow(tmp_path: Path):
