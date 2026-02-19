@@ -1147,13 +1147,33 @@ class OrchestratorService:
         return {
             'auto_merge': True,
             'mode': str(summary.get('mode') or '').strip() or None,
-            'changed_files': int(summary.get('changed_files') or 0),
-            'copied_files': int(summary.get('copied_files') or 0),
-            'deleted_files': int(summary.get('deleted_files') or 0),
+            'changed_files': self._coerce_revision_count(summary.get('changed_files')),
+            'copied_files': self._coerce_revision_count(summary.get('copied_files')),
+            'deleted_files': self._coerce_revision_count(summary.get('deleted_files')),
             'snapshot_path': str(summary.get('snapshot_path') or '').strip() or None,
             'changelog_path': str(summary.get('changelog_path') or '').strip() or None,
             'merged_at': str(summary.get('merged_at') or '').strip() or None,
         }
+
+    @staticmethod
+    def _coerce_revision_count(value) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, (list, tuple, set, dict)):
+            return len(value)
+        if isinstance(value, bool):
+            return int(value)
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            pass
+        text = str(value or '').strip()
+        if not text:
+            return 0
+        try:
+            return max(0, int(float(text)))
+        except (TypeError, ValueError):
+            return 0
 
     def _extract_disputes(self, events: list[dict]) -> list[dict]:
         disputes: list[dict] = []

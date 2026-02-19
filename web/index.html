@@ -2510,6 +2510,7 @@
       stats: null,
       analytics: null,
       policyTemplates: null,
+      historyLoadedOnce: false,
       providerModelCatalog: {
         claude: [...DEFAULT_PROVIDER_MODEL_CATALOG.claude],
         codex: [...DEFAULT_PROVIDER_MODEL_CATALOG.codex],
@@ -2529,6 +2530,7 @@
       polling: true,
       showStreamDetails: false,
       timer: null,
+      pollTickInFlight: false,
       apiHealthy: false,
       apiFailureCount: 0,
       lastDialogueSignature: '',
@@ -2865,7 +2867,8 @@
       el.themeSelect.addEventListener('change', () => applyTheme(el.themeSelect.value));
     }
 
-    function setApiHealth(ok, detail = '') {
+    function setApiHealth(ok, detail = '', options = {}) {
+      const increment = options.increment !== undefined ? !!options.increment : true;
       state.apiHealthy = !!ok;
       if (ok) {
         state.apiFailureCount = 0;
@@ -2873,7 +2876,11 @@
         el.connBadge.textContent = 'API: ONLINE';
         return;
       }
-      state.apiFailureCount += 1;
+      if (increment) {
+        state.apiFailureCount += 1;
+      } else if (state.apiFailureCount <= 0) {
+        state.apiFailureCount = 1;
+      }
       el.connBadge.className = 'pill warn';
       el.connBadge.textContent = `API: RETRY(${state.apiFailureCount})`;
       if (detail) {
@@ -2882,9 +2889,15 @@
     }
 
     async function api(path, options = {}) {
-      const method = String(options.method || 'GET').toUpperCase();
-      const retryable = options.retryable !== undefined ? !!options.retryable : true;
-      const retryAttempts = Number(options.retryAttempts || (method === 'GET' ? 3 : 2));
+      const {
+        retryable: retryableOption,
+        retryAttempts: retryAttemptsOption,
+        healthImpact = true,
+        ...fetchOptions
+      } = options;
+      const method = String(fetchOptions.method || 'GET').toUpperCase();
+      const retryable = retryableOption !== undefined ? !!retryableOption : true;
+      const retryAttempts = Number(retryAttemptsOption || (method === 'GET' ? 3 : 2));
       let lastError = null;
 
       for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
@@ -2893,7 +2906,7 @@
           const timeout = setTimeout(() => controller.abort(), 10000);
           const resp = await fetch(path, {
             headers: { 'Content-Type': 'application/json' },
-            ...options,
+            ...fetchOptions,
             signal: controller.signal,
           });
           clearTimeout(timeout);
@@ -2908,12 +2921,16 @@
           if (!resp.ok) {
             throw new Error(`HTTP ${resp.status}: ${JSON.stringify(data)}`);
           }
-          setApiHealth(true);
+          if (healthImpact) {
+            setApiHealth(true);
+          }
           return data;
         } catch (err) {
           lastError = err;
-          setApiHealth(false, String(err));
           const canRetry = retryable && attempt < retryAttempts;
+          if (healthImpact) {
+            setApiHealth(false, String(err), { increment: !canRetry });
+          }
           if (!canRetry) {
             break;
           }
@@ -4243,7 +4260,10 @@
         return state.treeByProject.get(projectPath) || null;
       }
       const pathParam = encodeURIComponent(projectPath);
-      const data = await api(`/api/workspace-tree?workspace_path=${pathParam}&max_depth=4&max_entries=800`);
+      const data = await api(
+        `/api/workspace-tree?workspace_path=${pathParam}&max_depth=4&max_entries=800`,
+        { healthImpact: false },
+      );
       state.treeByProject.set(projectPath, data);
       return data;
     }
@@ -4871,7 +4891,10 @@
     async function refreshPolicyTemplates() {
       const workspacePath = currentWorkspacePathForPolicy();
       try {
-        const payload = await api('/api/policy-templates?workspace_path=' + encodeURIComponent(workspacePath));
+        const payload = await api(
+          '/api/policy-templates?workspace_path=' + encodeURIComponent(workspacePath),
+          { healthImpact: false },
+        );
         state.policyTemplates = payload || null;
       } catch {
         state.policyTemplates = null;
@@ -4936,7 +4959,7 @@
 
     async function refreshAnalytics() {
       try {
-        state.analytics = await api('/api/analytics?limit=300');
+        state.analytics = await api('/api/analytics?limit=300', { healthImpact: false });
       } catch {
         state.analytics = null;
       }
@@ -4975,7 +4998,7 @@
         return;
       }
       try {
-        const payload = await api(`/api/tasks/${task.task_id}/github-summary`);
+        const payload = await api(`/api/tasks/${task.task_id}/github-summary`, { healthImpact: false });
         state.githubSummaryByTask.set(task.task_id, payload);
       } catch {
         state.githubSummaryByTask.delete(task.task_id);
@@ -5358,7 +5381,7 @@
       if (!force && state.eventsByTask.has(taskId)) {
         return state.eventsByTask.get(taskId) || [];
       }
-      const events = await api(`/api/tasks/${taskId}/events`);
+      const events = await api(`/api/tasks/${taskId}/events`, { healthImpact: false });
       state.eventsByTask.set(taskId, events);
       return events;
     }
@@ -5380,12 +5403,19 @@
     }
 
     async function loadData({ forceEvents = false } = {}) {
+      const shouldFetchHistory = forceEvents || !state.historyLoadedOnce;
+      const historyRequest = !shouldFetchHistory
+        ? Promise.resolve({ items: state.historyItems, _cached: true })
+        : api('/api/project-history?limit=120', { healthImpact: false, retryAttempts: 1 });
       const [tasksResult, statsResult, modelsResult, historyResult] = await Promise.allSettled([
         api('/api/tasks?limit=200'),
         api('/api/stats'),
         api('/api/provider-models'),
-        api('/api/project-history?limit=400'),
+        historyRequest,
       ]);
+      if (shouldFetchHistory) {
+        state.historyLoadedOnce = true;
+      }
 
       let updated = false;
       if (tasksResult.status === 'fulfilled') {
@@ -5701,11 +5731,18 @@
         clearInterval(state.timer);
         state.timer = null;
       }
+      state.pollTickInFlight = false;
       if (enabled) {
         state.timer = setInterval(async () => {
+          if (state.pollTickInFlight) {
+            return;
+          }
+          state.pollTickInFlight = true;
           try {
             await loadData();
           } catch {
+          } finally {
+            state.pollTickInFlight = false;
           }
         }, 3500);
       }

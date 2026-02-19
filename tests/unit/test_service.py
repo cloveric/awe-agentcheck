@@ -2220,6 +2220,51 @@ def test_service_clear_project_history_removes_history_only_artifact_records(tmp
     assert svc.list_project_history(project_path=str(project_root), limit=20) == []
 
 
+def test_service_project_history_handles_auto_merge_summary_list_counts(tmp_path: Path):
+    svc = build_service(tmp_path)
+    project_root = tmp_path / 'repo-history-revisions'
+    project_root.mkdir()
+
+    created = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            title='History revisions list count',
+            description='validate list count coercion',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project_root),
+        )
+    )
+    svc.repository.update_task_status(
+        created.task_id,
+        status='passed',
+        reason='passed',
+        rounds_completed=1,
+    )
+    svc.artifact_store.write_artifact_json(
+        created.task_id,
+        name='auto_merge_summary',
+        payload={
+            'mode': 'sandbox',
+            'changed_files': ['src/a.py', 'src/b.py'],
+            'copied_files': ['docs/README.md'],
+            'deleted_files': [],
+            'snapshot_path': '/tmp/snapshot.zip',
+            'changelog_path': '/tmp/CHANGELOG.auto.md',
+            'merged_at': '2026-02-19T10:00:00+00:00',
+        },
+    )
+
+    items = svc.list_project_history(project_path=str(project_root), limit=20)
+    target = next(item for item in items if str(item.get('task_id')) == created.task_id)
+    revisions = target.get('revisions') or {}
+    assert revisions.get('auto_merge') is True
+    assert int(revisions.get('changed_files') or 0) == 2
+    assert int(revisions.get('copied_files') or 0) == 1
+    assert int(revisions.get('deleted_files') or 0) == 0
+
+
 def test_service_create_task_uses_uuid_like_task_id_in_inmemory_repo(tmp_path: Path):
     svc = build_service(tmp_path)
     project_root = tmp_path / 'repo-id-format'
