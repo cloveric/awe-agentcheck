@@ -266,9 +266,9 @@ class OrchestratorService:
             clip_snippet_fn=self._clip_snippet,
         )
         self.task_management_service = TaskManagementService(
-            create_task_fn=self._create_task_impl,
-            list_tasks_fn=self._list_tasks_impl,
-            get_task_fn=self._get_task_impl,
+            repository=self.repository,
+            artifact_store=self.artifact_store,
+            validation_error_cls=InputValidationError,
         )
 
     def _try_claim_start_slot(self, task_id: str) -> bool:
@@ -289,209 +289,15 @@ class OrchestratorService:
             self._start_slots.discard(key)
 
     def create_task(self, payload: CreateTaskInput) -> TaskView:
-        return self.task_management_service.create_task(payload)
-
-    def _create_task_impl(self, payload: CreateTaskInput) -> TaskView:
-        # Validate participant IDs early so callers get a clear 400 error
-        # instead of a delayed workflow_error at start time.
-        try:
-            author_participant = parse_participant_id(payload.author_participant)
-        except ValueError as exc:
-            raise InputValidationError(
-                f'invalid author_participant: {exc}',
-                field='author_participant',
-            ) from exc
-        reviewer_participants: list[str] = []
-        for i, rp in enumerate(payload.reviewer_participants):
-            try:
-                reviewer_participants.append(parse_participant_id(rp).participant_id)
-            except ValueError as exc:
-                raise InputValidationError(
-                    f'invalid reviewer_participants[{i}]: {exc}',
-                    field=f'reviewer_participants[{i}]',
-                ) from exc
-
-        project_root = Path(payload.workspace_path).resolve()
-        if not project_root.exists() or not project_root.is_dir():
-            raise InputValidationError(
-                'workspace_path must be an existing directory',
-                field='workspace_path',
-            )
-        evolution_level = max(0, min(2, int(payload.evolution_level)))
-        evolve_until = self._normalize_evolve_until(payload.evolve_until)
-        conversation_language = self._normalize_conversation_language(
-            payload.conversation_language,
-            strict=True,
-        )
-        provider_models = self._normalize_provider_models(payload.provider_models)
-        provider_model_params = self._normalize_provider_model_params(payload.provider_model_params)
-        known_participants = {author_participant.participant_id, *reviewer_participants}
-        participant_models = self._normalize_participant_models(
-            payload.participant_models,
-            known_participants=known_participants,
-        )
-        participant_model_params = self._normalize_participant_model_params(
-            payload.participant_model_params,
-            known_participants=known_participants,
-        )
-        claude_team_agents = bool(payload.claude_team_agents)
-        codex_multi_agents = bool(payload.codex_multi_agents)
-        claude_team_agents_overrides = self._normalize_participant_agent_overrides(
-            payload.claude_team_agents_overrides,
-            known_participants=known_participants,
-            required_provider='claude',
-            field='claude_team_agents_overrides',
-        )
-        codex_multi_agents_overrides = self._normalize_participant_agent_overrides(
-            payload.codex_multi_agents_overrides,
-            known_participants=known_participants,
-            required_provider='codex',
-            field='codex_multi_agents_overrides',
-        )
-        repair_mode = self._normalize_repair_mode(payload.repair_mode, strict=True)
-        plain_mode = self._normalize_plain_mode(payload.plain_mode)
-        stream_mode = self._normalize_bool_flag(payload.stream_mode, default=True)
-        debate_mode = self._normalize_bool_flag(payload.debate_mode, default=True)
-        sandbox_mode = bool(payload.sandbox_mode)
-        self_loop_mode = max(0, min(1, int(payload.self_loop_mode)))
-        sandbox_cleanup_on_pass = bool(payload.sandbox_cleanup_on_pass)
-        sandbox_workspace_path = self._normalize_merge_target_path(payload.sandbox_workspace_path)
-        sandbox_generated = False
-        auto_merge = bool(payload.auto_merge)
-        max_rounds = max(1, min(20, int(payload.max_rounds)))
-        multi_round_manual_promote = max_rounds > 1 and not auto_merge
-        if multi_round_manual_promote:
-            # Hard rule: multi-round no-auto-merge must run in a fresh sandbox.
-            sandbox_mode = True
-            sandbox_workspace_path = None
-        merge_target_path = self._normalize_merge_target_path(payload.merge_target_path)
-        if auto_merge and sandbox_mode and not merge_target_path:
-            merge_target_path = str(project_root)
-        if auto_merge and merge_target_path:
-            merge_target = Path(merge_target_path)
-            if not merge_target.exists() or not merge_target.is_dir():
-                raise InputValidationError(
-                    'merge_target_path must be an existing directory',
-                    field='merge_target_path',
-                )
-
-        workspace_root = project_root
-        sandbox_root: Path | None = None
-        workspace_fingerprint: dict[str, object] = {}
-        try:
-            if sandbox_mode:
-                if not sandbox_workspace_path:
-                    sandbox_workspace_path = self._default_sandbox_path(project_root)
-                    sandbox_generated = True
-                sandbox_root = Path(sandbox_workspace_path)
-                if sandbox_root.exists() and not sandbox_root.is_dir():
-                    raise InputValidationError(
-                        'sandbox_workspace_path must be a directory',
-                        field='sandbox_workspace_path',
-                    )
-                sandbox_root.mkdir(parents=True, exist_ok=True)
-                self._bootstrap_sandbox_workspace(project_root, sandbox_root)
-                workspace_root = sandbox_root
-            else:
-                sandbox_workspace_path = None
-                sandbox_generated = False
-
-            workspace_fingerprint = self._build_workspace_fingerprint(
-                project_root=project_root,
-                workspace_root=Path(workspace_root),
-                sandbox_mode=sandbox_mode,
-                sandbox_workspace_path=sandbox_workspace_path,
-                merge_target_path=merge_target_path,
-            )
-
-            row = self.repository.create_task(
-                title=payload.title,
-                description=payload.description,
-                author_participant=author_participant.participant_id,
-                reviewer_participants=reviewer_participants,
-                evolution_level=evolution_level,
-                evolve_until=evolve_until,
-                conversation_language=conversation_language,
-                provider_models=provider_models,
-                provider_model_params=provider_model_params,
-                participant_models=participant_models,
-                participant_model_params=participant_model_params,
-                claude_team_agents=claude_team_agents,
-                codex_multi_agents=codex_multi_agents,
-                claude_team_agents_overrides=claude_team_agents_overrides,
-                codex_multi_agents_overrides=codex_multi_agents_overrides,
-                repair_mode=repair_mode,
-                plain_mode=plain_mode,
-                stream_mode=stream_mode,
-                debate_mode=debate_mode,
-                sandbox_mode=sandbox_mode,
-                sandbox_workspace_path=sandbox_workspace_path,
-                sandbox_generated=sandbox_generated,
-                sandbox_cleanup_on_pass=sandbox_cleanup_on_pass,
-                project_path=str(project_root),
-                self_loop_mode=self_loop_mode,
-                auto_merge=auto_merge,
-                merge_target_path=merge_target_path,
-                workspace_path=str(workspace_root),
-                workspace_fingerprint=workspace_fingerprint,
-                max_rounds=max_rounds,
-                test_command=payload.test_command,
-                lint_command=payload.lint_command,
-            )
-            self.artifact_store.create_task_workspace(row['task_id'])
-            self.artifact_store.update_state(
-                row['task_id'],
-                {
-                    'status': row['status'],
-                    'rounds_completed': row.get('rounds_completed', 0),
-                    'cancel_requested': row.get('cancel_requested', False),
-                    'conversation_language': str(row.get('conversation_language') or 'en'),
-                    'provider_models': dict(row.get('provider_models', {})),
-                    'provider_model_params': dict(row.get('provider_model_params', {})),
-                    'participant_models': dict(row.get('participant_models', {})),
-                    'participant_model_params': dict(row.get('participant_model_params', {})),
-                    'claude_team_agents': bool(row.get('claude_team_agents', False)),
-                    'codex_multi_agents': bool(row.get('codex_multi_agents', False)),
-                    'claude_team_agents_overrides': dict(row.get('claude_team_agents_overrides', {})),
-                    'codex_multi_agents_overrides': dict(row.get('codex_multi_agents_overrides', {})),
-                    'repair_mode': str(row.get('repair_mode') or 'balanced'),
-                    'plain_mode': bool(row.get('plain_mode', True)),
-                    'stream_mode': bool(row.get('stream_mode', True)),
-                    'debate_mode': bool(row.get('debate_mode', True)),
-                    'sandbox_mode': bool(row.get('sandbox_mode', False)),
-                    'sandbox_workspace_path': row.get('sandbox_workspace_path'),
-                    'sandbox_generated': bool(row.get('sandbox_generated', False)),
-                    'sandbox_cleanup_on_pass': bool(row.get('sandbox_cleanup_on_pass', False)),
-                    'self_loop_mode': int(row.get('self_loop_mode', 0)),
-                    'project_path': row.get('project_path'),
-                    'auto_merge': bool(row.get('auto_merge', True)),
-                    'merge_target_path': row.get('merge_target_path'),
-                    'workspace_fingerprint': dict(row.get('workspace_fingerprint', workspace_fingerprint)),
-                },
-            )
-        except Exception:
-            self._cleanup_create_task_sandbox_failure(
-                sandbox_mode=sandbox_mode,
-                sandbox_generated=sandbox_generated,
-                project_root=project_root,
-                sandbox_root=sandbox_root,
-            )
-            raise
-        _log.info('task_created task_id=%s title=%s', row['task_id'], payload.title)
+        row = self.task_management_service.create_task(payload)
         return self._to_view(row)
 
     def list_tasks(self, *, limit: int = 100) -> list[TaskView]:
-        return self.task_management_service.list_tasks(limit=limit)
-
-    def _list_tasks_impl(self, *, limit: int = 100) -> list[TaskView]:
-        rows = self.repository.list_tasks(limit=limit)
+        rows = self.task_management_service.list_tasks(limit=limit)
         return [self._to_view(row) for row in rows]
 
     def get_task(self, task_id: str) -> TaskView | None:
-        return self.task_management_service.get_task(task_id)
-
-    def _get_task_impl(self, task_id: str) -> TaskView | None:
-        row = self.repository.get_task(task_id)
+        row = self.task_management_service.get_task(task_id)
         if row is None:
             return None
         return self._to_view(row)

@@ -1,6 +1,6 @@
 # Architecture Flow
 
-Date: 2026-02-19
+Date: 2026-02-20
 
 ## 1) Control Plane
 
@@ -13,9 +13,16 @@ FastAPI (awe_agentcheck.api)
     |
     v
 OrchestratorService
+    |\
+    | +-- TaskManagementService
+    | +-- AnalyticsService
+    | +-- HistoryService
     |
     v
 WorkflowEngine
+
+Notes:
+- Task creation/list/get are now implemented in `TaskManagementService` (not callback passthrough), including validation, sandbox bootstrap, and workspace fingerprint write.
 ```
 
 ## 2) Execution Flow (per task)
@@ -207,6 +214,12 @@ Right column
   middle -> dialogue stream
   lower  -> project history ledger
   bottom -> task creation
+
+Dashboard client modules:
+- `web/assets/modules/api.js` (HTTP/retry wrapper)
+- `web/assets/modules/store.js` (local preference persistence)
+- `web/assets/modules/utils.js` (format/hash/path helpers)
+- `web/assets/modules/ui.js` (shared select renderers)
 ```
 
 ## 8) Persistence Defaults

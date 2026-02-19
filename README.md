@@ -45,7 +45,37 @@
 
 <br/>
 
-## Latest Update (2026-02-19)
+## Latest Update (2026-02-20)
+
+1. Provider adapter architecture is now strategy/factory based:
+   - added `ProviderAdapter` + provider-specific adapters (`ClaudeAdapter`, `CodexAdapter`, `GeminiAdapter`)
+   - added `ProviderFactory` and switched `ParticipantRunner` to use adapter dispatch instead of provider branching.
+2. Service layer split shipped for maintainability:
+   - new `src/awe_agentcheck/service_layers.py`
+   - `OrchestratorService` now delegates analytics/history/task-management responsibilities to dedicated service classes.
+3. Dashboard modularization completed:
+   - extracted frontend modules into:
+     - `web/assets/modules/api.js`
+     - `web/assets/modules/store.js`
+     - `web/assets/modules/utils.js`
+     - `web/assets/modules/ui.js`
+   - switched dashboard loader to ES module mode (`<script type="module" ...>`).
+4. Reliability fixes from integration verification:
+   - fixed dry-run evidence output so `selftest_local_smoke.py` can pass precompletion checks consistently.
+   - removed lint-breaking lambda assignments in LangGraph nodes.
+5. Regression verification completed:
+   - `pytest -q tests/unit`
+   - `py -m ruff check .`
+   - `py scripts/selftest_local_smoke.py --port 8011 --health-timeout-seconds 40 --task-timeout-seconds 120`
+6. Task management split was deepened (stability-first):
+   - `TaskManagementService` no longer uses callback dataclass wiring.
+   - create/list/get now run on real dependencies (`repository`, `artifact_store`) with internal task-creation validation/sandbox/fingerprint logic.
+7. Dashboard modularization was deepened:
+   - moved app state/theme/api-health helpers into `modules/store.js`.
+   - moved DOM element initialization + participant matrix rendering into `modules/ui.js`.
+   - `dashboard.js` now focuses more on orchestration/event wiring.
+
+## Previous Update (2026-02-19)
 
 1. Default model profiles are now stronger and explicit:
    - Claude default command pins `claude-opus-4-6`

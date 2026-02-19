@@ -1,6 +1,14 @@
 
 import { createApiClient } from './modules/api.js';
 import {
+  DEFAULT_PROVIDER_MODEL_CATALOG,
+  SELECTION_PREF_KEY,
+  THEME_OPTIONS,
+  applySavedSelection,
+  applyTheme as applyThemeStore,
+  createInitialState,
+  pruneParticipantCapabilityDraft as pruneParticipantCapabilityDraftStore,
+  readThemePreference,
   readCreateHelpCollapsedPreference,
   readCreateHelpLanguagePreference,
   readHistoryCollapsePreference,
@@ -8,6 +16,7 @@ import {
   readSelectionPreference,
   readStreamDetailPreference,
   persistSelectionPreference as persistSelectionPreferenceStore,
+  setApiHealth as setApiHealthStore,
 } from './modules/store.js';
 import {
   escapeHtml,
@@ -17,163 +26,15 @@ import {
   seededRandom,
   sleep,
 } from './modules/utils.js';
-import { renderModelSelect } from './modules/ui.js';
+import {
+  initElements,
+  renderModelSelect,
+  renderParticipantCapabilityMatrixHtml,
+} from './modules/ui.js';
 
-    const DEFAULT_PROVIDER_MODEL_CATALOG = Object.freeze({
-      claude: [
-        'claude-opus-4-6',
-        'claude-sonnet-4-6',
-        'claude-opus-4-1',
-        'claude-sonnet-4-5',
-        'claude-3-7-sonnet',
-        'claude-3-5-sonnet-latest',
-      ],
-      codex: [
-        'gpt-5.3-codex',
-        'gpt-5.3-codex-spark',
-        'gpt-5-codex',
-        'gpt-5',
-        'gpt-5-mini',
-        'gpt-4.1',
-      ],
-      gemini: [
-        'gemini-3-flash-preview',
-        'gemini-3-pro-preview',
-        'gemini-3-flash',
-        'gemini-3-pro',
-        'gemini-flash-latest',
-        'gemini-pro-latest',
-      ],
-    });
-
-    const state = {
-      tasks: [],
-      historyItems: [],
-      stats: null,
-      analytics: null,
-      policyTemplates: null,
-      historyLoadedOnce: false,
-      providerModelCatalog: {
-        claude: [...DEFAULT_PROVIDER_MODEL_CATALOG.claude],
-        codex: [...DEFAULT_PROVIDER_MODEL_CATALOG.codex],
-        gemini: [...DEFAULT_PROVIDER_MODEL_CATALOG.gemini],
-      },
-      selectedProject: null,
-      selectedRole: 'all',
-      selectedTaskId: null,
-      theme: 'neon',
-      eventsByTask: new Map(),
-      githubSummaryByTask: new Map(),
-      treeByProject: new Map(),
-      treeOpenByProject: new Map(),
-      historyCollapsed: false,
-      createHelpCollapsed: true,
-      createHelpLanguage: 'zh',
-      polling: true,
-      showStreamDetails: false,
-      timer: null,
-      pollTickInFlight: false,
-      apiHealthy: false,
-      apiFailureCount: 0,
-      lastDialogueSignature: '',
-      avatarVariantCache: new Map(),
-      avatarSessionSalt: `${Date.now()}-${Math.floor(Math.random() * 1e9)}`,
-      selectionNeedsValidation: false,
-      participantCapabilityDraft: {},
-      participantRoleRows: [],
-    };
-
-    const SELECTION_PREF_KEY = 'awe-agentcheck-selection';
-
-    const el = {
-      projectSelect: document.getElementById('projectSelect'),
-      projectTree: document.getElementById('projectTree'),
-      projectTreeMeta: document.getElementById('projectTreeMeta'),
-      roleList: document.getElementById('roleList'),
-      statsLine: document.getElementById('statsLine'),
-      kpiStrip: document.getElementById('kpiStrip'),
-      analyticsSummary: document.getElementById('analyticsSummary'),
-      taskSelect: document.getElementById('taskSelect'),
-      dialogue: document.getElementById('dialogue'),
-      githubSummaryMeta: document.getElementById('githubSummaryMeta'),
-      githubSummaryText: document.getElementById('githubSummaryText'),
-      reloadGithubSummaryBtn: document.getElementById('reloadGithubSummaryBtn'),
-      actionStatus: document.getElementById('actionStatus'),
-      taskSnapshot: document.getElementById('taskSnapshot'),
-      projectHistory: document.getElementById('projectHistory'),
-      historySummary: document.getElementById('historySummary'),
-      projectHistoryBody: document.getElementById('projectHistoryBody'),
-      clearHistoryBtn: document.getElementById('clearHistoryBtn'),
-      toggleHistoryBtn: document.getElementById('toggleHistoryBtn'),
-      openCreateHelpBtn: document.getElementById('openCreateHelpBtn'),
-      closeCreateHelpBtn: document.getElementById('closeCreateHelpBtn'),
-      createHelpPanel: document.getElementById('createHelpPanel'),
-      createHelpHint: document.getElementById('createHelpHint'),
-      createHelpList: document.getElementById('createHelpList'),
-      createHelpLangEnBtn: document.getElementById('createHelpLangEnBtn'),
-      createHelpLangZhBtn: document.getElementById('createHelpLangZhBtn'),
-      createStatus: document.getElementById('createStatus'),
-      pollBtn: document.getElementById('pollBtn'),
-      streamDetailBtn: document.getElementById('streamDetailBtn'),
-      startBtn: document.getElementById('startBtn'),
-      cancelBtn: document.getElementById('cancelBtn'),
-      forceFailBtn: document.getElementById('forceFailBtn'),
-      customReplyBtn: document.getElementById('customReplyBtn'),
-      promoteRoundBtn: document.getElementById('promoteRoundBtn'),
-      promoteRound: document.getElementById('promoteRound'),
-      forceReason: document.getElementById('forceReason'),
-      manualReplyNote: document.getElementById('manualReplyNote'),
-      connBadge: document.getElementById('connBadge'),
-      themeSelect: document.getElementById('themeSelect'),
-      expandTreeBtn: document.getElementById('expandTreeBtn'),
-      collapseTreeBtn: document.getElementById('collapseTreeBtn'),
-      approveQueueBtn: document.getElementById('approveQueueBtn'),
-      approveStartBtn: document.getElementById('approveStartBtn'),
-      rejectBtn: document.getElementById('rejectBtn'),
-      policyTemplate: document.getElementById('policyTemplate'),
-      applyPolicyTemplateBtn: document.getElementById('applyPolicyTemplateBtn'),
-      policyProfileHint: document.getElementById('policyProfileHint'),
-      workspacePath: document.getElementById('workspacePath'),
-      author: document.getElementById('author'),
-      reviewers: document.getElementById('reviewers'),
-      matrixAddReviewerBtn: document.getElementById('matrixAddReviewerBtn'),
-      selfLoopMode: document.getElementById('selfLoopMode'),
-      claudeModel: document.getElementById('claudeModel'),
-      codexModel: document.getElementById('codexModel'),
-      geminiModel: document.getElementById('geminiModel'),
-      claudeModelCustom: document.getElementById('claudeModelCustom'),
-      codexModelCustom: document.getElementById('codexModelCustom'),
-      geminiModelCustom: document.getElementById('geminiModelCustom'),
-      claudeModelParams: document.getElementById('claudeModelParams'),
-      codexModelParams: document.getElementById('codexModelParams'),
-      geminiModelParams: document.getElementById('geminiModelParams'),
-      participantCapabilityMatrix: document.getElementById('participantCapabilityMatrix'),
-      sandboxMode: document.getElementById('sandboxMode'),
-      autoMerge: document.getElementById('autoMerge'),
-      mergeTargetPath: document.getElementById('mergeTargetPath'),
-      evolveUntil: document.getElementById('evolveUntil'),
-      maxRounds: document.getElementById('maxRounds'),
-      repairMode: document.getElementById('repairMode'),
-      plainMode: document.getElementById('plainMode'),
-      streamMode: document.getElementById('streamMode'),
-      debateMode: document.getElementById('debateMode'),
-    };
-
-    const savedSelection = readSelectionPreference();
-    if (savedSelection) {
-      state.selectedProject = savedSelection.selectedProject;
-      state.selectedTaskId = savedSelection.selectedTaskId;
-      state.selectedRole = savedSelection.selectedRole;
-      state.selectionNeedsValidation = true;
-    }
-
-    const THEME_OPTIONS = [
-      { id: 'neon', label: 'Neon Grid' },
-      { id: 'pixel', label: 'Terminal Pixel' },
-      { id: 'pixel-sw', label: 'Terminal Pixel: Star Wars' },
-      { id: 'pixel-sg', label: 'Terminal Pixel: Three Kingdoms' },
-      { id: 'executive', label: 'Executive Glass' },
-    ];
+    const state = createInitialState();
+    const el = initElements(document);
+    applySavedSelection(state, readSelectionPreference(SELECTION_PREF_KEY));
 
     const CREATE_TASK_HELP_ITEMS = [
       {
@@ -303,19 +164,6 @@ import { renderModelSelect } from './modules/ui.js';
       },
     ];
 
-    function normalizeTheme(themeId) {
-      const value = String(themeId || '').trim().toLowerCase();
-      return THEME_OPTIONS.some((theme) => theme.id === value) ? value : 'neon';
-    }
-
-    function readThemePreference() {
-      try {
-        return normalizeTheme(localStorage.getItem('awe-agentcheck-theme'));
-      } catch {
-        return 'neon';
-      }
-    }
-
     function persistSelectionPreference() {
       persistSelectionPreferenceStore(
         {
@@ -328,18 +176,10 @@ import { renderModelSelect } from './modules/ui.js';
     }
 
     function applyTheme(themeId, { persist = true } = {}) {
-      const theme = normalizeTheme(themeId);
-      state.theme = theme;
-      document.body.dataset.theme = theme;
-      if (el.themeSelect) {
-        el.themeSelect.value = theme;
-      }
-      if (persist) {
-        try {
-          localStorage.setItem('awe-agentcheck-theme', theme);
-        } catch {
-        }
-      }
+      applyThemeStore(state, themeId, {
+        persist,
+        themeSelectEl: el.themeSelect,
+      });
     }
 
     function initThemeSelector() {
@@ -359,24 +199,10 @@ import { renderModelSelect } from './modules/ui.js';
     }
 
     function setApiHealth(ok, detail = '', options = {}) {
-      const increment = options.increment !== undefined ? !!options.increment : true;
-      state.apiHealthy = !!ok;
-      if (ok) {
-        state.apiFailureCount = 0;
-        el.connBadge.className = 'pill ok';
-        el.connBadge.textContent = 'API: ONLINE';
-        return;
-      }
-      if (increment) {
-        state.apiFailureCount += 1;
-      } else if (state.apiFailureCount <= 0) {
-        state.apiFailureCount = 1;
-      }
-      el.connBadge.className = 'pill warn';
-      el.connBadge.textContent = `API: RETRY(${state.apiFailureCount})`;
-      if (detail) {
-        el.actionStatus.textContent = `API unstable: ${detail}`;
-      }
+      setApiHealthStore(state, ok, detail, options, {
+        connBadgeEl: el.connBadge,
+        actionStatusEl: el.actionStatus,
+      });
     }
 
     const api = createApiClient({ setApiHealth, fetchImpl: fetch, sleepFn: sleep });
@@ -609,20 +435,7 @@ import { renderModelSelect } from './modules/ui.js';
     }
 
     function pruneParticipantCapabilityDraft(activeParticipants) {
-      const active = new Set((activeParticipants || []).map((v) => String(v || '').trim()).filter(Boolean));
-      const next = {};
-      for (const [participant, payload] of Object.entries(state.participantCapabilityDraft || {})) {
-        const key = String(participant || '').trim();
-        if (!key || !active.has(key)) continue;
-        next[key] = {
-          model: String((payload && payload.model) || '').trim(),
-          customModel: String((payload && payload.customModel) || '').trim(),
-          params: String((payload && payload.params) || '').trim(),
-          claudeAgentsMode: String((payload && payload.claudeAgentsMode) || '0').trim().toLowerCase() || '0',
-          codexMultiAgentsMode: String((payload && payload.codexMultiAgentsMode) || '0').trim().toLowerCase() || '0',
-        };
-      }
-      state.participantCapabilityDraft = next;
+      pruneParticipantCapabilityDraftStore(state, activeParticipants);
     }
 
     function renderParticipantCapabilityMatrix() {
@@ -635,118 +448,14 @@ import { renderModelSelect } from './modules/ui.js';
         host.innerHTML = '<div class="empty">No participants configured.</div>';
         return;
       }
-
-      const rows = roleRows.map((roleRow, rowIndex) => {
-        const role = String((roleRow && roleRow.role) || 'reviewer').trim().toLowerCase() === 'author'
-          ? 'author'
-          : 'reviewer';
-        const participantId = String((roleRow && roleRow.participantId) || '').trim();
-        const provider = participantId ? parseProvider(participantId) : '';
-        const defaults = providerDefaultsFromForm(provider);
-        const draft = participantId ? (state.participantCapabilityDraft[participantId] || {}) : {};
-        const selectedModel = String(draft.model || defaults.model || '').trim();
-        const customModel = String(draft.customModel || '').trim();
-        const params = String(
-          draft.params !== undefined && draft.params !== null
-            ? draft.params
-            : defaults.params
-        ).trim();
-        const rowDisabled = !participantId;
-        const claudeToggleDisabled = provider !== 'claude';
-        const codexToggleDisabled = provider !== 'codex';
-        const claudeAgentsModeRaw = String(draft.claudeAgentsMode || '0').trim().toLowerCase();
-        const codexMultiAgentsModeRaw = String(draft.codexMultiAgentsMode || '0').trim().toLowerCase();
-        const claudeAgentsMode = claudeToggleDisabled
-          ? '0'
-          : (['1', '0'].includes(claudeAgentsModeRaw) ? claudeAgentsModeRaw : '0');
-        const codexMultiAgentsMode = codexToggleDisabled
-          ? '0'
-          : (['1', '0'].includes(codexMultiAgentsModeRaw) ? codexMultiAgentsModeRaw : '0');
-        const options = participantModelOptions(provider, selectedModel);
-        const optionHtml = options.length
-          ? options
-            .map((model) => `<option value="${escapeHtml(model)}"${model === selectedModel ? ' selected' : ''}>${escapeHtml(model)}</option>`)
-            .join('')
-          : `<option value="">${escapeHtml(participantId ? '(no model candidates)' : '(set Bot ID first)')}</option>`;
-        const participantAttr = participantId ? `data-participant="${escapeHtml(participantId)}"` : '';
-
-        return `
-          <div class="participant-matrix-row">
-            <div class="participant-role-line">
-              <div>
-                <label>Bot ID</label>
-                <input
-                  data-row-index="${rowIndex}"
-                  data-field="participantId"
-                  value="${escapeHtml(participantId)}"
-                  placeholder="${role === 'author' ? 'provider#author-A' : 'provider#review-B'}"
-                />
-              </div>
-              <span class="participant-role-pill">${role}</span>
-              ${role === 'reviewer'
-                ? `<button class="participant-remove-btn" data-remove-row="${rowIndex}" type="button">Remove</button>`
-                : '<span></span>'}
-            </div>
-            <div class="participant-matrix-head">
-              <span>${escapeHtml(participantId || '(empty)')}</span>
-              <span class="participant-matrix-meta">provider=${escapeHtml(provider || 'n/a')}</span>
-            </div>
-            <div class="participant-matrix-fields">
-              <div>
-                <label>Model</label>
-                <select data-row-index="${rowIndex}" data-field="model" ${participantAttr} ${rowDisabled ? 'disabled' : ''}>${optionHtml}</select>
-              </div>
-              <div>
-                <label>Custom Model (override)</label>
-                <input
-                  data-row-index="${rowIndex}"
-                  data-field="customModel"
-                  ${participantAttr}
-                  value="${escapeHtml(customModel)}"
-                  placeholder="optional custom model id"
-                  ${rowDisabled ? 'disabled' : ''}
-                />
-              </div>
-              <div>
-                <label>Model Params</label>
-                <input
-                  data-row-index="${rowIndex}"
-                  data-field="params"
-                  ${participantAttr}
-                  value="${escapeHtml(params)}"
-                  placeholder="optional CLI params"
-                  ${rowDisabled ? 'disabled' : ''}
-                />
-              </div>
-              <div>
-                <label>Claude Team Agents</label>
-                <select
-                  data-row-index="${rowIndex}"
-                  data-field="claudeAgentsMode"
-                  ${participantAttr}
-                  ${rowDisabled || claudeToggleDisabled ? 'disabled' : ''}
-                >
-                  <option value="1"${claudeAgentsMode === '1' ? ' selected' : ''}>1 | on</option>
-                  <option value="0"${claudeAgentsMode === '0' ? ' selected' : ''}>0 | off</option>
-                </select>
-              </div>
-              <div>
-                <label>Codex Multi Agents</label>
-                <select
-                  data-row-index="${rowIndex}"
-                  data-field="codexMultiAgentsMode"
-                  ${participantAttr}
-                  ${rowDisabled || codexToggleDisabled ? 'disabled' : ''}
-                >
-                  <option value="1"${codexMultiAgentsMode === '1' ? ' selected' : ''}>1 | on</option>
-                  <option value="0"${codexMultiAgentsMode === '0' ? ' selected' : ''}>0 | off</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        `;
-      }).join('');
-      host.innerHTML = rows;
+      host.innerHTML = renderParticipantCapabilityMatrixHtml({
+        roleRows,
+        draftMap: state.participantCapabilityDraft || {},
+        parseProvider,
+        providerDefaultsFromForm,
+        participantModelOptions,
+        escapeHtml,
+      });
     }
 
     function readParticipantModelsFromForm() {

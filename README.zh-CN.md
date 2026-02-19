@@ -45,7 +45,37 @@
 
 <br/>
 
-## 最新更新（2026-02-19）
+## 最新更新（2026-02-20）
+
+1. Provider 适配层重构为策略/工厂模式：
+   - 新增 `ProviderAdapter` 及 `ClaudeAdapter`、`CodexAdapter`、`GeminiAdapter`
+   - 新增 `ProviderFactory`，`ParticipantRunner` 改为通过适配器分发，不再依赖大量 provider 分支判断。
+2. 服务层完成首轮拆分，提升可维护性：
+   - 新增 `src/awe_agentcheck/service_layers.py`
+   - `OrchestratorService` 现将 analytics/history/task-management 委托给独立服务类处理。
+3. Dashboard 前端模块化完成：
+   - 拆分模块为：
+     - `web/assets/modules/api.js`
+     - `web/assets/modules/store.js`
+     - `web/assets/modules/utils.js`
+     - `web/assets/modules/ui.js`
+   - 页面加载改为 ES module（`<script type="module" ...>`）。
+4. 集成验证过程中补齐稳定性修复：
+   - 修复 dry-run 证据输出，确保 `selftest_local_smoke.py` 在 precompletion 门禁下稳定通过。
+   - 修复 LangGraph 节点中的 lambda lint 问题（避免 `ruff` 阻断）。
+5. 回归验证已通过：
+   - `pytest -q tests/unit`
+   - `py -m ruff check .`
+   - `py scripts/selftest_local_smoke.py --port 8011 --health-timeout-seconds 40 --task-timeout-seconds 120`
+6. 任务管理拆分进一步深化（稳定优先）：
+   - `TaskManagementService` 不再使用回调 dataclass 接线。
+   - create/list/get 改为基于真实依赖（`repository`、`artifact_store`）执行，内部承载任务创建校验/沙盒/指纹逻辑。
+7. Dashboard 模块化进一步深化：
+   - 状态/theme/api-health 辅助逻辑迁移到 `modules/store.js`。
+   - DOM 元素初始化与 participant matrix 渲染迁移到 `modules/ui.js`。
+   - `dashboard.js` 更聚焦流程编排与事件绑定。
+
+## 上一版更新（2026-02-19）
 
 1. 默认模型策略升级并显式化：
    - Claude 默认命令固定 `claude-opus-4-6`

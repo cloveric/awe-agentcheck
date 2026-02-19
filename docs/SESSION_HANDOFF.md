@@ -1,5 +1,38 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-20, strategy adapters + service-layer split + dashboard modules)
+
+1. Provider runtime adapter refactor completed:
+   - `ParticipantRunner` now dispatches via `ProviderFactory` and provider-specific strategy adapters.
+   - behavior parity retained for model flags, team/multi-agent toggles, prompt handling, and output normalization.
+2. Service responsibilities are now deeply extracted from `OrchestratorService`:
+   - new `src/awe_agentcheck/service_layers.py` with:
+     - `AnalyticsService`
+     - `HistoryService`
+     - `TaskManagementService`
+   - `TaskManagementService` is now a real dependency-driven class (repository/artifact_store/validation class), not callback dataclass wiring.
+   - `OrchestratorService` removed `_create_task_impl` / `_list_tasks_impl` / `_get_task_impl`; public methods now call the task-management layer.
+3. Web dashboard modularization deepened:
+   - `web/assets/dashboard.js` now imports:
+      - `modules/api.js`
+      - `modules/store.js`
+      - `modules/utils.js`
+      - `modules/ui.js`
+   - moved state/theme/api-health + participant-draft pruning into `modules/store.js`.
+   - moved DOM element initialization + participant capability matrix rendering into `modules/ui.js`.
+   - `web/index.html` uses module loading (`type="module"`).
+4. Stability fixes validated during integration:
+   - dry-run output now includes evidence paths to satisfy precompletion gate in smoke runs.
+   - LangGraph noop callbacks changed to `def` functions to satisfy `ruff` and avoid lint regressions.
+5. Verification:
+   - `pytest -q tests/unit`
+   - `py -m ruff check .`
+   - `py scripts/selftest_local_smoke.py --port 8011 --health-timeout-seconds 40 --task-timeout-seconds 120`
+6. Current local verification status:
+   - `py -m ruff check src tests/unit`
+   - `pytest -q tests/unit/test_service.py tests/unit/test_api.py tests/unit/test_workflow.py tests/unit/test_adapters.py`
+   - `pytest -q tests/unit`
+
 ## Update (2026-02-19, adapter structured errors + expanded architecture hard gate + cross-platform scripts)
 
 1. Adapter runtime failure handling is now structured instead of hard-raising:
