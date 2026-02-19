@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import hashlib
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -155,6 +157,14 @@ class RunResult:
     gate_reason: str
 
 
+@dataclass(frozen=True)
+class PreCompletionChecklistResult:
+    passed: bool
+    reason: str
+    checks: dict[str, bool]
+    evidence_paths: list[str]
+
+
 class WorkflowEngine:
     def __init__(
         self,
@@ -223,6 +233,9 @@ class WorkflowEngine:
         provider_model_params = self._normalize_provider_model_params(config.provider_model_params)
         participant_models = self._normalize_participant_models(config.participant_models)
         participant_model_params = self._normalize_participant_model_params(config.participant_model_params)
+        environment_context = self._environment_context(config)
+        loop_tracker = self._new_loop_tracker()
+        strategy_hint: str | None = None
         stream_mode = bool(config.stream_mode)
         debate_mode = bool(config.debate_mode) and bool(config.reviewers)
         review_timeout_seconds = self._review_timeout_seconds(self.participant_timeout_seconds)
@@ -241,7 +254,13 @@ class WorkflowEngine:
             _log.info('round_started round=%d', round_no)
             emit({'type': 'round_started', 'round': round_no})
 
-            implementation_context = self._debate_seed_context(config, round_no, previous_gate_reason)
+            implementation_context = self._debate_seed_context(
+                config,
+                round_no,
+                previous_gate_reason,
+                environment_context=environment_context,
+                strategy_hint=strategy_hint,
+            )
             if debate_mode:
                 debate_review_total = 0
                 debate_review_usable = 0
@@ -270,7 +289,14 @@ class WorkflowEngine:
                     try:
                         debate_review = self.runner.run(
                             participant=reviewer,
-                            prompt=self._debate_review_prompt(config, round_no, implementation_context, reviewer.participant_id),
+                            prompt=self._debate_review_prompt(
+                                config,
+                                round_no,
+                                implementation_context,
+                                reviewer.participant_id,
+                                environment_context=environment_context,
+                                strategy_hint=strategy_hint,
+                            ),
                             cwd=config.cwd,
                             timeout_seconds=review_timeout_seconds,
                             model=self._resolve_model_for_participant(
@@ -368,9 +394,21 @@ class WorkflowEngine:
                     }
                 )
                 discussion_prompt = (
-                    self._discussion_after_reviewer_prompt(config, round_no, implementation_context)
+                    self._discussion_after_reviewer_prompt(
+                        config,
+                        round_no,
+                        implementation_context,
+                        environment_context=environment_context,
+                        strategy_hint=strategy_hint,
+                    )
                     if debate_mode
-                    else self._discussion_prompt(config, round_no, previous_gate_reason)
+                    else self._discussion_prompt(
+                        config,
+                        round_no,
+                        previous_gate_reason,
+                        environment_context=environment_context,
+                        strategy_hint=strategy_hint,
+                    )
                 )
                 discussion = self.runner.run(
                     participant=config.author,
@@ -431,7 +469,13 @@ class WorkflowEngine:
                 )
                 implementation = self.runner.run(
                     participant=config.author,
-                    prompt=self._implementation_prompt(config, round_no, implementation_context),
+                    prompt=self._implementation_prompt(
+                        config,
+                        round_no,
+                        implementation_context,
+                        environment_context=environment_context,
+                        strategy_hint=strategy_hint,
+                    ),
                     cwd=config.cwd,
                     timeout_seconds=self.participant_timeout_seconds,
                     model=self._resolve_model_for_participant(
@@ -474,6 +518,7 @@ class WorkflowEngine:
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
 
             verdicts: list[ReviewVerdict] = []
+            review_outputs: list[str] = []
             for reviewer in config.reviewers:
                 with self._span(tracer, 'workflow.review', {'task.id': config.task_id, 'round': round_no, 'participant': reviewer.participant_id}):
                     emit(
@@ -487,7 +532,13 @@ class WorkflowEngine:
                     try:
                         review = self.runner.run(
                             participant=reviewer,
-                            prompt=self._review_prompt(config, round_no, implementation.output),
+                            prompt=self._review_prompt(
+                                config,
+                                round_no,
+                                implementation.output,
+                                environment_context=environment_context,
+                                strategy_hint=strategy_hint,
+                            ),
                             cwd=config.cwd,
                             timeout_seconds=review_timeout_seconds,
                             model=self._resolve_model_for_participant(
@@ -526,6 +577,7 @@ class WorkflowEngine:
                         )
                         verdict = ReviewVerdict.UNKNOWN
                         verdicts.append(verdict)
+                        review_outputs.append(f'[review_error] {reason}')
                         emit(
                             {
                                 'type': 'review',
@@ -539,6 +591,7 @@ class WorkflowEngine:
                         continue
                 verdict = self._normalize_verdict(review.verdict)
                 verdicts.append(verdict)
+                review_outputs.append(str(review.output or ''))
                 emit(
                     {
                         'type': 'review',
@@ -586,9 +639,64 @@ class WorkflowEngine:
                 }
             )
 
+            checklist = self._run_pre_completion_checklist(
+                config=config,
+                implementation_output=str(implementation.output or ''),
+                review_outputs=review_outputs,
+                test_result=test_result,
+                lint_result=lint_result,
+            )
+            emit(
+                {
+                    'type': 'precompletion_checklist',
+                    'round': round_no,
+                    'passed': checklist.passed,
+                    'reason': checklist.reason,
+                    'checks': dict(checklist.checks),
+                    'evidence_paths': list(checklist.evidence_paths),
+                }
+            )
+
             if check_cancel():
                 emit({'type': 'canceled', 'round': round_no})
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
+
+            if not checklist.passed:
+                _log.warning('precompletion_failed round=%d reason=%s', round_no, checklist.reason)
+                emit(
+                    {
+                        'type': 'gate_failed',
+                        'round': round_no,
+                        'reason': checklist.reason,
+                        'stage': 'precompletion',
+                    }
+                )
+                progress = self._assess_loop_progress(
+                    loop_tracker=loop_tracker,
+                    gate_reason=checklist.reason,
+                    implementation_output=str(implementation.output or ''),
+                    review_outputs=review_outputs,
+                    tests_ok=bool(test_result.ok),
+                    lint_ok=bool(lint_result.ok),
+                )
+                if progress.get('triggered'):
+                    strategy_hint = str(progress.get('hint') or '').strip() or strategy_hint
+                    emit(
+                        {
+                            'type': 'strategy_shifted',
+                            'round': round_no,
+                            'hint': strategy_hint,
+                            'signals': dict(progress.get('signals') or {}),
+                            'shift_count': int(progress.get('shift_count') or 0),
+                        }
+                    )
+                previous_gate_reason = checklist.reason
+                terminal_reason = str(progress.get('terminal_reason') or '').strip()
+                if terminal_reason:
+                    return RunResult(status='failed_gate', rounds=round_no, gate_reason=terminal_reason)
+                if not deadline_mode and round_no >= config.max_rounds:
+                    return RunResult(status='failed_gate', rounds=round_no, gate_reason=checklist.reason)
+                continue
 
             gate = evaluate_medium_gate(
                 tests_ok=test_result.ok,
@@ -603,6 +711,28 @@ class WorkflowEngine:
             _log.warning('gate_failed round=%d reason=%s', round_no, gate.reason)
             emit({'type': 'gate_failed', 'round': round_no, 'reason': gate.reason})
             previous_gate_reason = gate.reason
+            progress = self._assess_loop_progress(
+                loop_tracker=loop_tracker,
+                gate_reason=gate.reason,
+                implementation_output=str(implementation.output or ''),
+                review_outputs=review_outputs,
+                tests_ok=bool(test_result.ok),
+                lint_ok=bool(lint_result.ok),
+            )
+            if progress.get('triggered'):
+                strategy_hint = str(progress.get('hint') or '').strip() or strategy_hint
+                emit(
+                    {
+                        'type': 'strategy_shifted',
+                        'round': round_no,
+                        'hint': strategy_hint,
+                        'signals': dict(progress.get('signals') or {}),
+                        'shift_count': int(progress.get('shift_count') or 0),
+                    }
+                )
+            terminal_reason = str(progress.get('terminal_reason') or '').strip()
+            if terminal_reason:
+                return RunResult(status='failed_gate', rounds=round_no, gate_reason=terminal_reason)
             # Deadline takes priority over round cap. If a deadline is set,
             # keep iterating until deadline/cancel/pass.
             if not deadline_mode and round_no >= config.max_rounds:
@@ -678,6 +808,321 @@ class WorkflowEngine:
         return source[:max_chars] + f'\n...[truncated {dropped} chars]'
 
     @staticmethod
+    def _environment_context(config: RunConfig) -> str:
+        root = Path(config.cwd).resolve(strict=False)
+        tree_excerpt = WorkflowEngine._workspace_tree_excerpt(root, max_depth=2, max_entries=42)
+        lines = [
+            'Execution context:',
+            f'- Workspace root: {root}',
+            f'- Test command: {config.test_command}',
+            f'- Lint command: {config.lint_command}',
+            '- Constraints: cite repo-relative evidence paths for key findings and edits.',
+            '- Constraints: avoid hidden bypasses/default secrets; keep changes scoped and testable.',
+            '- Workspace excerpt:',
+            tree_excerpt,
+        ]
+        return '\n'.join(lines)
+
+    @staticmethod
+    def _workspace_tree_excerpt(root: Path, *, max_depth: int, max_entries: int) -> str:
+        ignore_dirs = {
+            '.git',
+            '.agents',
+            '.venv',
+            '__pycache__',
+            '.pytest_cache',
+            '.ruff_cache',
+            'node_modules',
+        }
+        lines: list[str] = []
+        visited = 0
+        truncated = False
+
+        def walk(path: Path, depth: int) -> None:
+            nonlocal visited, truncated
+            if truncated or depth > max_depth:
+                return
+            try:
+                entries = sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
+            except OSError:
+                return
+
+            for entry in entries:
+                if visited >= max_entries:
+                    truncated = True
+                    return
+                is_dir = entry.is_dir()
+                if is_dir and entry.name in ignore_dirs:
+                    continue
+                try:
+                    rel = entry.relative_to(root).as_posix()
+                except ValueError:
+                    rel = entry.name
+                indent = '  ' * max(0, depth)
+                marker = 'D' if is_dir else 'F'
+                lines.append(f'{indent}- [{marker}] {rel}')
+                visited += 1
+                if is_dir:
+                    walk(entry, depth + 1)
+
+        if root.exists() and root.is_dir():
+            walk(root, 0)
+        if not lines:
+            return '- [n/a] workspace tree unavailable'
+        if truncated:
+            lines.append(f'- [truncated] showing first {max_entries} entries')
+        return '\n'.join(lines)
+
+    @staticmethod
+    def _inject_prompt_extras(
+        *,
+        base: str,
+        environment_context: str | None,
+        strategy_hint: str | None,
+    ) -> str:
+        text = str(base or '')
+        env = str(environment_context or '').strip()
+        if env:
+            text = f'{text}\n{env}'
+        hint = str(strategy_hint or '').strip()
+        if hint:
+            text = f'{text}\nStrategy shift hint: {hint}'
+        return text
+
+    @staticmethod
+    def _new_loop_tracker() -> dict:
+        return {
+            'last_gate_reason': '',
+            'gate_repeat': 0,
+            'last_impl_sig': '',
+            'impl_repeat': 0,
+            'last_review_sig': '',
+            'review_repeat': 0,
+            'last_verify_sig': '',
+            'verify_repeat': 0,
+            'strategy_shift_count': 0,
+        }
+
+    @staticmethod
+    def _text_signature(text: str, *, max_chars: int = 1000) -> str:
+        payload = re.sub(r'\s+', ' ', str(text or '').strip().lower())
+        if not payload:
+            return ''
+        if len(payload) > max_chars:
+            payload = payload[:max_chars]
+        return hashlib.sha1(payload.encode('utf-8')).hexdigest()[:16]
+
+    @staticmethod
+    def _strategy_hint_from_reason(
+        *,
+        gate_reason: str,
+        gate_repeat: int,
+        impl_repeat: int,
+        review_repeat: int,
+        verify_repeat: int,
+    ) -> str:
+        reason = str(gate_reason or '').strip().lower()
+        if reason == 'precompletion_evidence_missing':
+            return (
+                'Current summaries lack concrete file evidence. Next round must include explicit repo-relative paths '
+                'for changed files, failed checks, and reviewer findings.'
+            )
+        if reason in {'tests_failed', 'lint_failed'}:
+            return (
+                'Verification is repeating failures. Switch to test-first micro-fix: isolate one failing area, '
+                'change minimal files, rerun verification, then continue.'
+            )
+        if reason in {'review_blocker', 'review_unknown'}:
+            return (
+                'Reviewer concern persists. Limit scope to reviewer blockers only, address each blocker with evidence, '
+                'and avoid unrelated edits.'
+            )
+        return (
+            f'Loop detected (gate_repeat={gate_repeat}, impl_repeat={impl_repeat}, '
+            f'review_repeat={review_repeat}, verify_repeat={verify_repeat}). '
+            'Narrow scope, change approach, and provide concrete evidence paths.'
+        )
+
+    def _assess_loop_progress(
+        self,
+        *,
+        loop_tracker: dict,
+        gate_reason: str,
+        implementation_output: str,
+        review_outputs: list[str],
+        tests_ok: bool,
+        lint_ok: bool,
+    ) -> dict:
+        reason = str(gate_reason or '').strip().lower()
+        impl_sig = self._text_signature(implementation_output)
+        review_sig = self._text_signature('\n'.join(str(v or '') for v in review_outputs))
+        verify_sig = self._text_signature(f'tests_ok={bool(tests_ok)} lint_ok={bool(lint_ok)} reason={reason}')
+
+        if reason and reason == str(loop_tracker.get('last_gate_reason') or ''):
+            loop_tracker['gate_repeat'] = int(loop_tracker.get('gate_repeat', 0)) + 1
+        else:
+            loop_tracker['last_gate_reason'] = reason
+            loop_tracker['gate_repeat'] = 1 if reason else 0
+
+        if impl_sig and impl_sig == str(loop_tracker.get('last_impl_sig') or ''):
+            loop_tracker['impl_repeat'] = int(loop_tracker.get('impl_repeat', 0)) + 1
+        else:
+            loop_tracker['last_impl_sig'] = impl_sig
+            loop_tracker['impl_repeat'] = 1 if impl_sig else 0
+
+        if review_sig and review_sig == str(loop_tracker.get('last_review_sig') or ''):
+            loop_tracker['review_repeat'] = int(loop_tracker.get('review_repeat', 0)) + 1
+        else:
+            loop_tracker['last_review_sig'] = review_sig
+            loop_tracker['review_repeat'] = 1 if review_sig else 0
+
+        if verify_sig and verify_sig == str(loop_tracker.get('last_verify_sig') or ''):
+            loop_tracker['verify_repeat'] = int(loop_tracker.get('verify_repeat', 0)) + 1
+        else:
+            loop_tracker['last_verify_sig'] = verify_sig
+            loop_tracker['verify_repeat'] = 1 if verify_sig else 0
+
+        gate_repeat = int(loop_tracker.get('gate_repeat', 0))
+        impl_repeat = int(loop_tracker.get('impl_repeat', 0))
+        review_repeat = int(loop_tracker.get('review_repeat', 0))
+        verify_repeat = int(loop_tracker.get('verify_repeat', 0))
+        triggered = (
+            gate_repeat >= 3
+            or impl_repeat >= 3
+            or review_repeat >= 3
+            or verify_repeat >= 3
+        )
+        if triggered:
+            loop_tracker['strategy_shift_count'] = int(loop_tracker.get('strategy_shift_count', 0)) + 1
+
+        shift_count = int(loop_tracker.get('strategy_shift_count', 0))
+        terminal_reason = ''
+        if triggered and shift_count >= 5:
+            terminal_reason = 'loop_no_progress'
+
+        hint = ''
+        if triggered:
+            hint = self._strategy_hint_from_reason(
+                gate_reason=reason,
+                gate_repeat=gate_repeat,
+                impl_repeat=impl_repeat,
+                review_repeat=review_repeat,
+                verify_repeat=verify_repeat,
+            )
+
+        return {
+            'triggered': triggered,
+            'hint': hint,
+            'signals': {
+                'gate_reason': reason,
+                'gate_repeat': gate_repeat,
+                'implementation_repeat': impl_repeat,
+                'review_repeat': review_repeat,
+                'verification_repeat': verify_repeat,
+            },
+            'shift_count': shift_count,
+            'terminal_reason': terminal_reason,
+        }
+
+    def _run_pre_completion_checklist(
+        self,
+        *,
+        config: RunConfig,
+        implementation_output: str,
+        review_outputs: list[str],
+        test_result: CommandResult,
+        lint_result: CommandResult,
+    ) -> PreCompletionChecklistResult:
+        test_command_configured = bool(str(config.test_command or '').strip())
+        lint_command_configured = bool(str(config.lint_command or '').strip())
+        verification_executed = True
+        tests_ok = bool(test_result.ok)
+        lint_ok = bool(lint_result.ok)
+
+        evidence_source = '\n'.join(
+            [
+                str(implementation_output or ''),
+                '\n'.join(str(item or '') for item in review_outputs),
+                str(test_result.stdout or ''),
+                str(test_result.stderr or ''),
+                str(lint_result.stdout or ''),
+                str(lint_result.stderr or ''),
+            ]
+        )
+        evidence_paths = self._extract_evidence_paths(
+            evidence_source,
+            cwd=Path(config.cwd),
+            max_items=12,
+        )
+        evidence_paths_present = len(evidence_paths) > 0
+
+        checks = {
+            'test_command_configured': test_command_configured,
+            'lint_command_configured': lint_command_configured,
+            'verification_executed': verification_executed,
+            'tests_ok': tests_ok,
+            'lint_ok': lint_ok,
+            'evidence_paths_present': evidence_paths_present,
+        }
+
+        reason = 'passed'
+        if not test_command_configured or not lint_command_configured:
+            reason = 'precompletion_commands_missing'
+        elif not verification_executed:
+            reason = 'precompletion_verification_missing'
+        elif not tests_ok:
+            reason = 'tests_failed'
+        elif not lint_ok:
+            reason = 'lint_failed'
+        elif not evidence_paths_present:
+            reason = 'precompletion_evidence_missing'
+
+        return PreCompletionChecklistResult(
+            passed=(reason == 'passed'),
+            reason=reason,
+            checks=checks,
+            evidence_paths=evidence_paths,
+        )
+
+    @staticmethod
+    def _extract_evidence_paths(text: str, *, cwd: Path, max_items: int = 12) -> list[str]:
+        pattern = re.compile(r'(?:[A-Za-z]:[\\/])?[A-Za-z0-9._\\/-]+\.[A-Za-z0-9]{1,8}')
+        seen: set[str] = set()
+        out: list[str] = []
+        workspace_root = Path(cwd).resolve(strict=False)
+
+        for raw in pattern.findall(str(text or '')):
+            candidate = str(raw or '').strip().strip('.,;:()[]{}<>"\'')
+            if not candidate:
+                continue
+            lowered = candidate.lower()
+            if lowered.startswith(('http://', 'https://')):
+                continue
+            if len(candidate) < 5:
+                continue
+            normalized = candidate.replace('\\', '/')
+            try:
+                path_obj = Path(candidate)
+                if path_obj.is_absolute():
+                    resolved = path_obj.resolve(strict=False)
+                    try:
+                        rel = resolved.relative_to(workspace_root).as_posix()
+                        normalized = rel
+                    except ValueError:
+                        normalized = resolved.as_posix()
+            except Exception:
+                normalized = candidate.replace('\\', '/')
+            if normalized.startswith('./'):
+                normalized = normalized[2:]
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            out.append(normalized)
+            if len(out) >= max_items:
+                break
+        return out
+
+    @staticmethod
     def _stream_emitter(
         *,
         emit: Callable[[dict], None],
@@ -713,7 +1158,14 @@ class WorkflowEngine:
         return WorkflowEngine._clip_text(merged, max_chars=5000)
 
     @staticmethod
-    def _discussion_prompt(config: RunConfig, round_no: int, previous_gate_reason: str | None = None) -> str:
+    def _discussion_prompt(
+        config: RunConfig,
+        round_no: int,
+        previous_gate_reason: str | None = None,
+        *,
+        environment_context: str | None = None,
+        strategy_hint: str | None = None,
+    ) -> str:
         level = max(0, min(2, int(config.evolution_level)))
         repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
@@ -744,10 +1196,21 @@ class WorkflowEngine:
             )
         if round_no > 1 and previous_gate_reason:
             base += f"\nPrevious gate failure reason: {previous_gate_reason}\nAddress this explicitly."
-        return base
+        return WorkflowEngine._inject_prompt_extras(
+            base=base,
+            environment_context=environment_context,
+            strategy_hint=strategy_hint,
+        )
 
     @staticmethod
-    def _debate_seed_context(config: RunConfig, round_no: int, previous_gate_reason: str | None = None) -> str:
+    def _debate_seed_context(
+        config: RunConfig,
+        round_no: int,
+        previous_gate_reason: str | None = None,
+        *,
+        environment_context: str | None = None,
+        strategy_hint: str | None = None,
+    ) -> str:
         level = max(0, min(2, int(config.evolution_level)))
         repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
@@ -766,17 +1229,28 @@ class WorkflowEngine:
         )
         if round_no > 1 and previous_gate_reason:
             base += f"\nPrevious gate failure reason: {previous_gate_reason}"
-        return base
+        return WorkflowEngine._inject_prompt_extras(
+            base=base,
+            environment_context=environment_context,
+            strategy_hint=strategy_hint,
+        )
 
     @staticmethod
-    def _discussion_after_reviewer_prompt(config: RunConfig, round_no: int, reviewer_context: str) -> str:
+    def _discussion_after_reviewer_prompt(
+        config: RunConfig,
+        round_no: int,
+        reviewer_context: str,
+        *,
+        environment_context: str | None = None,
+        strategy_hint: str | None = None,
+    ) -> str:
         clipped = WorkflowEngine._clip_text(reviewer_context, max_chars=3200)
         level = max(0, min(2, int(config.evolution_level)))
         repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
         plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
-        return (
+        base = (
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
             f"EvolutionLevel: {level}\n"
@@ -792,9 +1266,21 @@ class WorkflowEngine:
             "Do not ask follow-up questions. Keep response concise.\n"
             f"Reviewer context:\n{clipped}\n"
         )
+        return WorkflowEngine._inject_prompt_extras(
+            base=base,
+            environment_context=environment_context,
+            strategy_hint=strategy_hint,
+        )
 
     @staticmethod
-    def _implementation_prompt(config: RunConfig, round_no: int, discussion_output: str) -> str:
+    def _implementation_prompt(
+        config: RunConfig,
+        round_no: int,
+        discussion_output: str,
+        *,
+        environment_context: str | None = None,
+        strategy_hint: str | None = None,
+    ) -> str:
         clipped = WorkflowEngine._clip_text(discussion_output, max_chars=3000)
         level = max(0, min(2, int(config.evolution_level)))
         repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
@@ -811,7 +1297,7 @@ class WorkflowEngine:
                 "Resolve blockers first, then proactively implement one incremental evolution direction "
                 "from discussion if tests/lint can remain green."
             )
-        return (
+        base = (
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
             f"EvolutionLevel: {level}\n"
@@ -825,7 +1311,13 @@ class WorkflowEngine:
             "Implement only agreed plan items; do not add unrelated changes.\n"
             "Do not introduce default secrets/tokens or hidden bypass behavior.\n"
             "Include explicit assumptions and risks.\n"
+            "Include an Evidence section with repo-relative file paths touched or validated.\n"
             "Do not ask follow-up questions. Keep response concise."
+        )
+        return WorkflowEngine._inject_prompt_extras(
+            base=base,
+            environment_context=environment_context,
+            strategy_hint=strategy_hint,
         )
 
     @staticmethod
@@ -834,6 +1326,9 @@ class WorkflowEngine:
         round_no: int,
         discussion_context: str,
         reviewer_id: str,
+        *,
+        environment_context: str | None = None,
+        strategy_hint: str | None = None,
     ) -> str:
         clipped = WorkflowEngine._clip_text(discussion_context, max_chars=3200)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
@@ -844,7 +1339,7 @@ class WorkflowEngine:
             if audit_mode
             else "Review current context and provide concrete risk findings."
         )
-        return (
+        base = (
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
             f"Reviewer: {reviewer_id}\n"
@@ -860,6 +1355,11 @@ class WorkflowEngine:
             "Provide plain text only: findings first, then suggested fixes.\n"
             f"Current context:\n{clipped}\n"
         )
+        return WorkflowEngine._inject_prompt_extras(
+            base=base,
+            environment_context=environment_context,
+            strategy_hint=strategy_hint,
+        )
 
     @staticmethod
     def _debate_reply_prompt(
@@ -868,12 +1368,15 @@ class WorkflowEngine:
         discussion_context: str,
         reviewer_id: str,
         reviewer_feedback: str,
+        *,
+        environment_context: str | None = None,
+        strategy_hint: str | None = None,
     ) -> str:
         clipped_context = WorkflowEngine._clip_text(discussion_context, max_chars=2600)
         clipped_feedback = WorkflowEngine._clip_text(reviewer_feedback, max_chars=1400)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
-        return (
+        base = (
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
             f"{language_instruction}\n"
@@ -884,6 +1387,11 @@ class WorkflowEngine:
             "Do not output VERDICT/NEXT_ACTION lines.\n"
             f"Current context:\n{clipped_context}\n"
             f"Reviewer feedback:\n{clipped_feedback}\n"
+        )
+        return WorkflowEngine._inject_prompt_extras(
+            base=base,
+            environment_context=environment_context,
+            strategy_hint=strategy_hint,
         )
 
     @staticmethod
@@ -935,7 +1443,14 @@ class WorkflowEngine:
         return any(k in text for k in keywords)
 
     @staticmethod
-    def _review_prompt(config: RunConfig, round_no: int, implementation_output: str) -> str:
+    def _review_prompt(
+        config: RunConfig,
+        round_no: int,
+        implementation_output: str,
+        *,
+        environment_context: str | None = None,
+        strategy_hint: str | None = None,
+    ) -> str:
         clipped = WorkflowEngine._clip_text(implementation_output, max_chars=3000)
         level = max(0, min(2, int(config.evolution_level)))
         repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
@@ -958,7 +1473,7 @@ class WorkflowEngine:
                 "For evolution proposals, block only if there is correctness/regression/security/data-loss risk.\n"
                 "Do not block solely because an optional enhancement exists.\n"
             )
-        return (
+        base = (
             f"Task: {config.title}\n"
             f"Round: {round_no}\n"
             f"EvolutionLevel: {level}\n"
@@ -976,8 +1491,14 @@ class WorkflowEngine:
             f"{mode_guidance}"
             "Output must include one line: VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN.\n"
             f"{plain_review_format}\n"
+            "Reference at least one concrete repo-relative file path when possible.\n"
             "Do not ask follow-up questions. Keep response concise.\n"
             f"Implementation summary:\n{clipped}\n"
+        )
+        return WorkflowEngine._inject_prompt_extras(
+            base=base,
+            environment_context=environment_context,
+            strategy_hint=strategy_hint,
         )
 
     @staticmethod

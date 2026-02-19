@@ -120,6 +120,12 @@ Default policy:
 17. `max_rounds` is used only when `evolve_until` is empty; if `evolve_until` is set, deadline takes priority.
 18. If `max_rounds>1` and `auto_merge=0`, runtime forces fresh sandbox isolation and captures per-round artifacts (`round-N.patch`, `round-N.md`, round snapshots).
 19. Promotion back to target path is then a separate explicit action via `promote-round` (guarded by promotion policy checks).
+20. Before a task can become `passed`, `PreCompletionChecklist` must pass:
+   - verification stage executed
+   - evidence paths present in implementation/review/verification outputs.
+21. Checklist failures emit explicit reasons (for example `precompletion_evidence_missing`) and block completion.
+22. Repeated no-progress rounds trigger `strategy_shifted` with remediation hints.
+23. Multiple strategy shifts without progress end as `failed_gate` with `loop_no_progress`.
 
 ## 4) Inspect status and timeline
 
@@ -212,6 +218,10 @@ py scripts/overnight_autoevolve.py `
   --evolution-level 0 `
   --evolve-until "2026-02-12 07:00" `
   --max-rounds 3 `
+  --adaptive-policy 1 `
+  --adaptive-interval 1 `
+  --analytics-limit 300 `
+  --policy-template "balanced-default" `
   --task-timeout-seconds 1800 `
   --test-command "py -m pytest -q" `
   --lint-command "py -m ruff check ."
@@ -226,6 +236,7 @@ Notes:
 5. If Claude returns `provider_limit`, primary participants are temporarily disabled (cooldown window) to avoid provider thrashing.
 6. If a task exceeds `--task-timeout-seconds`, overnight watcher force-fails the task (`watchdog_timeout`) so the loop does not stall.
 7. Overnight default sets `--self-loop-mode 1` for unattended autonomous execution.
+8. With `--adaptive-policy 1`, trace analytics automatically adjust next-task policy template and key knobs.
 
 ## 9) One-command background launch + stop
 
@@ -342,3 +353,27 @@ Outputs include:
 
 1. `task_id`, `status`, `events`, `pass_rate_50`
 2. log paths under `.agents/selftest/`
+
+## 12) Benchmark A/B Harness
+
+Run fixed benchmark tasks against two policy variants and generate comparable reports:
+
+```powershell
+cd C:/Users/hangw/awe-agentcheck
+$env:PYTHONPATH="C:/Users/hangw/awe-agentcheck/src"
+py scripts/benchmark_harness.py `
+  --api-base "http://127.0.0.1:8000" `
+  --workspace-path "C:/Users/hangw/awe-agentcheck" `
+  --tasks-file "ops/benchmark_tasks.json" `
+  --variant-a-name "baseline" `
+  --variant-a-template "balanced-default" `
+  --variant-b-name "candidate" `
+  --variant-b-template "safe-review" `
+  --author "codex#author-A" `
+  --reviewer "claude#review-B"
+```
+
+Reports are written to `.agents/benchmarks/` as:
+
+1. `benchmark-<timestamp>.json`
+2. `benchmark-<timestamp>.md`

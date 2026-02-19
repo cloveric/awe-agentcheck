@@ -257,6 +257,12 @@ def _reason_bucket(reason: str | None) -> str | None:
         return 'tests_failed'
     if 'lint_failed' in text:
         return 'lint_failed'
+    if 'precompletion_evidence_missing' in text:
+        return 'precompletion_evidence_missing'
+    if 'precompletion_commands_missing' in text:
+        return 'precompletion_commands_missing'
+    if 'loop_no_progress' in text:
+        return 'loop_no_progress'
     if 'concurrency_limit' in text:
         return 'concurrency_limit'
     if 'author_confirmation_required' in text:
@@ -2306,6 +2312,7 @@ class OrchestratorService:
                 test_command=str(row.get('test_command', 'py -m pytest -q')),
                 lint_command=str(row.get('lint_command', 'py -m ruff check .')),
             )
+            proposal_environment_context = WorkflowEngine._environment_context(config)
 
             discussion_text = str(row.get('description') or '').strip()
             author_feedback_note = self._latest_author_feedback_note(task_id)
@@ -2351,7 +2358,12 @@ class OrchestratorService:
                         try:
                             review = runner.run(
                                 participant=reviewer,
-                                prompt=self._proposal_review_prompt(config, merged_context, stage=stage),
+                                prompt=self._proposal_review_prompt(
+                                    config,
+                                    merged_context,
+                                    stage=stage,
+                                    environment_context=proposal_environment_context,
+                                ),
                                 cwd=config.cwd,
                                 timeout_seconds=review_timeout,
                                 model=self._resolve_model_for_participant(
@@ -2652,9 +2664,19 @@ class OrchestratorService:
                         self.artifact_store.append_event(task_id, discussion_started)
 
                         discussion_prompt = (
-                            self._proposal_author_prompt(config, merged_context, pre_reviews)
+                            self._proposal_author_prompt(
+                                config,
+                                merged_context,
+                                pre_reviews,
+                                environment_context=proposal_environment_context,
+                            )
                             if reviewer_first_mode
-                            else WorkflowEngine._discussion_prompt(config, round_no, None)
+                            else WorkflowEngine._discussion_prompt(
+                                config,
+                                round_no,
+                                None,
+                                environment_context=proposal_environment_context,
+                            )
                         )
                         try:
                             discussion = runner.run(
@@ -3624,7 +3646,13 @@ class OrchestratorService:
                 shutil.copy2(src, dst)
 
     @staticmethod
-    def _proposal_review_prompt(config: RunConfig, discussion_output: str, *, stage: str = 'proposal_review') -> str:
+    def _proposal_review_prompt(
+        config: RunConfig,
+        discussion_output: str,
+        *,
+        stage: str = 'proposal_review',
+        environment_context: str | None = None,
+    ) -> str:
         clipped = WorkflowEngine._clip_text(discussion_output, max_chars=2500)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         plain_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
@@ -3650,7 +3678,7 @@ class OrchestratorService:
             if audit_intent
             else "Keep checks focused on current feature scope and known risk paths."
         )
-        return (
+        base = (
             f"Task: {config.title}\n"
             "You are reviewing a proposed implementation plan before code changes.\n"
             "Mark BLOCKER only for correctness, regression, security, or data-loss risks.\n"
@@ -3664,7 +3692,13 @@ class OrchestratorService:
             "If evidence is insufficient, return VERDICT: UNKNOWN quickly.\n"
             "Output one line: VERDICT: NO_BLOCKER or VERDICT: BLOCKER or VERDICT: UNKNOWN.\n"
             f"{plain_review_format}\n"
+            "Reference concrete repo-relative file paths where possible.\n"
             f"Plan:\n{clipped}\n"
+        )
+        return WorkflowEngine._inject_prompt_extras(
+            base=base,
+            environment_context=environment_context,
+            strategy_hint=None,
         )
 
     @staticmethod
@@ -3672,7 +3706,13 @@ class OrchestratorService:
         return max(1, int(participant_timeout_seconds))
 
     @staticmethod
-    def _proposal_author_prompt(config: RunConfig, merged_context: str, review_payload: list[dict]) -> str:
+    def _proposal_author_prompt(
+        config: RunConfig,
+        merged_context: str,
+        review_payload: list[dict],
+        *,
+        environment_context: str | None = None,
+    ) -> str:
         clipped = WorkflowEngine._clip_text(merged_context, max_chars=3200)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         plain_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
@@ -3685,7 +3725,7 @@ class OrchestratorService:
             if OrchestratorService._is_audit_intent(config)
             else "Keep proposal concrete and implementation-ready."
         )
-        return (
+        base = (
             f"Task: {config.title}\n"
             "You are the author responding to reviewer-first proposal feedback.\n"
             "Reviewer leads this phase. Do not invent unrelated changes.\n"
@@ -3698,8 +3738,14 @@ class OrchestratorService:
             "If a reviewer suggestion is unsafe, explain why and give a safer replacement.\n"
             "Do not add default secrets/tokens, hidden bypasses, or broad unrelated refactors.\n"
             f"{audit_author_guidance}\n"
+            "Include an Evidence section with repo-relative files to inspect/change.\n"
             "Do not ask follow-up questions.\n"
             f"Context:\n{clipped}\n"
+        )
+        return WorkflowEngine._inject_prompt_extras(
+            base=base,
+            environment_context=environment_context,
+            strategy_hint=None,
         )
 
     @staticmethod

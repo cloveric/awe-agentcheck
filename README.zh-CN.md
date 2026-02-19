@@ -101,6 +101,21 @@
    - 新增 API/UI 字段：`participant_models` 与 `participant_model_params`（`participant_id -> value`）。
    - 工作流执行时优先按参与者解析 model/params，缺省再回落到 provider 级配置。
    - Create Task 新增 **Bot Capability Matrix**，可让同一 provider 下的不同角色使用不同配置（例如 Codex author 用 `high`，Codex reviewer 用 `xhigh`）。
+20. 新增通过前硬中间件 `PreCompletionChecklist`：
+   - 任务进入 `passed` 前，必须完成验证步骤且输出可核对的证据路径。
+   - 新增事件 `precompletion_checklist`，并引入明确失败原因（`precompletion_evidence_missing`、`precompletion_commands_missing`）。
+21. 新增任务启动时环境上下文自动注入：
+   - 提示词自动包含工作区结构摘录、验证命令与执行约束，减少盲扫仓库与跑偏。
+22. 新增细粒度死循环检测与策略切换：
+   - 检测同一 gate 原因反复、实现摘要重复、审阅结论签名重复。
+   - 触发 `strategy_shifted` 事件并向下一轮注入策略提示；多次无进展后以 `loop_no_progress` 终止。
+23. 新增夜跑中的 analytics 驱动策略自适应：
+   - `overnight_autoevolve.py` 会读取 `/api/analytics` + `/api/policy-templates`，自动调整下一任务模板与关键参数。
+   - 新增参数：`--adaptive-policy`、`--adaptive-interval`、`--analytics-limit`、`--policy-template`。
+24. 新增固定基准任务集 A/B 回归工具：
+   - 新脚本：`scripts/benchmark_harness.py`
+   - 固定任务集：`ops/benchmark_tasks.json`
+   - 对比报告（JSON + Markdown）输出到 `.agents/benchmarks/`。
 
 <br/>
 
@@ -936,6 +951,7 @@ POST /api/tasks
 | [`docs/ARCHITECTURE_FLOW.md`](docs/ARCHITECTURE_FLOW.md) | 系统架构深度解析 |
 | [`docs/API_EXPOSURE_AUDIT.md`](docs/API_EXPOSURE_AUDIT.md) | 本地/API 暴露审计与防护建议 |
 | [`docs/TESTING_TARGET_POLICY.md`](docs/TESTING_TARGET_POLICY.md) | 测试策略 & 方针 |
+| [`docs/GITHUB_ABOUT.md`](docs/GITHUB_ABOUT.md) | GitHub About/描述建议文案（中英） |
 | [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md) | 会话交接记录 |
 
 <br/>

@@ -1,6 +1,6 @@
 # Testing Target Policy
 
-Date: 2026-02-11
+Date: 2026-02-19
 
 ## Decision
 
@@ -32,6 +32,10 @@ Primary sandbox path:
 4. For unattended overnight runs, prefer `self_loop_mode=1` to avoid waiting_manual stalls.
 5. Keep sandbox scenarios versioned and deterministic.
 6. Store benchmark tasks and expected outcomes in sandbox docs/tests.
+7. Use the fixed benchmark suite for regression comparisons:
+   - task set: `ops/benchmark_tasks.json`
+   - runner: `scripts/benchmark_harness.py`
+   - reports: `.agents/benchmarks/benchmark-*.json|md`
 
 ## Follow-up
 

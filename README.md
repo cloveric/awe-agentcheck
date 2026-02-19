@@ -101,6 +101,21 @@
    - new API/UI fields: `participant_models` and `participant_model_params` (`participant_id -> value`).
    - workflow now resolves runtime model/params by participant first, then provider fallback.
    - Create Task now includes a **Bot Capability Matrix** so author and each reviewer can use different settings even under the same provider (for example Codex author `high` vs Codex reviewer `xhigh`).
+20. Added hard `PreCompletionChecklist` middleware before pass:
+   - task cannot enter `passed` unless verification ran and evidence paths are present.
+   - new events include `precompletion_checklist` and checklist-specific gate reasons (`precompletion_evidence_missing`, `precompletion_commands_missing`).
+21. Added environment context auto-injection at task start:
+   - prompts now include workspace excerpt, validation commands, and execution constraints to reduce blind repo scans.
+22. Added fine-grained dead-loop detection with strategy switching:
+   - detects repeated gate reason / repeated implementation summary / repeated review signature.
+   - emits `strategy_shifted` and injects next-round strategy hints; hard-stops with `loop_no_progress` after repeated shifts.
+23. Added analytics-driven policy adaptation in overnight loop:
+   - `overnight_autoevolve.py` now reads `/api/analytics` + `/api/policy-templates` and automatically adjusts next task template/knobs.
+   - new flags: `--adaptive-policy`, `--adaptive-interval`, `--analytics-limit`, `--policy-template`.
+24. Added fixed benchmark harness for A/B orchestration regression:
+   - new script: `scripts/benchmark_harness.py`
+   - fixed benchmark suite: `ops/benchmark_tasks.json`
+   - outputs JSON + Markdown comparison reports under `.agents/benchmarks/`.
 
 <br/>
 
@@ -936,6 +951,7 @@ When a task passes and `auto_merge=1`:
 | [`docs/ARCHITECTURE_FLOW.md`](docs/ARCHITECTURE_FLOW.md) | System architecture deep dive |
 | [`docs/API_EXPOSURE_AUDIT.md`](docs/API_EXPOSURE_AUDIT.md) | Localhost/public API exposure audit and guardrails |
 | [`docs/TESTING_TARGET_POLICY.md`](docs/TESTING_TARGET_POLICY.md) | Testing approach & policy |
+| [`docs/GITHUB_ABOUT.md`](docs/GITHUB_ABOUT.md) | Suggested GitHub About/description copy (EN/CN) |
 | [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md) | Session handoff notes |
 
 <br/>

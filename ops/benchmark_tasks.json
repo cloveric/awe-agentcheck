@@ -1,0 +1,32 @@
+[
+  {
+    "id": "api-validation-hardening",
+    "title": "Benchmark: API validation hardening",
+    "description": "Audit API input validation and fix one concrete reliability bug with tests."
+  },
+  {
+    "id": "task-state-transition",
+    "title": "Benchmark: task state transition reliability",
+    "description": "Inspect task start/cancel/status transitions and patch one race or stale-state issue."
+  },
+  {
+    "id": "conversation-ux-readability",
+    "title": "Benchmark: conversation readability quality",
+    "description": "Improve conversation clarity by reducing noisy output and preserving key evidence paths."
+  },
+  {
+    "id": "history-traceability",
+    "title": "Benchmark: project history traceability",
+    "description": "Check project history/event lineage and fix one missing or misleading trace record path."
+  },
+  {
+    "id": "watchdog-stability",
+    "title": "Benchmark: watchdog stability",
+    "description": "Audit watchdog timeout/stall logic and improve one reliability edge case."
+  },
+  {
+    "id": "security-guardrails",
+    "title": "Benchmark: security guardrails",
+    "description": "Review API/service guardrails for risky defaults and tighten one concrete exposure vector."
+  }
+]

@@ -89,7 +89,16 @@ class EventSink:
 
 
 def _ok_result(verdict: str = 'no_blocker') -> AdapterResult:
-    line = f'VERDICT: {verdict.upper()}'
+    line = (
+        f'VERDICT: {verdict.upper()}\n'
+        'Issue: updated src/awe_agentcheck/service.py.\n'
+        'Next: validate tests/unit/test_service.py.'
+    )
+    return AdapterResult(output=line, verdict=verdict, next_action=None, returncode=0, duration_seconds=0.1)
+
+
+def _ok_result_no_evidence(verdict: str = 'no_blocker') -> AdapterResult:
+    line = f'VERDICT: {verdict.upper()}\nIssue: summarized changes without file references.'
     return AdapterResult(output=line, verdict=verdict, next_action=None, returncode=0, duration_seconds=0.1)
 
 
@@ -128,6 +137,106 @@ def test_workflow_passes_on_first_round(tmp_path: Path):
     assert any(e['type'] == 'implementation_started' for e in sink.events)
     assert any(e['type'] == 'review_started' for e in sink.events)
     assert any(e['type'] == 'verification_started' for e in sink.events)
+    assert any('Execution context:' in prompt for prompt in runner.prompts)
+
+
+def test_workflow_emits_precompletion_checklist_event(tmp_path: Path):
+    runner = FakeRunner([
+        _ok_result(),  # discussion
+        _ok_result(),  # implementation
+        _ok_result(),  # reviewer
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+    result = engine.run(
+        RunConfig(
+            task_id='t1b',
+            title='Checklist event',
+            description='ensure precompletion checklist emits',
+            author=parse_participant_id('claude#author-A'),
+            reviewers=[parse_participant_id('codex#review-B')],
+            evolution_level=0,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'passed'
+    checklist_events = [e for e in sink.events if e.get('type') == 'precompletion_checklist']
+    assert checklist_events
+    assert checklist_events[-1].get('passed') is True
+    assert checklist_events[-1].get('reason') == 'passed'
+
+
+def test_workflow_blocks_pass_when_evidence_paths_missing(tmp_path: Path):
+    runner = FakeRunner([
+        _ok_result_no_evidence(),  # discussion
+        _ok_result_no_evidence(),  # implementation
+        _ok_result_no_evidence(),  # reviewer
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+    result = engine.run(
+        RunConfig(
+            task_id='t1c',
+            title='Checklist evidence',
+            description='verify evidence path hard gate',
+            author=parse_participant_id('claude#author-A'),
+            reviewers=[parse_participant_id('codex#review-B')],
+            evolution_level=0,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'failed_gate'
+    assert result.gate_reason == 'precompletion_evidence_missing'
+    assert any(
+        e.get('type') == 'gate_failed'
+        and str(e.get('reason') or '') == 'precompletion_evidence_missing'
+        for e in sink.events
+    )
+
+
+def test_workflow_emits_strategy_shifted_on_repeated_failures(tmp_path: Path):
+    runner = FakeRunner([_ok_result_no_evidence()])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+    result = engine.run(
+        RunConfig(
+            task_id='t1d',
+            title='Loop shift',
+            description='repeated precompletion failures should trigger strategy shift',
+            author=parse_participant_id('codex#author-A'),
+            reviewers=[parse_participant_id('claude#review-B')],
+            evolution_level=0,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=3,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'failed_gate'
+    shifted = [e for e in sink.events if e.get('type') == 'strategy_shifted']
+    assert shifted
+    assert str(shifted[-1].get('hint') or '').strip()
 
 
 def test_workflow_retries_then_passes(tmp_path: Path):

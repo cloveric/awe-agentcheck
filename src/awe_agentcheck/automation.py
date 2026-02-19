@@ -80,9 +80,121 @@ def recommend_process_followup_topic(status: str, reason: str | None) -> str | N
         return 'Improve auto-merge failure recovery and snapshot/changelog safety'
     if 'proposal_consensus_stalled' in r or ('proposal_consensus_not_reached' in r):
         return 'Improve proposal consensus loop clarity and disagreement resolution'
+    if 'precompletion_evidence_missing' in r:
+        return 'Improve evidence-path reporting quality before task completion'
+    if 'loop_no_progress' in r:
+        return 'Break loop-no-progress stalls with strategy-shifted remediation'
     if s == 'failed_system':
         return 'Stabilize workflow system-failure handling and recovery'
     return None
+
+
+def derive_policy_adjustment_from_analytics(
+    analytics: dict | None,
+    *,
+    fallback_template: str = 'balanced-default',
+) -> dict:
+    payload = analytics if isinstance(analytics, dict) else {}
+    taxonomy = payload.get('failure_taxonomy')
+    taxonomy_rows = taxonomy if isinstance(taxonomy, list) else []
+    top_bucket = ''
+    top_count = 0
+    for item in taxonomy_rows:
+        if not isinstance(item, dict):
+            continue
+        bucket = str(item.get('bucket') or '').strip().lower()
+        try:
+            count = int(item.get('count') or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if not bucket or count <= 0:
+            continue
+        if count > top_count:
+            top_bucket = bucket
+            top_count = count
+
+    drift_rows = payload.get('reviewer_drift')
+    reviewer_drift = drift_rows if isinstance(drift_rows, list) else []
+    high_drift_participant = ''
+    high_drift_score = 0.0
+    for item in reviewer_drift:
+        if not isinstance(item, dict):
+            continue
+        participant = str(item.get('participant') or '').strip()
+        try:
+            drift_score = float(item.get('drift_score') or 0.0)
+        except (TypeError, ValueError):
+            drift_score = 0.0
+        if drift_score > high_drift_score:
+            high_drift_score = drift_score
+            high_drift_participant = participant
+
+    template = str(fallback_template or 'balanced-default').strip() or 'balanced-default'
+    reason = 'no_failure_signal'
+    overrides: dict[str, object] = {}
+
+    if top_bucket in {'command_timeout', 'provider_limit', 'command_not_found', 'watchdog_timeout'}:
+        template = 'rapid-fix'
+        reason = 'stability_timeout_cluster'
+        overrides = {
+            'evolution_level': 0,
+            'repair_mode': 'minimal',
+            'debate_mode': False,
+            'max_rounds': 1,
+            'plain_mode': True,
+        }
+    elif top_bucket in {'review_blocker', 'review_unknown', 'precompletion_evidence_missing'}:
+        template = 'safe-review'
+        reason = 'review_risk_cluster'
+        overrides = {
+            'evolution_level': 0,
+            'repair_mode': 'balanced',
+            'debate_mode': True,
+            'self_loop_mode': 0,
+            'max_rounds': 1,
+            'plain_mode': True,
+        }
+    elif top_bucket in {'tests_failed', 'lint_failed'}:
+        template = 'balanced-default'
+        reason = 'verification_failure_cluster'
+        overrides = {
+            'evolution_level': 0,
+            'repair_mode': 'structural',
+            'debate_mode': True,
+            'max_rounds': 2,
+        }
+    elif top_bucket in {
+        'proposal_consensus_stalled',
+        'proposal_consensus_stalled_in_round',
+        'proposal_consensus_stalled_across_rounds',
+        'proposal_consensus_not_reached',
+        'loop_no_progress',
+    }:
+        template = 'safe-review'
+        reason = 'consensus_stall_cluster'
+        overrides = {
+            'evolution_level': 0,
+            'repair_mode': 'minimal',
+            'self_loop_mode': 0,
+            'debate_mode': True,
+            'max_rounds': 1,
+            'plain_mode': True,
+        }
+
+    if high_drift_score >= 0.35:
+        # Reduce variance when one reviewer is drifting too far from the global baseline.
+        overrides.setdefault('plain_mode', True)
+        overrides.setdefault('debate_mode', True)
+
+    return {
+        'recommended_template': template,
+        'reason': reason,
+        'top_failure_bucket': top_bucket or 'none',
+        'top_failure_count': int(top_count),
+        'high_drift_participant': high_drift_participant,
+        'high_drift_score': round(high_drift_score, 4),
+        'task_overrides': overrides,
+    }
 
 
 _NOISE_LINE_PATTERNS = (

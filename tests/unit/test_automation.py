@@ -4,6 +4,7 @@ import pytest
 
 from awe_agentcheck.automation import (
     acquire_single_instance,
+    derive_policy_adjustment_from_analytics,
     extract_self_followup_topic,
     is_provider_limit_reason,
     parse_until,
@@ -184,6 +185,46 @@ def test_extract_self_followup_topic_from_runtime_error():
     topic = extract_self_followup_topic(events)
     assert topic is not None
     assert 'runtime error' in topic.lower()
+
+
+def test_recommend_process_followup_topic_for_precompletion_evidence_missing():
+    topic = recommend_process_followup_topic('failed_gate', 'precompletion_evidence_missing')
+    assert topic is not None
+    assert 'evidence-path' in topic.lower()
+
+
+def test_derive_policy_adjustment_from_analytics_timeout_cluster():
+    analytics_payload = {
+        'failure_taxonomy': [
+            {'bucket': 'command_timeout', 'count': 8, 'share': 0.4},
+            {'bucket': 'review_blocker', 'count': 2, 'share': 0.1},
+        ],
+        'reviewer_drift': [],
+    }
+    adjustment = derive_policy_adjustment_from_analytics(analytics_payload, fallback_template='balanced-default')
+    assert adjustment['recommended_template'] == 'rapid-fix'
+    assert adjustment['top_failure_bucket'] == 'command_timeout'
+    assert adjustment['reason'] == 'stability_timeout_cluster'
+    overrides = adjustment.get('task_overrides') or {}
+    assert overrides.get('debate_mode') is False
+    assert int(overrides.get('max_rounds') or 0) == 1
+
+
+def test_derive_policy_adjustment_from_analytics_review_cluster_with_drift():
+    analytics_payload = {
+        'failure_taxonomy': [
+            {'bucket': 'review_blocker', 'count': 5, 'share': 0.5},
+        ],
+        'reviewer_drift': [
+            {'participant': 'claude#review-B', 'drift_score': 0.41},
+        ],
+    }
+    adjustment = derive_policy_adjustment_from_analytics(analytics_payload, fallback_template='balanced-default')
+    assert adjustment['recommended_template'] == 'safe-review'
+    assert adjustment['top_failure_bucket'] == 'review_blocker'
+    assert adjustment['high_drift_participant'] == 'claude#review-B'
+    overrides = adjustment.get('task_overrides') or {}
+    assert overrides.get('plain_mode') is True
 
 
 def test_acquire_single_instance_creates_and_releases_lock(tmp_path):

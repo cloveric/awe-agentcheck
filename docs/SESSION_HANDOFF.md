@@ -1,5 +1,36 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-19, full v1 hardening for checklist/adaptive-policy/harness)
+
+1. Added hard pre-completion middleware in workflow:
+   - new event: `precompletion_checklist`
+   - new gate reasons: `precompletion_evidence_missing`, `precompletion_commands_missing`
+   - task cannot pass unless verification ran and evidence paths are present.
+2. Added automatic environment-context injection into prompts:
+   - workspace tree excerpt + test/lint commands + execution constraints now injected into discussion/implementation/review prompts.
+   - proposal-stage prompts (`self_loop_mode=0`) now receive the same environment context.
+3. Added fine-grained dead-loop detection and strategy shift:
+   - monitors repeated gate reasons, repeated implementation summaries, repeated review signatures.
+   - emits `strategy_shifted` with remediation hint.
+   - repeated shifts without progress end with `loop_no_progress`.
+4. Added trace-driven adaptive policy loop in overnight runner:
+   - `overnight_autoevolve.py` now consumes `/api/analytics` + `/api/policy-templates` and auto-adjusts next task controls.
+   - new flags: `--adaptive-policy`, `--adaptive-interval`, `--analytics-limit`, `--policy-template`.
+5. Added fixed benchmark A/B harness:
+   - new module: `src/awe_agentcheck/benchmark.py`
+   - new script: `scripts/benchmark_harness.py`
+   - fixed task suite: `ops/benchmark_tasks.json`
+   - report outputs: `.agents/benchmarks/benchmark-*.json|md`.
+6. Docs synced:
+   - `README.md`
+   - `README.zh-CN.md`
+   - `docs/RUNBOOK.md`
+   - `docs/ARCHITECTURE_FLOW.md`
+   - `docs/TESTING_TARGET_POLICY.md`
+7. Verification:
+   - `py -m ruff check .`
+   - `PYTHONPATH=src py -m pytest -q`
+
 ## Update (2026-02-19, participant-level bot capability overrides)
 
 1. Added participant-level model controls end-to-end:

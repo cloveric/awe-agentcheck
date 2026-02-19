@@ -14,6 +14,7 @@ import httpx
 
 from awe_agentcheck.automation import (
     acquire_single_instance,
+    derive_policy_adjustment_from_analytics,
     extract_self_followup_topic,
     is_provider_limit_reason,
     parse_until,
@@ -90,6 +91,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--cooldown-seconds', type=int, default=45)
     parser.add_argument('--primary-disable-seconds', type=int, default=3600)
     parser.add_argument('--max-followup-topics', type=int, default=24)
+    parser.add_argument('--adaptive-policy', type=int, default=1, choices=[0, 1])
+    parser.add_argument('--adaptive-interval', type=int, default=1)
+    parser.add_argument('--analytics-limit', type=int, default=300)
+    parser.add_argument('--policy-template', default='balanced-default')
     parser.add_argument('--test-command', default='py -m pytest -q')
     parser.add_argument('--lint-command', default='py -m ruff check .')
     parser.add_argument('--topic-file', default='')
@@ -153,6 +158,7 @@ def create_task(
     max_rounds: int,
     test_command: str,
     lint_command: str,
+    policy_overrides: dict | None = None,
 ) -> dict:
     payload = {
         'title': f'AutoEvolve: {topic[:90]}',
@@ -176,6 +182,28 @@ def create_task(
         'lint_command': lint_command,
         'auto_start': True,
     }
+    overrides = policy_overrides if isinstance(policy_overrides, dict) else {}
+    bool_keys = {'sandbox_mode', 'plain_mode', 'stream_mode', 'debate_mode', 'auto_merge'}
+    int_keys = {'self_loop_mode', 'evolution_level', 'max_rounds'}
+    text_keys = {'repair_mode', 'evolve_until'}
+    for key, raw in overrides.items():
+        field = str(key or '').strip()
+        if not field or field not in payload:
+            continue
+        if field in bool_keys:
+            payload[field] = bool(raw)
+            continue
+        if field in int_keys:
+            try:
+                payload[field] = int(raw)
+            except (TypeError, ValueError):
+                continue
+            continue
+        if field in text_keys:
+            text = str(raw or '').strip()
+            payload[field] = text if text else None
+            continue
+        payload[field] = raw
     resp = client.post(f'{api_base}/api/tasks', json=payload, timeout=120)
     resp.raise_for_status()
     return resp.json()
@@ -234,6 +262,63 @@ def fetch_events(client: httpx.Client, *, api_base: str, task_id: str) -> list[d
     except Exception:
         return []
     return []
+
+
+def fetch_policy_templates(client: httpx.Client, *, api_base: str, workspace_path: str) -> dict:
+    try:
+        resp = client.get(
+            f'{api_base}/api/policy-templates',
+            params={'workspace_path': workspace_path},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def fetch_analytics(client: httpx.Client, *, api_base: str, limit: int) -> dict:
+    try:
+        resp = client.get(
+            f'{api_base}/api/analytics',
+            params={'limit': max(1, int(limit))},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def resolve_policy_overrides(
+    *,
+    policy_templates_payload: dict,
+    analytics_payload: dict,
+    fallback_template: str,
+) -> tuple[str, dict, dict]:
+    template_rows = policy_templates_payload.get('templates')
+    templates = template_rows if isinstance(template_rows, list) else []
+    template_defaults: dict[str, dict] = {}
+    for row in templates:
+        if not isinstance(row, dict):
+            continue
+        tid = str(row.get('id') or '').strip()
+        defaults = row.get('defaults')
+        if not tid or not isinstance(defaults, dict):
+            continue
+        template_defaults[tid] = dict(defaults)
+
+    recommended_by_profile = str(policy_templates_payload.get('recommended_template') or '').strip()
+    fallback = recommended_by_profile or str(fallback_template or 'balanced-default').strip() or 'balanced-default'
+    adjustment = derive_policy_adjustment_from_analytics(analytics_payload, fallback_template=fallback)
+    chosen_template = str(adjustment.get('recommended_template') or fallback).strip() or fallback
+    merged_overrides = dict(template_defaults.get(chosen_template, {}))
+    adjustment_overrides = adjustment.get('task_overrides')
+    if isinstance(adjustment_overrides, dict):
+        merged_overrides.update(adjustment_overrides)
+    return chosen_template, merged_overrides, adjustment
 
 
 def wait_terminal(
@@ -370,6 +455,9 @@ def main(argv: list[str] | None = None) -> int:
     primary_disabled_until: datetime | None = None
     followup_queue: Deque[tuple[str, str, str]] = deque()
     followup_keys: set[str] = set()
+    current_policy_template = str(args.policy_template or 'balanced-default').strip() or 'balanced-default'
+    current_policy_overrides: dict = {}
+    current_policy_adjustment: dict = {}
 
     def enqueue_followup(topic: str, description: str, *, front: bool) -> None:
         topic_text = str(topic or '').strip()
@@ -419,6 +507,41 @@ def main(argv: list[str] | None = None) -> int:
                         description = build_task_description(topic)
                         topic_index += 1
                         topic_source = 'base'
+
+                    if int(args.adaptive_policy) == 1 and (
+                        iteration == 1 or ((iteration - 1) % max(1, int(args.adaptive_interval)) == 0)
+                    ):
+                        policy_templates_payload = fetch_policy_templates(
+                            client,
+                            api_base=api_base,
+                            workspace_path=args.workspace_path,
+                        )
+                        analytics_payload = fetch_analytics(
+                            client,
+                            api_base=api_base,
+                            limit=max(1, int(args.analytics_limit)),
+                        )
+                        chosen_template, merged_overrides, adjustment = resolve_policy_overrides(
+                            policy_templates_payload=policy_templates_payload,
+                            analytics_payload=analytics_payload,
+                            fallback_template=current_policy_template,
+                        )
+                        current_policy_template = chosen_template
+                        current_policy_overrides = merged_overrides
+                        current_policy_adjustment = adjustment
+                        print(
+                            '[overnight] adaptive-policy '
+                            f'template={current_policy_template} '
+                            f'top_bucket={adjustment.get("top_failure_bucket")} '
+                            f'reason={adjustment.get("reason")}'
+                        )
+
+                    policy_note = (
+                        f'AdaptivePolicy: template={current_policy_template}; '
+                        f'top_bucket={current_policy_adjustment.get("top_failure_bucket", "none")}; '
+                        f'reason={current_policy_adjustment.get("reason", "manual")}'
+                    )
+                    run_description = f'{description}\n{policy_note}'.strip()
                     print(f'[overnight] iteration={iteration} topic_source={topic_source} topic={topic[:120]}')
 
                     try:
@@ -427,7 +550,7 @@ def main(argv: list[str] | None = None) -> int:
                             client,
                             api_base=api_base,
                             topic=topic,
-                            description=description,
+                            description=run_description,
                             workspace_path=args.workspace_path,
                             sandbox_mode=args.sandbox_mode,
                             sandbox_workspace_path=(args.sandbox_workspace_path.strip() or None),
@@ -444,6 +567,7 @@ def main(argv: list[str] | None = None) -> int:
                             max_rounds=args.max_rounds,
                             test_command=args.test_command,
                             lint_command=args.lint_command,
+                            policy_overrides=current_policy_overrides,
                         )
                         task_id = created['task_id']
                         current_task_id = task_id

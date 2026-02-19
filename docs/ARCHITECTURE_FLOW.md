@@ -45,7 +45,10 @@ create task (queued)
             3) implementation (author CLI)
             4) review (reviewer CLI(s))
             5) verify (test command + lint command)
-            6) gate (medium policy)
+            6) precompletion checklist (verification + evidence-path hard checks)
+            7) gate (medium policy)
+            repeated no-progress signals -> emit `strategy_shifted` with next-round hint
+            repeated strategy shifts without progress -> `failed_gate` (`loop_no_progress`)
          -> terminal: passed | failed_gate | failed_system | canceled
 
 Task-level strategy controls:
@@ -122,6 +125,9 @@ start_overnight_until_7.ps1
   - Claude `provider_limit` triggers temporary primary disable window.
 - Watchdog timeout:
   - If a task exceeds `task-timeout-seconds`, runner issues cancel + `force-fail` (`watchdog_timeout`) to unblock progression.
+- Adaptive trace loop:
+  - overnight runner pulls `/api/analytics` + `/api/policy-templates`
+  - maps top failure clusters to next-task policy template/overrides automatically.
 
 ## 6) Observability Surfaces
 
@@ -152,6 +158,7 @@ start_overnight_until_7.ps1
 - Artifacts per task: `.agents/threads/<task_id>/`
 - Round artifacts: `.agents/threads/<task_id>/artifacts/rounds/`
 - Overnight logs: `.agents/overnight/`
+- Benchmark harness reports: `.agents/benchmarks/` (A/B regression runs over fixed tasks in `ops/benchmark_tasks.json`)
 
 ## 7) Monitor UI Layout
 
