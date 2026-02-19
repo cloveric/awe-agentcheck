@@ -83,6 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark = sub.add_parser('benchmark', help='Run fixed benchmark A/B harness')
     benchmark.add_argument('--workspace-path', default='.', help='Workspace path')
     benchmark.add_argument('--tasks-file', default='ops/benchmark_tasks.json', help='Benchmark tasks JSON file')
+    benchmark.add_argument('--regression-file', default='.agents/regressions/failure_tasks.json', help='Regression tasks JSON file')
+    benchmark.add_argument('--include-regression', action=argparse.BooleanOptionalAction, default=True)
     benchmark.add_argument('--report-dir', default='.agents/benchmarks', help='Benchmark report directory')
     benchmark.add_argument('--variant-a-name', default='A')
     benchmark.add_argument('--variant-b-name', default='B')
@@ -227,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
             args.workspace_path,
             '--tasks-file',
             args.tasks_file,
+            '--regression-file',
+            args.regression_file,
             '--report-dir',
             args.report_dir,
             '--variant-a-name',
@@ -252,6 +256,7 @@ def main(argv: list[str] | None = None) -> int:
             '--lint-command',
             args.lint_command,
         ]
+        cmd.append('--include-regression' if bool(args.include_regression) else '--no-include-regression')
         for reviewer in list(args.reviewer or []):
             text = str(reviewer or '').strip()
             if text:

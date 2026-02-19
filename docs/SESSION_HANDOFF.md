@@ -1,5 +1,40 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-19, hardening 1-5: head-sha/risk/preflight/evidence/regression loop)
+
+1. Added start-path singleflight dedupe:
+   - `OrchestratorService.start_task` now guards concurrent duplicate starts.
+   - duplicate in-flight calls emit `start_deduped` and do not launch a second run.
+2. Added preflight risk gate before consensus/execution:
+   - `start_task` now runs `_run_preflight_risk_gate` before expensive workflow stages.
+   - failures hard-stop as `failed_gate` with reason `preflight_risk_gate_failed`.
+   - artifact: `artifacts/preflight_risk_gate.json`.
+3. Added strict merge-target head SHA discipline:
+   - capture target head SHA at run start (auto-merge mode).
+   - block fusion if target head drifts before merge (`head_sha_mismatch`).
+4. Added structured evidence manifest:
+   - for passed `WorkflowEngine` runs, service writes `artifacts/evidence_manifest.json`.
+   - manifest includes checks, evidence paths, preflight snapshot, head snapshot, and artifact refs.
+5. Added failure-to-regression loop:
+   - failed tasks now emit/update `.agents/regressions/failure_tasks.json`.
+   - benchmark harness and CLI wrapper now support/enable regression task inclusion:
+     - `--regression-file`
+     - `--include-regression` / `--no-include-regression`.
+6. Tests added/updated:
+   - `tests/unit/test_service.py`:
+     - preflight fail-fast
+     - concurrent start dedupe
+     - evidence manifest emission
+     - merge-target head-sha drift block
+   - `tests/unit/test_benchmark.py`:
+     - regression task loading
+     - benchmark-task merge dedupe
+   - `tests/unit/test_cli.py`:
+     - benchmark parser coverage for regression flags.
+7. Verification:
+   - `py -m pytest -q tests/unit/test_service.py`
+   - `py -m pytest -q tests/unit/test_benchmark.py tests/unit/test_cli.py`
+
 ## Update (2026-02-19, evidence-bundle hard gate + workspace resume guard + benchmark CLI wrapper)
 
 1. Evidence bundle hardening completed:

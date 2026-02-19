@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
+import threading
 
 import pytest
 
@@ -11,7 +13,7 @@ from awe_agentcheck.participants import parse_participant_id, set_extra_provider
 from awe_agentcheck.repository import InMemoryTaskRepository
 from awe_agentcheck.service import CreateTaskInput, InputValidationError, OrchestratorService
 from awe_agentcheck.storage.artifacts import ArtifactStore
-from awe_agentcheck.workflow import RunConfig, RunResult
+from awe_agentcheck.workflow import RunConfig, RunResult, WorkflowEngine
 
 
 class FakeWorkflowEngine:
@@ -107,6 +109,87 @@ class FakeWorkflowEngineTwoRoundsWithChanges:
         on_event({'type': 'implementation', 'round': 2, 'provider': config.author.provider, 'output': 'impl-2'})
         on_event({'type': 'gate_passed', 'round': 2, 'reason': 'passed'})
         return RunResult(status='passed', rounds=2, gate_reason='passed')
+
+
+class FakeWorkflowEngineAsWorkflow(WorkflowEngine):
+    def __init__(self):
+        # Intentionally skip parent init; tests only use `run`.
+        self.calls = 0
+
+    def run(self, config, *, on_event, should_cancel):  # type: ignore[override]
+        self.calls += 1
+        on_event({'type': 'discussion', 'round': 1, 'provider': config.author.provider, 'output': 'plan'})
+        on_event({'type': 'implementation', 'round': 1, 'provider': config.author.provider, 'output': 'changed src/awe_agentcheck/service.py'})
+        on_event(
+            {
+                'type': 'precompletion_checklist',
+                'round': 1,
+                'passed': True,
+                'reason': 'passed',
+                'checks': {
+                    'test_command_configured': True,
+                    'lint_command_configured': True,
+                    'verification_executed': True,
+                    'tests_ok': True,
+                    'lint_ok': True,
+                    'evidence_paths_present': True,
+                },
+                'evidence_paths': ['src/awe_agentcheck/service.py'],
+            }
+        )
+        on_event({'type': 'gate_passed', 'round': 1, 'reason': 'passed'})
+        return RunResult(status='passed', rounds=1, gate_reason='passed')
+
+
+class FakeWorkflowEngineAsWorkflowInvalidEvidence(WorkflowEngine):
+    def __init__(self):
+        # Intentionally skip parent init; tests only use `run`.
+        self.calls = 0
+
+    def run(self, config, *, on_event, should_cancel):  # type: ignore[override]
+        self.calls += 1
+        on_event({'type': 'discussion', 'round': 1, 'provider': config.author.provider, 'output': 'plan'})
+        on_event({'type': 'implementation', 'round': 1, 'provider': config.author.provider, 'output': 'changed src/awe_agentcheck/service.py'})
+        on_event(
+            {
+                'type': 'precompletion_checklist',
+                'round': 1,
+                'passed': True,
+                'reason': 'passed',
+                'checks': {'tests_ok': True, 'lint_ok': True},
+                'evidence_paths': 123,
+            }
+        )
+        on_event({'type': 'gate_passed', 'round': 1, 'reason': 'passed'})
+        return RunResult(status='passed', rounds=1, gate_reason='passed')
+
+
+class SlowWorkflowEngine:
+    def __init__(self):
+        self.calls = 0
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def run(self, config, *, on_event, should_cancel):
+        self.calls += 1
+        self.entered.set()
+        self.release.wait(timeout=3)
+        on_event({'type': 'gate_passed', 'round': 1, 'reason': 'passed'})
+        return RunResult(status='passed', rounds=1, gate_reason='passed')
+
+
+class FakeWorkflowEngineWithCommitHeadChange:
+    def run(self, config, *, on_event, should_cancel):
+        repo = Path(config.cwd)
+        target = repo / 'src' / 'head-mismatch.txt'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('mismatch\n', encoding='utf-8')
+        subprocess.run(['git', 'add', '.'], cwd=str(repo), check=True, capture_output=True)
+        subprocess.run(['git', 'commit', '-m', 'head shift'], cwd=str(repo), check=True, capture_output=True)
+        on_event({'type': 'discussion', 'round': 1, 'provider': config.author.provider, 'output': 'plan'})
+        on_event({'type': 'implementation', 'round': 1, 'provider': config.author.provider, 'output': 'committed change'})
+        on_event({'type': 'gate_passed', 'round': 1, 'reason': 'passed'})
+        return RunResult(status='passed', rounds=1, gate_reason='passed')
 
 
 class ProposalRunnerWithReviewerFailure:
@@ -361,6 +444,17 @@ def build_service(tmp_path: Path, workflow_engine=None, *, max_concurrent_runnin
         workflow_engine=workflow_engine or FakeWorkflowEngine(),
         max_concurrent_running_tasks=max_concurrent_running_tasks,
     )
+
+
+def init_git_repo(root: Path) -> None:
+    subprocess.run(['git', 'init'], cwd=str(root), check=True, capture_output=True)
+    subprocess.run(['git', 'config', 'user.name', 'test-user'], cwd=str(root), check=True, capture_output=True)
+    subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=str(root), check=True, capture_output=True)
+    readme = root / 'README.md'
+    if not readme.exists():
+        readme.write_text('base\n', encoding='utf-8')
+    subprocess.run(['git', 'add', '.'], cwd=str(root), check=True, capture_output=True)
+    subprocess.run(['git', 'commit', '-m', 'init'], cwd=str(root), check=True, capture_output=True)
 
 
 def test_service_create_task_sets_queued_status(tmp_path: Path):
@@ -2701,6 +2795,481 @@ def test_service_start_task_writes_evidence_bundle_artifact(tmp_path: Path):
     assert 'src/awe_agentcheck/service.py' in list(bundle_payload.get('evidence_paths') or [])
     events = svc.list_events(task.task_id)
     assert any(str(item.get('type') or '') == 'evidence_bundle_ready' for item in events)
+
+
+def test_service_start_task_blocks_on_preflight_risk_gate_failure(tmp_path: Path):
+    engine = FakeWorkflowEngine()
+    svc = build_service(tmp_path, workflow_engine=engine)
+    project = tmp_path / 'repo-preflight-gate'
+    project.mkdir()
+    (project / 'README.md').write_text('hello\n', encoding='utf-8')
+
+    task = svc.create_task(
+        CreateTaskInput(
+            title='Preflight gate',
+            description='must fail before workflow',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+            test_command='',
+            lint_command='',
+        )
+    )
+
+    blocked = svc.start_task(task.task_id)
+    assert blocked.status.value == 'failed_gate'
+    assert blocked.last_gate_reason == 'preflight_risk_gate_failed'
+    assert engine.calls == 0
+    preflight_path = tmp_path / '.agents' / 'threads' / task.task_id / 'artifacts' / 'preflight_risk_gate.json'
+    assert preflight_path.exists()
+    regression_path = project / '.agents' / 'regressions' / 'failure_tasks.json'
+    assert regression_path.exists()
+
+
+def test_service_start_task_blocks_when_required_preflight_check_is_unknown(tmp_path: Path):
+    engine = FakeWorkflowEngine()
+    svc = build_service(tmp_path, workflow_engine=engine)
+    project = tmp_path / 'repo-preflight-unknown-check'
+    project.mkdir()
+    (project / 'README.md').write_text('hello\n', encoding='utf-8')
+    risk_contract_path = project / '.agents' / 'risk_policy_contract.json'
+    risk_contract_path.parent.mkdir(parents=True, exist_ok=True)
+    risk_contract_path.write_text(
+        json.dumps(
+            {
+                'version': '1',
+                'mergePolicy': {
+                    'low': {
+                        'requiredChecks': ['risk-policy-gate', 'unknown-required-check'],
+                    }
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    task = svc.create_task(
+        CreateTaskInput(
+            title='Preflight unknown check',
+            description='unknown required checks must fail closed',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+        )
+    )
+
+    blocked = svc.start_task(task.task_id)
+    assert blocked.status.value == 'failed_gate'
+    assert blocked.last_gate_reason == 'preflight_risk_gate_failed'
+    assert engine.calls == 0
+
+    preflight_path = tmp_path / '.agents' / 'threads' / task.task_id / 'artifacts' / 'preflight_risk_gate.json'
+    payload = json.loads(preflight_path.read_text(encoding='utf-8'))
+    failed_checks = list(payload.get('failed_checks') or [])
+    assert 'unknown-required-check' in failed_checks
+
+
+def test_service_start_task_preflight_uses_project_head_sha_when_sandbox_has_no_git(tmp_path: Path):
+    engine = FakeWorkflowEngine()
+    svc = build_service(tmp_path, workflow_engine=engine)
+    project = tmp_path / 'repo-preflight-project-head-sha'
+    project.mkdir()
+    (project / 'README.md').write_text('hello\n', encoding='utf-8')
+    init_git_repo(project)
+
+    task = svc.create_task(
+        CreateTaskInput(
+            title='Preflight project head sha',
+            description='use project repo head sha even when sandbox has no .git',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=True,
+            self_loop_mode=1,
+            auto_merge=False,
+        )
+    )
+    sandbox_root = Path(task.workspace_path)
+    assert not (sandbox_root / '.git').exists()
+
+    result = svc.start_task(task.task_id)
+    assert result.status.value == 'passed'
+    assert engine.calls == 1
+
+    preflight_path = tmp_path / '.agents' / 'threads' / task.task_id / 'artifacts' / 'preflight_risk_gate.json'
+    payload = json.loads(preflight_path.read_text(encoding='utf-8'))
+    assert payload.get('project_has_git') is True
+    assert payload.get('head_sha') == svc._read_git_head_sha(project)
+
+
+def test_service_start_task_regression_case_updates_existing_failure_row(tmp_path: Path):
+    engine = FakeWorkflowEngine()
+    svc = build_service(tmp_path, workflow_engine=engine)
+    project = tmp_path / 'repo-regression-case-dedupe'
+    project.mkdir()
+    (project / 'README.md').write_text('hello\n', encoding='utf-8')
+
+    first = svc.create_task(
+        CreateTaskInput(
+            title='Preflight dedupe',
+            description='same failure should update one regression row',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+            test_command='',
+            lint_command='',
+        )
+    )
+    first_result = svc.start_task(first.task_id)
+    assert first_result.status.value == 'failed_gate'
+
+    second = svc.create_task(
+        CreateTaskInput(
+            title='Preflight dedupe',
+            description='same failure should update one regression row',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+            test_command='',
+            lint_command='',
+        )
+    )
+    second_result = svc.start_task(second.task_id)
+    assert second_result.status.value == 'failed_gate'
+
+    regression_path = project / '.agents' / 'regressions' / 'failure_tasks.json'
+    payload = json.loads(regression_path.read_text(encoding='utf-8'))
+    assert isinstance(payload, list)
+    assert len(payload) == 1
+    assert payload[0].get('source_task_id') == second.task_id
+    assert payload[0].get('source_reason') == 'preflight_risk_gate_failed'
+
+    events = svc.list_events(second.task_id)
+    recorded = [item for item in events if str(item.get('type') or '') == 'regression_case_recorded']
+    assert recorded
+    last_payload = dict(recorded[-1].get('payload') or {})
+    assert bool(last_payload.get('merged')) is True
+
+
+def test_service_start_task_dedupes_concurrent_starts(tmp_path: Path):
+    engine = SlowWorkflowEngine()
+    svc = build_service(tmp_path, workflow_engine=engine)
+    project = tmp_path / 'repo-start-dedupe'
+    project.mkdir()
+    (project / 'README.md').write_text('hello\n', encoding='utf-8')
+
+    task = svc.create_task(
+        CreateTaskInput(
+            title='Start dedupe',
+            description='only one start run',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+        )
+    )
+
+    def _run_first() -> None:
+        svc.start_task(task.task_id)
+
+    worker = threading.Thread(target=_run_first)
+    worker.start()
+    assert engine.entered.wait(timeout=2)
+    second = svc.start_task(task.task_id)
+    engine.release.set()
+    worker.join(timeout=3)
+    assert engine.calls == 1
+    assert second.status.value in {'running', 'passed'}
+    events = svc.list_events(task.task_id)
+    assert any(str(item.get('type') or '') == 'start_deduped' for item in events)
+
+
+def test_service_start_task_writes_evidence_manifest_for_workflow_engine(tmp_path: Path):
+    engine = FakeWorkflowEngineAsWorkflow()
+    svc = build_service(tmp_path, workflow_engine=engine)
+    project = tmp_path / 'repo-evidence-manifest'
+    project.mkdir()
+    (project / 'README.md').write_text('hello\n', encoding='utf-8')
+
+    task = svc.create_task(
+        CreateTaskInput(
+            title='Evidence manifest',
+            description='workflow engine manifest output',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+        )
+    )
+
+    seeded_regression_artifact = tmp_path / '.agents' / 'threads' / task.task_id / 'artifacts' / 'regression_case.json'
+    seeded_regression_artifact.parent.mkdir(parents=True, exist_ok=True)
+    seeded_regression_artifact.write_text(
+        json.dumps({'seed': True}),
+        encoding='utf-8',
+    )
+
+    result = svc.start_task(task.task_id)
+    assert result.status.value == 'passed'
+    manifest_path = tmp_path / '.agents' / 'threads' / task.task_id / 'artifacts' / 'evidence_manifest.json'
+    assert manifest_path.exists()
+    payload = json.loads(manifest_path.read_text(encoding='utf-8'))
+    assert payload.get('schema') == 'evidence_manifest.v1'
+    assert payload.get('ok') is True
+    assert isinstance(payload.get('checks'), dict)
+    assert isinstance(payload.get('evidence_paths'), list)
+    assert isinstance(payload.get('preflight'), dict)
+    assert isinstance(payload.get('head_snapshot'), dict)
+    assert isinstance(payload.get('artifact_refs'), list)
+    artifact_names = {str(item.get('name') or '') for item in list(payload.get('artifact_refs') or []) if isinstance(item, dict)}
+    assert 'preflight_risk_gate' in artifact_names
+    assert 'regression_case' in artifact_names
+    events = svc.list_events(task.task_id)
+    assert any(str(item.get('type') or '') == 'evidence_manifest_ready' for item in events)
+
+
+def test_service_start_task_fails_gate_when_evidence_manifest_write_fails(tmp_path: Path, monkeypatch):
+    engine = FakeWorkflowEngineAsWorkflow()
+    svc = build_service(tmp_path, workflow_engine=engine)
+    project = tmp_path / 'repo-evidence-manifest-write-fails'
+    project.mkdir()
+    (project / 'README.md').write_text('hello\n', encoding='utf-8')
+
+    task = svc.create_task(
+        CreateTaskInput(
+            title='Evidence manifest write fail',
+            description='manifest write failure must fail gate',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+        )
+    )
+
+    original_write_artifact_json = svc.artifact_store.write_artifact_json
+
+    def _write_artifact_json(task_id: str, *, name: str, payload: dict):
+        if name == 'evidence_manifest':
+            raise RuntimeError('simulated manifest write failure')
+        return original_write_artifact_json(task_id, name=name, payload=payload)
+
+    monkeypatch.setattr(svc.artifact_store, 'write_artifact_json', _write_artifact_json)
+
+    result = svc.start_task(task.task_id)
+    assert result.status.value == 'failed_gate'
+    assert result.last_gate_reason == 'precompletion_evidence_missing'
+    events = svc.list_events(task.task_id)
+    assert any(str(item.get('type') or '') == 'evidence_manifest_failed' for item in events)
+
+
+def test_service_start_task_invalid_evidence_payload_fails_gate_not_system(tmp_path: Path):
+    engine = FakeWorkflowEngineAsWorkflowInvalidEvidence()
+    svc = build_service(tmp_path, workflow_engine=engine)
+    project = tmp_path / 'repo-evidence-invalid-payload'
+    project.mkdir()
+    (project / 'README.md').write_text('hello\n', encoding='utf-8')
+
+    task = svc.create_task(
+        CreateTaskInput(
+            title='Evidence payload invalid',
+            description='invalid evidence payload must fail gate',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+        )
+    )
+
+    result = svc.start_task(task.task_id)
+    assert result.status.value == 'failed_gate'
+    assert result.last_gate_reason == 'precompletion_evidence_missing'
+    events = svc.list_events(task.task_id)
+    assert any(str(item.get('type') or '') == 'precompletion_guard_failed' for item in events)
+
+
+def test_service_auto_merge_blocks_when_merge_target_head_changes(tmp_path: Path):
+    project = tmp_path / 'repo-head-mismatch'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+    init_git_repo(project)
+    svc = build_service(tmp_path, workflow_engine=FakeWorkflowEngineWithCommitHeadChange())
+
+    created = svc.create_task(
+        CreateTaskInput(
+            title='Head mismatch',
+            description='detect merge target head change',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            auto_merge=True,
+            self_loop_mode=1,
+            max_rounds=1,
+        )
+    )
+
+    finished = svc.start_task(created.task_id)
+    assert finished.status.value == 'failed_gate'
+    assert 'head_sha_mismatch' in str(finished.last_gate_reason or '')
+    events = svc.list_events(created.task_id)
+    assert any(str(item.get('type') or '') == 'head_sha_mismatch' for item in events)
+    regression_path = project / '.agents' / 'regressions' / 'failure_tasks.json'
+    rows = json.loads(regression_path.read_text(encoding='utf-8'))
+    assert any(
+        str(item.get('source_reason') or '').startswith('head_sha_mismatch')
+        for item in rows
+        if isinstance(item, dict)
+    )
+
+
+def test_service_auto_merge_blocks_when_merge_target_start_sha_is_missing(tmp_path: Path, monkeypatch):
+    project = tmp_path / 'repo-head-sha-missing'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+    init_git_repo(project)
+    engine = FakeWorkflowEngine()
+    svc = build_service(tmp_path, workflow_engine=engine)
+
+    created = svc.create_task(
+        CreateTaskInput(
+            title='Missing start SHA',
+            description='merge target sha must be present before run',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            auto_merge=True,
+            self_loop_mode=1,
+            max_rounds=1,
+        )
+    )
+
+    monkeypatch.setattr(
+        svc,
+        '_run_preflight_risk_gate',
+        lambda *, row, workspace_root: {
+            'passed': True,
+            'reason': 'passed',
+            'tier': 'low',
+            'required_checks': [],
+            'failed_checks': [],
+            'profile': {},
+            'contract_version': '1',
+            'contract_source': 'test',
+            'workspace_path': str(workspace_root),
+            'project_has_git': True,
+            'head_sha': 'a' * 40,
+        },
+    )
+    original_read_head_sha = svc._read_git_head_sha
+    call_count = {'value': 0}
+
+    def _read_head_sha_with_missing_start(root: Path | None):
+        call_count['value'] += 1
+        if call_count['value'] == 1:
+            return None
+        return original_read_head_sha(root)
+
+    monkeypatch.setattr(svc, '_read_git_head_sha', _read_head_sha_with_missing_start)
+
+    finished = svc.start_task(created.task_id)
+    assert finished.status.value == 'failed_gate'
+    assert finished.last_gate_reason == 'head_sha_missing: merge_target_start_sha_missing'
+    assert engine.calls == 0
+    events = svc.list_events(created.task_id)
+    assert any(str(item.get('type') or '') == 'head_sha_missing' for item in events)
+    regression_path = project / '.agents' / 'regressions' / 'failure_tasks.json'
+    rows = json.loads(regression_path.read_text(encoding='utf-8'))
+    assert any(
+        str(item.get('source_reason') or '') == 'head_sha_missing: merge_target_start_sha_missing'
+        for item in rows
+        if isinstance(item, dict)
+    )
+
+
+def test_service_auto_merge_blocks_when_merge_target_end_sha_is_missing(tmp_path: Path, monkeypatch):
+    project = tmp_path / 'repo-head-sha-missing-end'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+    init_git_repo(project)
+    engine = FakeWorkflowEngine()
+    svc = build_service(tmp_path, workflow_engine=engine)
+
+    created = svc.create_task(
+        CreateTaskInput(
+            title='Missing end SHA',
+            description='merge target sha must be present after run',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            auto_merge=True,
+            self_loop_mode=1,
+            max_rounds=1,
+        )
+    )
+
+    monkeypatch.setattr(
+        svc,
+        '_run_preflight_risk_gate',
+        lambda *, row, workspace_root: {
+            'passed': True,
+            'reason': 'passed',
+            'tier': 'low',
+            'required_checks': [],
+            'failed_checks': [],
+            'profile': {},
+            'contract_version': '1',
+            'contract_source': 'test',
+            'workspace_path': str(workspace_root),
+            'project_has_git': True,
+            'head_sha': 'a' * 40,
+        },
+    )
+    original_read_head_sha = svc._read_git_head_sha
+    call_count = {'value': 0}
+
+    def _read_head_sha_with_missing_end(root: Path | None):
+        call_count['value'] += 1
+        if call_count['value'] == 3:
+            return None
+        return original_read_head_sha(root)
+
+    monkeypatch.setattr(svc, '_read_git_head_sha', _read_head_sha_with_missing_end)
+
+    finished = svc.start_task(created.task_id)
+    assert finished.status.value == 'failed_gate'
+    assert finished.last_gate_reason == 'head_sha_missing: merge_target_end_sha_missing'
+    assert engine.calls == 1
+    events = svc.list_events(created.task_id)
+    assert any(str(item.get('type') or '') == 'head_sha_missing' for item in events)
+    regression_path = project / '.agents' / 'regressions' / 'failure_tasks.json'
+    rows = json.loads(regression_path.read_text(encoding='utf-8'))
+    assert any(
+        str(item.get('source_reason') or '') == 'head_sha_missing: merge_target_end_sha_missing'
+        for item in rows
+        if isinstance(item, dict)
+    )
 
 
 def test_service_accepts_extra_registered_provider_participants(tmp_path: Path):

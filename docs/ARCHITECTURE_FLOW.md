@@ -22,6 +22,11 @@ WorkflowEngine
 
 ```text
 create task (queued)
+  -> start singleflight guard:
+       concurrent duplicate starts collapse into one active run (`start_deduped`)
+  -> preflight risk-policy gate:
+       fast-fail before consensus/execution on missing prerequisites
+       (`preflight_risk_gate_failed`)
   -> if self_loop_mode=0:
        start task -> proposal consensus rounds (running)
          when debate_mode=1:
@@ -47,7 +52,8 @@ create task (queued)
              5) verify (test command + lint command)
              6) precompletion checklist (verification + evidence-path hard checks)
              7) persist `evidence_bundle_round_<n>.json`
-             8) gate (medium policy)
+             8) persist structured `evidence_manifest.json` (workflow-engine runs)
+             9) gate (medium policy)
              repeated no-progress signals -> emit `strategy_shifted` with next-round hint
              repeated strategy shifts without progress -> `failed_gate` (`loop_no_progress`)
          -> terminal: passed | failed_gate | failed_system | canceled
@@ -79,6 +85,9 @@ Task-level strategy controls:
 - precompletion hard gate:
   - pass/fusion requires latest evidence bundle
   - missing/invalid bundle blocks completion (`No evidence, no merge`)
+- merge discipline hard gate:
+  - auto-merge requires merge-target head SHA unchanged since task start
+  - drift blocks fusion with `head_sha_mismatch`
 - multi-round candidate mode:
   - when `max_rounds>1` and `auto_merge=0`, service enforces fresh sandbox isolation
   - per-round artifacts are captured at gate events (`round-N.patch`, `round-N.md`, round snapshots)
@@ -136,6 +145,9 @@ start_overnight_until_7.ps1
 - Adaptive trace loop:
   - overnight runner pulls `/api/analytics` + `/api/policy-templates`
   - maps top failure clusters to next-task policy template/overrides automatically.
+- Failure-to-regression loop:
+  - failed tasks emit/refresh `.agents/regressions/failure_tasks.json`
+  - benchmark harness can include these generated cases by default (`--include-regression`).
 
 ## 6) Observability Surfaces
 
@@ -166,11 +178,14 @@ start_overnight_until_7.ps1
 - Artifacts per task: `.agents/threads/<task_id>/`
 - Round artifacts: `.agents/threads/<task_id>/artifacts/rounds/`
 - Evidence bundles: `.agents/threads/<task_id>/artifacts/evidence_bundle_round_<n>.json`
+- Evidence manifest: `.agents/threads/<task_id>/artifacts/evidence_manifest.json`
+- Preflight/risk artifact: `.agents/threads/<task_id>/artifacts/preflight_risk_gate.json`
+- Regression mapping artifact: `.agents/threads/<task_id>/artifacts/regression_case.json`
 - Resume/evidence guard artifacts:
   - `.agents/threads/<task_id>/artifacts/workspace_resume_guard.json`
   - `.agents/threads/<task_id>/artifacts/precompletion_guard_failed.json`
 - Overnight logs: `.agents/overnight/`
-- Benchmark harness reports: `.agents/benchmarks/` (A/B regression runs over fixed tasks in `ops/benchmark_tasks.json`)
+- Benchmark harness reports: `.agents/benchmarks/` (A/B runs over fixed tasks + optional generated failures from `.agents/regressions/failure_tasks.json`)
 
 ## 7) Monitor UI Layout
 

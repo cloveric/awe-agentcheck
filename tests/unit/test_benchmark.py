@@ -7,6 +7,8 @@ from awe_agentcheck.benchmark import (
     build_benchmark_markdown,
     compare_benchmark_summaries,
     load_benchmark_tasks,
+    load_regression_tasks,
+    merge_benchmark_tasks,
     summarize_benchmark_results,
 )
 
@@ -28,6 +30,48 @@ def test_load_benchmark_tasks_reads_valid_json(tmp_path: Path):
     assert len(tasks) == 2
     assert tasks[0]['id'] == 't1'
     assert tasks[1]['title'] == 'Task Two'
+
+
+def test_load_regression_tasks_reads_valid_json(tmp_path: Path):
+    payload = [
+        {'id': 'failure-a', 'title': 'Regression A', 'description': 'Fix reason A'},
+        {'id': 'failure-b', 'title': 'Regression B', 'description': 'Fix reason B'},
+    ]
+    target = tmp_path / 'failure_tasks.json'
+    target.write_text(json.dumps(payload), encoding='utf-8')
+    tasks = load_regression_tasks(target)
+    assert len(tasks) == 2
+    assert tasks[0]['id'] == 'failure-a'
+    assert tasks[1]['title'] == 'Regression B'
+
+
+def test_load_regression_tasks_skips_invalid_rows_safely(tmp_path: Path):
+    payload = [
+        {'id': 'failure-a', 'title': 'Regression A', 'description': 'Fix reason A'},
+        {'id': 'bad-no-description', 'title': 'Missing description'},
+        'not-a-dict',
+        {'id': '', 'title': 'Regression B', 'description': 'Fix reason B'},
+    ]
+    target = tmp_path / 'failure_tasks.json'
+    target.write_text(json.dumps(payload), encoding='utf-8')
+    tasks = load_regression_tasks(target)
+    assert len(tasks) == 2
+    assert tasks[0]['id'] == 'failure-a'
+    assert tasks[1]['title'] == 'Regression B'
+
+
+def test_merge_benchmark_tasks_dedupes_by_id():
+    merged = merge_benchmark_tasks(
+        [
+            {'id': 'a', 'title': 'A', 'description': 'desc-a'},
+            {'id': 'b', 'title': 'B', 'description': 'desc-b'},
+        ],
+        [
+            {'id': 'B', 'title': 'B2', 'description': 'desc-b2'},
+            {'id': 'c', 'title': 'C', 'description': 'desc-c'},
+        ],
+    )
+    assert [item['id'] for item in merged] == ['a', 'b', 'c']
 
 
 def test_summarize_benchmark_results_calculates_rates():

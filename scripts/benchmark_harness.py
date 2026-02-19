@@ -12,6 +12,8 @@ from awe_agentcheck.benchmark import (
     build_benchmark_markdown,
     compare_benchmark_summaries,
     load_benchmark_tasks,
+    load_regression_tasks,
+    merge_benchmark_tasks,
     summarize_benchmark_results,
 )
 
@@ -24,6 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--api-base', default='http://127.0.0.1:8000')
     parser.add_argument('--workspace-path', default='.')
     parser.add_argument('--tasks-file', default='ops/benchmark_tasks.json')
+    parser.add_argument('--regression-file', default='.agents/regressions/failure_tasks.json')
+    parser.add_argument('--include-regression', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--report-dir', default='.agents/benchmarks')
     parser.add_argument('--variant-a-name', default='A')
     parser.add_argument('--variant-b-name', default='B')
@@ -231,6 +235,9 @@ def main(argv: list[str] | None = None) -> int:
     api_base = str(args.api_base or '').rstrip('/')
     reviewers = list(args.reviewer) if args.reviewer else ['claude#review-B']
     tasks = load_benchmark_tasks(args.tasks_file)
+    if bool(args.include_regression):
+        regression_tasks = load_regression_tasks(args.regression_file)
+        tasks = merge_benchmark_tasks(tasks, regression_tasks)
     if not tasks:
         print('[benchmark] no tasks loaded')
         return 2
@@ -288,6 +295,9 @@ def main(argv: list[str] | None = None) -> int:
         'generated_at': datetime.now().isoformat(),
         'workspace_path': str(args.workspace_path),
         'tasks_file': str(args.tasks_file),
+        'regression_file': str(args.regression_file),
+        'include_regression': bool(args.include_regression),
+        'tasks_total': len(tasks),
         'variant_a': {
             'name': args.variant_a_name,
             'template': args.variant_a_template,

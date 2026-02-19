@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import awe_agentcheck.cli as cli_module
 from awe_agentcheck.cli import (
     _parse_participant_agent_overrides,
     _parse_provider_model_params,
@@ -146,6 +149,8 @@ def test_cli_parser_supports_benchmark_command():
             'benchmark',
             '--workspace-path',
             'C:/repo',
+            '--regression-file',
+            'C:/repo/.agents/regressions/failure_tasks.json',
             '--variant-a-name',
             'baseline',
             '--variant-b-name',
@@ -158,9 +163,61 @@ def test_cli_parser_supports_benchmark_command():
     )
     assert args.command == 'benchmark'
     assert args.workspace_path == 'C:/repo'
+    assert args.regression_file == 'C:/repo/.agents/regressions/failure_tasks.json'
+    assert args.include_regression is True
     assert args.variant_a_name == 'baseline'
     assert args.variant_b_name == 'candidate'
     assert args.reviewer == ['claude#review-B', 'codex#review-C']
+
+
+def test_cli_benchmark_main_forwards_regression_flags(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_run(cmd, cwd):
+        captured['cmd'] = list(cmd)
+        captured['cwd'] = cwd
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli_module.subprocess, 'run', _fake_run)
+    exit_code = cli_module.main(
+        [
+            'benchmark',
+            '--workspace-path',
+            'C:/repo',
+            '--regression-file',
+            'C:/repo/.agents/regressions/failure_tasks.json',
+        ]
+    )
+
+    assert exit_code == 0
+    cmd = list(captured.get('cmd') or [])
+    assert '--regression-file' in cmd
+    assert cmd[cmd.index('--regression-file') + 1] == 'C:/repo/.agents/regressions/failure_tasks.json'
+    assert '--include-regression' in cmd
+
+
+def test_cli_benchmark_main_forwards_no_include_regression_flag(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_run(cmd, cwd):
+        captured['cmd'] = list(cmd)
+        captured['cwd'] = cwd
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli_module.subprocess, 'run', _fake_run)
+    exit_code = cli_module.main(
+        [
+            'benchmark',
+            '--workspace-path',
+            'C:/repo',
+            '--no-include-regression',
+        ]
+    )
+
+    assert exit_code == 0
+    cmd = list(captured.get('cmd') or [])
+    assert '--no-include-regression' in cmd
+    assert '--include-regression' not in cmd
 
 
 def test_cli_parser_supports_force_fail_command():

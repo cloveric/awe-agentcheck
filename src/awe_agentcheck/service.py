@@ -12,6 +12,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import threading
 from uuid import uuid4
 
 from awe_agentcheck.adapters import ParticipantRunner
@@ -169,6 +170,21 @@ _ARTIFACT_TASK_ID_RE = re.compile(r'^[A-Za-z0-9._-]+$')
 _DEFAULT_POLICY_TEMPLATE = 'balanced-default'
 _PROPOSAL_STALL_RETRY_LIMIT = 10
 _PROPOSAL_REPEAT_ROUNDS_LIMIT = 4
+_DEFAULT_RISK_POLICY_CONTRACT: dict[str, object] = {
+    'version': '1',
+    'riskTierRules': {
+        'high': ['src/awe_agentcheck/api.py', 'src/awe_agentcheck/service.py'],
+        'low': ['**'],
+    },
+    'mergePolicy': {
+        'high': {
+            'requiredChecks': ['risk-policy-gate', 'harness-smoke', 'head-sha-gate', 'evidence-manifest'],
+        },
+        'low': {
+            'requiredChecks': ['risk-policy-gate', 'head-sha-gate'],
+        },
+    },
+}
 _POLICY_TEMPLATE_CATALOG: dict[str, dict] = {
     'balanced-default': {
         'id': 'balanced-default',
@@ -265,6 +281,10 @@ def _reason_bucket(reason: str | None) -> str | None:
         return 'precompletion_evidence_missing'
     if 'precompletion_commands_missing' in text:
         return 'precompletion_commands_missing'
+    if 'preflight_risk_gate_failed' in text:
+        return 'preflight_risk_gate_failed'
+    if 'head_sha_mismatch' in text:
+        return 'head_sha_mismatch'
     if 'loop_no_progress' in text:
         return 'loop_no_progress'
     if 'concurrency_limit' in text:
@@ -297,6 +317,25 @@ class OrchestratorService:
             runner=ParticipantRunner(),
             command_executor=ShellCommandExecutor(),
         )
+        self._start_slot_guard = threading.Lock()
+        self._start_slots: set[str] = set()
+
+    def _try_claim_start_slot(self, task_id: str) -> bool:
+        key = str(task_id or '').strip()
+        if not key:
+            return False
+        with self._start_slot_guard:
+            if key in self._start_slots:
+                return False
+            self._start_slots.add(key)
+            return True
+
+    def _release_start_slot(self, task_id: str) -> None:
+        key = str(task_id or '').strip()
+        if not key:
+            return
+        with self._start_slot_guard:
+            self._start_slots.discard(key)
 
     def create_task(self, payload: CreateTaskInput) -> TaskView:
         # Validate participant IDs early so callers get a clear 400 error
@@ -1439,6 +1478,165 @@ class OrchestratorService:
             return 'rapid-fix'
         return _DEFAULT_POLICY_TEMPLATE
 
+    @staticmethod
+    def _risk_contract_file_candidates(project_root: Path) -> list[Path]:
+        root = Path(project_root)
+        return [
+            root / 'ops' / 'risk_policy_contract.json',
+            root / '.agents' / 'risk_policy_contract.json',
+        ]
+
+    @staticmethod
+    def _normalize_required_checks(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            item = str(raw or '').strip()
+            if not item:
+                continue
+            lowered = item.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            out.append(item)
+        return out
+
+    def _load_risk_policy_contract(self, *, project_root: Path) -> dict[str, object]:
+        contract: dict[str, object] = dict(_DEFAULT_RISK_POLICY_CONTRACT)
+        merge_policy = dict(contract.get('mergePolicy', {})) if isinstance(contract.get('mergePolicy'), dict) else {}
+        contract['mergePolicy'] = merge_policy
+        for candidate in self._risk_contract_file_candidates(project_root):
+            if not candidate.exists() or not candidate.is_file():
+                continue
+            try:
+                parsed = json.loads(candidate.read_text(encoding='utf-8'))
+            except Exception:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            candidate_merge = parsed.get('mergePolicy')
+            if isinstance(candidate_merge, dict):
+                normalized_merge: dict[str, dict[str, object]] = {}
+                for tier_key, tier_payload in candidate_merge.items():
+                    tier = str(tier_key or '').strip().lower()
+                    payload = tier_payload if isinstance(tier_payload, dict) else {}
+                    normalized_merge[tier] = {
+                        **payload,
+                        'requiredChecks': self._normalize_required_checks(payload.get('requiredChecks')),
+                    }
+                merge_policy = normalized_merge
+            contract = {
+                'version': str(parsed.get('version') or contract.get('version') or '1'),
+                'riskTierRules': parsed.get('riskTierRules', contract.get('riskTierRules', {})),
+                'mergePolicy': merge_policy,
+                'source_path': str(candidate),
+            }
+            return contract
+
+        contract['source_path'] = 'builtin'
+        if isinstance(merge_policy, dict):
+            normalized_merge: dict[str, dict[str, object]] = {}
+            for tier_key, tier_payload in merge_policy.items():
+                tier = str(tier_key or '').strip().lower()
+                payload = tier_payload if isinstance(tier_payload, dict) else {}
+                normalized_merge[tier] = {
+                    **payload,
+                    'requiredChecks': self._normalize_required_checks(payload.get('requiredChecks')),
+                }
+            contract['mergePolicy'] = normalized_merge
+        return contract
+
+    @staticmethod
+    def _resolve_risk_tier_from_profile(profile: dict) -> str:
+        risk_level = str(profile.get('risk_level') or '').strip().lower()
+        if risk_level == 'high':
+            return 'high'
+        return 'low'
+
+    @staticmethod
+    def _requires_browser_evidence(*, title: str, description: str) -> bool:
+        haystack = f'{title}\n{description}'.lower()
+        return bool(re.search(r'\b(ui|frontend|browser|page|screen|dashboard|web)\b', haystack))
+
+    def _run_preflight_risk_gate(self, *, row: dict, workspace_root: Path) -> dict[str, object]:
+        project_root = Path(str(row.get('project_path') or row.get('workspace_path') or workspace_root))
+        profile = self._analyze_workspace_profile(str(project_root))
+        tier = self._resolve_risk_tier_from_profile(profile)
+        contract = self._load_risk_policy_contract(project_root=project_root)
+        merge_policy = contract.get('mergePolicy')
+        merge_policy_map = merge_policy if isinstance(merge_policy, dict) else {}
+        tier_policy = merge_policy_map.get(tier)
+        tier_policy_map = tier_policy if isinstance(tier_policy, dict) else {}
+        required_checks = self._normalize_required_checks(tier_policy_map.get('requiredChecks'))
+
+        test_command = str(row.get('test_command') or '').strip()
+        lint_command = str(row.get('lint_command') or '').strip()
+        reviewers = list(row.get('reviewer_participants') or [])
+        title = str(row.get('title') or '').strip()
+        description = str(row.get('description') or '').strip()
+        project_has_git = bool((project_root / '.git').exists())
+        head_probe_root = project_root if project_has_git else workspace_root
+        head_sha = self._read_git_head_sha(head_probe_root)
+        head_gate_ok = (not project_has_git) or bool(head_sha)
+
+        check_values = {
+            'risk-policy-gate': True,
+            'harness-smoke': bool(test_command) and bool(lint_command),
+            'ci-pipeline': bool(test_command) and bool(lint_command),
+            'head-sha-gate': head_gate_ok,
+            'review-head-sha-gate': head_gate_ok,
+            'evidence-manifest': True,
+            'browser evidence': (
+                (not self._requires_browser_evidence(title=title, description=description))
+                or ('playwright' in test_command.lower())
+                or ('browser' in test_command.lower())
+            ),
+        }
+
+        failed_required: list[str] = []
+        for check_name in required_checks:
+            lookup = str(check_name or '').strip().lower()
+            if not lookup:
+                continue
+            ok = bool(check_values.get(lookup, False))
+            if not ok:
+                failed_required.append(check_name)
+
+        if not reviewers:
+            failed_required.append('reviewers_present')
+
+        if not test_command:
+            failed_required.append('test_command_present')
+        if not lint_command:
+            failed_required.append('lint_command_present')
+
+        seen_failed: set[str] = set()
+        unique_failed: list[str] = []
+        for item in failed_required:
+            key = str(item or '').strip().lower()
+            if not key or key in seen_failed:
+                continue
+            seen_failed.add(key)
+            unique_failed.append(str(item))
+
+        passed = len(unique_failed) == 0
+        reason = 'passed' if passed else 'preflight_risk_gate_failed'
+        return {
+            'passed': passed,
+            'reason': reason,
+            'tier': tier,
+            'required_checks': required_checks,
+            'failed_checks': unique_failed,
+            'profile': profile,
+            'contract_version': str(contract.get('version') or '1'),
+            'contract_source': str(contract.get('source_path') or 'builtin'),
+            'workspace_path': str(workspace_root),
+            'project_has_git': project_has_git,
+            'head_sha': head_sha,
+        }
+
     def _collect_task_artifacts(self, *, task_id: str) -> list[dict]:
         key = self._validate_artifact_task_id(task_id)
         root = self.artifact_store.root / 'threads' / key
@@ -1450,7 +1648,9 @@ class OrchestratorService:
             ('events', root / 'events.jsonl'),
             ('summary', root / 'summary.md'),
             ('final_report', root / 'final_report.md'),
+            ('preflight_risk_gate', root / 'artifacts' / 'preflight_risk_gate.json'),
             ('auto_merge_summary', root / 'artifacts' / 'auto_merge_summary.json'),
+            ('regression_case', root / 'artifacts' / 'regression_case.json'),
             ('pending_proposal', root / 'artifacts' / 'pending_proposal.json'),
             ('workspace_resume_guard', root / 'artifacts' / 'workspace_resume_guard.json'),
             ('precompletion_guard_failed', root / 'artifacts' / 'precompletion_guard_failed.json'),
@@ -1463,6 +1663,145 @@ class OrchestratorService:
             for candidate in sorted(artifacts_root.glob('evidence_bundle_round_*.json')):
                 out.append({'name': candidate.stem, 'path': str(candidate)})
         return out
+
+    def _write_evidence_manifest(
+        self,
+        *,
+        task_id: str,
+        row: dict,
+        workspace_root: Path,
+        rounds_completed: int,
+        status: str,
+        reason: str,
+        preflight_guard: dict | None,
+        evidence_bundle: dict | None,
+        head_snapshot: dict | None,
+    ) -> dict[str, object]:
+        bundle = dict(evidence_bundle or {})
+        expected_round = max(1, int(rounds_completed))
+        guard = self._validate_evidence_bundle(evidence_bundle=bundle, expected_round=expected_round)
+        checks = self._coerce_evidence_checks(bundle.get('checks'))
+        evidence_paths = self._coerce_evidence_paths(bundle.get('evidence_paths'))
+        artifacts = self._collect_task_artifacts(task_id=task_id)
+        payload: dict[str, object] = {
+            'schema': 'evidence_manifest.v1',
+            'task_id': task_id,
+            'generated_at': datetime.now(timezone.utc).isoformat(),
+            'status': str(status or '').strip(),
+            'reason': str(reason or '').strip() or 'unknown',
+            'round': expected_round,
+            'project_path': str(row.get('project_path') or row.get('workspace_path') or workspace_root),
+            'workspace_path': str(workspace_root),
+            'test_command': str(row.get('test_command') or '').strip(),
+            'lint_command': str(row.get('lint_command') or '').strip(),
+            'checks': checks,
+            'evidence_paths': evidence_paths,
+            'preflight': dict(preflight_guard or {}),
+            'head_snapshot': dict(head_snapshot or {}),
+            'artifact_refs': artifacts,
+            'ok': bool(guard.get('ok', False)),
+            'gate_reason': str(guard.get('reason') or 'precompletion_evidence_missing'),
+        }
+        try:
+            manifest_path = self.artifact_store.write_artifact_json(
+                task_id,
+                name='evidence_manifest',
+                payload=payload,
+            )
+        except Exception as exc:
+            payload.update(
+                {
+                    'ok': False,
+                    'reason': 'precompletion_evidence_missing',
+                    'gate_reason': 'precompletion_evidence_missing',
+                    'artifact_error': str(exc),
+                }
+            )
+            return payload
+        payload['artifact_path'] = str(manifest_path)
+        if not bool(payload.get('ok', False)):
+            payload['reason'] = str(payload.get('gate_reason') or 'precompletion_evidence_missing')
+            return payload
+        payload['reason'] = 'passed'
+        return payload
+
+    def _emit_regression_case(
+        self,
+        *,
+        task_id: str,
+        row: dict,
+        status: TaskStatus,
+        reason: str,
+    ) -> dict[str, object] | None:
+        if status not in {TaskStatus.FAILED_GATE, TaskStatus.FAILED_SYSTEM}:
+            return None
+        reason_text = str(reason or '').strip()
+        if not reason_text:
+            return None
+
+        project_root = Path(str(row.get('project_path') or row.get('workspace_path') or '')).resolve(strict=False)
+        file_path = project_root / '.agents' / 'regressions' / 'failure_tasks.json'
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        rows: list[dict] = []
+        if file_path.exists() and file_path.is_file():
+            try:
+                parsed = json.loads(file_path.read_text(encoding='utf-8'))
+                if isinstance(parsed, list):
+                    rows = [item for item in parsed if isinstance(item, dict)]
+            except Exception:
+                rows = []
+
+        title_text = str(row.get('title') or '').strip()
+        description_text = str(row.get('description') or '').strip()
+        case_id_source = f'{title_text}\n{reason_text}'.lower()
+        case_id = hashlib.sha1(case_id_source.encode('utf-8')).hexdigest()[:16]
+        now = datetime.now(timezone.utc).isoformat()
+        case_payload = {
+            'id': f'failure-{case_id}',
+            'title': f'Regression: {title_text[:96]}'.strip(),
+            'description': (
+                f'Failure reason: {reason_text}\n'
+                f'Original task: {task_id}\n'
+                f'Original description: {description_text}'
+            ).strip(),
+            'source_task_id': task_id,
+            'source_status': status.value,
+            'source_reason': reason_text,
+            'updated_at': now,
+        }
+        merged = False
+        for existing in rows:
+            if str(existing.get('id') or '').strip() != case_payload['id']:
+                continue
+            existing.update(case_payload)
+            merged = True
+            break
+        if not merged:
+            rows.append(case_payload)
+
+        try:
+            file_path.write_text(json.dumps(rows, ensure_ascii=True, indent=2), encoding='utf-8')
+        except Exception:
+            return None
+
+        event_payload = {
+            'path': str(file_path),
+            'case_id': case_payload['id'],
+            'merged': merged,
+            'reason': reason_text,
+            'status': status.value,
+        }
+        self.repository.append_event(
+            task_id,
+            event_type='regression_case_recorded',
+            payload=event_payload,
+            round_number=None,
+        )
+        self.artifact_store.append_event(task_id, {'type': 'regression_case_recorded', **event_payload})
+        self.artifact_store.write_artifact_json(task_id, name='regression_case', payload=event_payload)
+        self.artifact_store.update_state(task_id, {'regression_case_last': event_payload})
+        return event_payload
 
     @staticmethod
     def _run_git_command(*, root: Path, args: list[str]) -> tuple[bool, str]:
@@ -1481,6 +1820,20 @@ class OrchestratorService:
         if completed.returncode != 0:
             return False, (completed.stderr or completed.stdout or '').strip()
         return True, (completed.stdout or '').strip()
+
+    def _read_git_head_sha(self, root: Path | None) -> str | None:
+        if root is None:
+            return None
+        target = Path(root)
+        if not target.exists() or not target.is_dir():
+            return None
+        ok, payload = self._run_git_command(root=target, args=['rev-parse', 'HEAD'])
+        if not ok:
+            return None
+        sha = str(payload or '').strip()
+        if re.fullmatch(r'[0-9a-fA-F]{40}', sha):
+            return sha.lower()
+        return None
 
     def _read_git_state(self, root: Path | None) -> dict:
         if root is None:
@@ -1743,6 +2096,28 @@ class OrchestratorService:
         return self._to_view(row)
 
     def start_task(self, task_id: str) -> TaskView:
+        if not self._try_claim_start_slot(task_id):
+            row = self.repository.get_task(task_id)
+            if row is None:
+                raise KeyError(task_id)
+            payload = {
+                'reason': 'start_inflight_dedup',
+                'status': str(row.get('status') or ''),
+            }
+            self.repository.append_event(
+                task_id,
+                event_type='start_deduped',
+                payload=payload,
+                round_number=None,
+            )
+            self.artifact_store.append_event(task_id, {'type': 'start_deduped', **payload})
+            return self._to_view(row)
+        try:
+            return self._start_task_impl(task_id)
+        finally:
+            self._release_start_slot(task_id)
+
+    def _start_task_impl(self, task_id: str) -> TaskView:
         row = self.repository.get_task(task_id)
         if row is None:
             raise KeyError(task_id)
@@ -1820,6 +2195,109 @@ class OrchestratorService:
                 )
                 return self._to_view(deferred)
 
+        workspace_root = Path(str(row.get('workspace_path') or Path.cwd()))
+        preflight_guard = self._run_preflight_risk_gate(row=row, workspace_root=workspace_root)
+        self.repository.append_event(
+            task_id,
+            event_type='preflight_risk_gate',
+            payload=preflight_guard,
+            round_number=None,
+        )
+        self.artifact_store.append_event(task_id, {'type': 'preflight_risk_gate', **preflight_guard})
+        self.artifact_store.write_artifact_json(task_id, name='preflight_risk_gate', payload=preflight_guard)
+        self.artifact_store.update_state(task_id, {'preflight_risk_gate_last': preflight_guard})
+        if not bool(preflight_guard.get('passed', False)):
+            blocked_reason = str(preflight_guard.get('reason') or 'preflight_risk_gate_failed').strip() or 'preflight_risk_gate_failed'
+            updated = self.repository.update_task_status(
+                task_id,
+                status=TaskStatus.FAILED_GATE.value,
+                reason=blocked_reason,
+                rounds_completed=row.get('rounds_completed', 0),
+            )
+            self.repository.append_event(
+                task_id,
+                event_type='preflight_risk_gate_failed',
+                payload=preflight_guard,
+                round_number=None,
+            )
+            self.artifact_store.append_event(task_id, {'type': 'preflight_risk_gate_failed', **preflight_guard})
+            self.artifact_store.update_state(
+                task_id,
+                {
+                    'status': TaskStatus.FAILED_GATE.value,
+                    'last_gate_reason': blocked_reason,
+                },
+            )
+            self.artifact_store.write_final_report(task_id, f'status=failed_gate\nreason={blocked_reason}')
+            self._emit_regression_case(
+                task_id=task_id,
+                row=updated,
+                status=TaskStatus.FAILED_GATE,
+                reason=blocked_reason,
+            )
+            return self._to_view(updated)
+
+        merge_target_head_before_run: str | None = None
+        merge_target_is_git = False
+        merge_target_path: str | None = None
+        if bool(row.get('auto_merge', True)):
+            target_root = self._resolve_merge_target(row)
+            merge_target_path = str(target_root)
+            merge_target_is_git = bool((target_root / '.git').exists())
+            merge_target_head_before_run = self._read_git_head_sha(target_root)
+        head_guard_payload = {
+            'workspace_head_sha': self._read_git_head_sha(workspace_root),
+            'merge_target_head_sha': merge_target_head_before_run,
+            'merge_target_is_git': merge_target_is_git,
+            'workspace_path': str(workspace_root),
+            'merge_target_path': merge_target_path,
+        }
+        self.repository.append_event(
+            task_id,
+            event_type='head_sha_captured',
+            payload=head_guard_payload,
+            round_number=None,
+        )
+        self.artifact_store.append_event(task_id, {'type': 'head_sha_captured', **head_guard_payload})
+        self.artifact_store.update_state(task_id, {'head_sha_captured': head_guard_payload})
+        if bool(row.get('auto_merge', True)) and merge_target_is_git and not merge_target_head_before_run:
+            blocked_reason = 'head_sha_missing: merge_target_start_sha_missing'
+            missing_payload = {
+                'reason': blocked_reason,
+                'phase': 'start',
+                'before': merge_target_head_before_run,
+                'target_path': merge_target_path,
+            }
+            self.repository.append_event(
+                task_id,
+                event_type='head_sha_missing',
+                payload=missing_payload,
+                round_number=None,
+            )
+            self.artifact_store.append_event(task_id, {'type': 'head_sha_missing', **missing_payload})
+            updated = self.repository.update_task_status(
+                task_id,
+                status=TaskStatus.FAILED_GATE.value,
+                reason=blocked_reason,
+                rounds_completed=row.get('rounds_completed', 0),
+            )
+            self.artifact_store.update_state(
+                task_id,
+                {
+                    'status': TaskStatus.FAILED_GATE.value,
+                    'last_gate_reason': blocked_reason,
+                    'head_sha_missing_last': missing_payload,
+                },
+            )
+            self.artifact_store.write_final_report(task_id, f'status=failed_gate\nreason={blocked_reason}')
+            self._emit_regression_case(
+                task_id=task_id,
+                row=updated,
+                status=TaskStatus.FAILED_GATE,
+                reason=blocked_reason,
+            )
+            return self._to_view(updated)
+
         # All modes require proposal consensus before implementation.
         needs_consensus = str(row.get('last_gate_reason') or '') != 'author_approved'
         if needs_consensus:
@@ -1852,7 +2330,6 @@ class OrchestratorService:
 
         set_task_context(task_id=task_id)
         _log.info('task_started task_id=%s', task_id)
-        workspace_root = Path(str(row.get('workspace_path') or Path.cwd()))
         round_artifacts_enabled = int(row.get('max_rounds', 1)) > 1 and not bool(row.get('auto_merge', True))
         round_snapshot_holder: list[Path | None] = [None]
         latest_evidence_bundle: list[dict | None] = [None]
@@ -1889,8 +2366,8 @@ class OrchestratorService:
                     'round': round_no,
                     'passed': bool(event.get('passed', False)),
                     'reason': str(event.get('reason') or '').strip() or 'unknown',
-                    'checks': dict(event.get('checks') or {}),
-                    'evidence_paths': [str(item) for item in list(event.get('evidence_paths') or []) if str(item).strip()],
+                    'checks': self._coerce_evidence_checks(event.get('checks')),
+                    'evidence_paths': self._coerce_evidence_paths(event.get('evidence_paths')),
                     'workspace_path': str(workspace_root),
                     'generated_at': datetime.now(timezone.utc).isoformat(),
                 }
@@ -1989,6 +2466,7 @@ class OrchestratorService:
 
         final_status = self._map_run_status(result.status)
         final_reason = result.gate_reason
+        evidence_manifest_payload: dict | None = None
         if final_status == TaskStatus.PASSED and isinstance(self.workflow_engine, WorkflowEngine):
             evidence_guard = self._validate_evidence_bundle(
                 evidence_bundle=latest_evidence_bundle[0],
@@ -2015,6 +2493,51 @@ class OrchestratorService:
                     name='precompletion_guard_failed',
                     payload=evidence_payload,
                 )
+        if final_status == TaskStatus.PASSED and isinstance(self.workflow_engine, WorkflowEngine):
+            manifest_result = self._write_evidence_manifest(
+                task_id=task_id,
+                row=row,
+                workspace_root=workspace_root,
+                rounds_completed=int(result.rounds),
+                status=final_status.value,
+                reason=str(final_reason or ''),
+                preflight_guard=preflight_guard,
+                evidence_bundle=latest_evidence_bundle[0],
+                head_snapshot={
+                    'workspace_head_sha': head_guard_payload.get('workspace_head_sha'),
+                    'merge_target_head_sha': head_guard_payload.get('merge_target_head_sha'),
+                },
+            )
+            evidence_manifest_payload = dict(manifest_result)
+            if not bool(manifest_result.get('ok', False)):
+                final_status = TaskStatus.FAILED_GATE
+                final_reason = str(manifest_result.get('reason') or 'precompletion_evidence_missing')
+                failure_payload = {
+                    'type': 'evidence_manifest_failed',
+                    'reason': final_reason,
+                    'manifest': manifest_result,
+                }
+                self.repository.append_event(
+                    task_id,
+                    event_type='evidence_manifest_failed',
+                    payload=failure_payload,
+                    round_number=max(1, int(result.rounds)),
+                )
+                self.artifact_store.append_event(task_id, failure_payload)
+                self.artifact_store.write_artifact_json(
+                    task_id,
+                    name='evidence_manifest_failed',
+                    payload=failure_payload,
+                )
+            else:
+                self.repository.append_event(
+                    task_id,
+                    event_type='evidence_manifest_ready',
+                    payload=manifest_result,
+                    round_number=max(1, int(result.rounds)),
+                )
+                self.artifact_store.append_event(task_id, {'type': 'evidence_manifest_ready', **manifest_result})
+                self.artifact_store.update_state(task_id, {'evidence_manifest_last': manifest_result})
         _log.info('task_finished task_id=%s status=%s rounds=%d reason=%s',
                   task_id, final_status.value, result.rounds, final_reason)
 
@@ -2035,15 +2558,15 @@ class OrchestratorService:
                 raise KeyError(task_id)
             return self._to_view(latest)
 
-        self.artifact_store.update_state(
-            task_id,
-            {
-                'status': final_status.value,
-                'last_gate_reason': final_reason,
-                'rounds_completed': result.rounds,
-                'cancel_requested': False,
-            },
-        )
+        state_payload = {
+            'status': final_status.value,
+            'last_gate_reason': final_reason,
+            'rounds_completed': result.rounds,
+            'cancel_requested': False,
+        }
+        if evidence_manifest_payload is not None:
+            state_payload['evidence_manifest_last'] = evidence_manifest_payload
+        self.artifact_store.update_state(task_id, state_payload)
         self.artifact_store.write_final_report(
             task_id,
             f"status={final_status.value}\nrounds={result.rounds}\nreason={final_reason}",
@@ -2052,6 +2575,87 @@ class OrchestratorService:
         if final_status == TaskStatus.PASSED and bool(row.get('auto_merge', True)):
             try:
                 target_root = self._resolve_merge_target(row)
+                current_target_head = self._read_git_head_sha(target_root)
+                if merge_target_is_git and not current_target_head:
+                    blocked_reason = 'head_sha_missing: merge_target_end_sha_missing'
+                    missing_payload = {
+                        'reason': blocked_reason,
+                        'phase': 'end',
+                        'before': merge_target_head_before_run,
+                        'current': current_target_head,
+                        'target_path': str(target_root),
+                    }
+                    self.repository.append_event(
+                        task_id,
+                        event_type='head_sha_missing',
+                        payload=missing_payload,
+                        round_number=None,
+                    )
+                    self.artifact_store.append_event(task_id, {'type': 'head_sha_missing', **missing_payload})
+                    updated = self.repository.update_task_status(
+                        task_id,
+                        status=TaskStatus.FAILED_GATE.value,
+                        reason=blocked_reason,
+                        rounds_completed=result.rounds,
+                    )
+                    self.artifact_store.update_state(
+                        task_id,
+                        {
+                            'status': TaskStatus.FAILED_GATE.value,
+                            'last_gate_reason': blocked_reason,
+                            'rounds_completed': result.rounds,
+                            'head_sha_missing_last': missing_payload,
+                        },
+                    )
+                    self.artifact_store.write_final_report(task_id, f'status=failed_gate\nreason={blocked_reason}')
+                    self._emit_regression_case(
+                        task_id=task_id,
+                        row=updated,
+                        status=TaskStatus.FAILED_GATE,
+                        reason=blocked_reason,
+                    )
+                    return self._to_view(updated)
+                if merge_target_head_before_run and current_target_head and merge_target_head_before_run != current_target_head:
+                    blocked_reason = (
+                        'head_sha_mismatch: merge_target_head_changed '
+                        f'{merge_target_head_before_run[:12]}->{current_target_head[:12]}'
+                    )
+                    mismatch_payload = {
+                        'reason': blocked_reason,
+                        'before': merge_target_head_before_run,
+                        'current': current_target_head,
+                        'target_path': str(target_root),
+                    }
+                    self.repository.append_event(
+                        task_id,
+                        event_type='head_sha_mismatch',
+                        payload=mismatch_payload,
+                        round_number=None,
+                    )
+                    self.artifact_store.append_event(task_id, {'type': 'head_sha_mismatch', **mismatch_payload})
+                    updated = self.repository.update_task_status(
+                        task_id,
+                        status=TaskStatus.FAILED_GATE.value,
+                        reason=blocked_reason,
+                        rounds_completed=result.rounds,
+                    )
+                    self.artifact_store.update_state(
+                        task_id,
+                        {
+                            'status': TaskStatus.FAILED_GATE.value,
+                            'last_gate_reason': blocked_reason,
+                            'rounds_completed': result.rounds,
+                            'head_sha_mismatch_last': mismatch_payload,
+                        },
+                    )
+                    self.artifact_store.write_final_report(task_id, f'status=failed_gate\nreason={blocked_reason}')
+                    self._emit_regression_case(
+                        task_id=task_id,
+                        row=updated,
+                        status=TaskStatus.FAILED_GATE,
+                        reason=blocked_reason,
+                    )
+                    return self._to_view(updated)
                 guard = self._evaluate_promotion_guard(target_root=target_root)
                 self.repository.append_event(
                     task_id,
@@ -2088,6 +2692,12 @@ class OrchestratorService:
                         },
                     )
                     self.artifact_store.write_final_report(task_id, f'status=failed_gate\nreason={blocked_reason}')
+                    self._emit_regression_case(
+                        task_id=task_id,
+                        row=updated,
+                        status=TaskStatus.FAILED_GATE,
+                        reason=blocked_reason,
+                    )
                     return self._to_view(updated)
                 fusion = self.fusion_manager.run(
                     task_id=task_id,
@@ -2129,6 +2739,13 @@ class OrchestratorService:
             except Exception as exc:
                 return self.mark_failed_system(task_id, reason=f'auto_merge_error: {exc}')
 
+        if final_status in {TaskStatus.FAILED_GATE, TaskStatus.FAILED_SYSTEM}:
+            self._emit_regression_case(
+                task_id=task_id,
+                row=updated,
+                status=final_status,
+                reason=str(final_reason or ''),
+            )
         return self._to_view(updated)
 
     def submit_author_decision(
@@ -3662,6 +4279,40 @@ class OrchestratorService:
         }
 
     @staticmethod
+    def _coerce_evidence_checks(value: object) -> dict[str, object]:
+        if not isinstance(value, dict):
+            return {}
+        out: dict[str, object] = {}
+        for raw_key, raw_value in value.items():
+            key = str(raw_key or '').strip()
+            if not key:
+                continue
+            out[key] = raw_value
+        return out
+
+    @staticmethod
+    def _coerce_evidence_paths(value: object) -> list[str]:
+        if isinstance(value, str):
+            candidates = [value]
+        elif isinstance(value, (list, tuple, set)):
+            candidates = list(value)
+        else:
+            return []
+
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in candidates:
+            text = str(raw or '').strip()
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(text)
+        return out
+
+    @staticmethod
     def _validate_evidence_bundle(*, evidence_bundle: dict | None, expected_round: int) -> dict[str, object]:
         bundle = dict(evidence_bundle or {})
         if not bundle:
@@ -3675,10 +4326,10 @@ class OrchestratorService:
         if not bool(bundle.get('passed', False)):
             reason = str(bundle.get('reason') or '').strip() or 'precompletion_evidence_missing'
             return {'ok': False, 'reason': reason}
-        evidence_paths = [str(item).strip() for item in list(bundle.get('evidence_paths') or []) if str(item).strip()]
+        evidence_paths = OrchestratorService._coerce_evidence_paths(bundle.get('evidence_paths'))
         if not evidence_paths:
             return {'ok': False, 'reason': 'precompletion_evidence_missing'}
-        checks = dict(bundle.get('checks') or {})
+        checks = OrchestratorService._coerce_evidence_checks(bundle.get('checks'))
         if checks and (not bool(checks.get('tests_ok', True)) or not bool(checks.get('lint_ok', True))):
             return {'ok': False, 'reason': 'precompletion_verification_missing'}
         return {'ok': True, 'reason': 'passed'}

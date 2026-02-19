@@ -121,6 +121,12 @@
    - 通过并自动融合前会再次校验证据包（`No evidence, no merge`）。
    - 任务创建时记录工作区指纹，启动/恢复时校验一致性；漂移会以 `workspace_resume_guard_mismatch` 阻断。
    - 新增 CLI 包装命令：`py -m awe_agentcheck.cli benchmark ...`（调用 `scripts/benchmark_harness.py`）。
+26. 新增 1-5 硬化闭环能力：
+   - 启动路径加入单飞去重（`start_deduped`），避免同任务并发重复 start/rerun。
+   - 提案/执行前新增预检风险策略门禁，失败可提前终止（`preflight_risk_gate_failed`），避免昂贵空跑。
+   - 自动融合前新增严格 head-SHA 一致性约束；目标仓在运行期间漂移会阻断融合（`head_sha_mismatch`）。
+   - 对 `WorkflowEngine` 的通过任务新增结构化证据清单工件：`evidence_manifest.json`。
+   - 失败任务会自动沉淀为回归任务到 `.agents/regressions/failure_tasks.json`，基准工具默认可直接纳入（`--include-regression`）。
 
 <br/>
 

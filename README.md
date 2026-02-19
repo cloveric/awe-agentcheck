@@ -121,6 +121,12 @@
    - pass + auto-merge path now validates the latest evidence bundle before fusion (`No evidence, no merge`).
    - tasks now store a workspace fingerprint; start/resume verifies fingerprint consistency and blocks with `workspace_resume_guard_mismatch` on drift.
    - new CLI wrapper command: `py -m awe_agentcheck.cli benchmark ...` (runs `scripts/benchmark_harness.py`).
+26. Added hard 1-5 reliability loop upgrades:
+   - start-path singleflight guard (`start_deduped`) to avoid duplicate concurrent start/rerun execution.
+   - preflight risk-policy gate now runs before consensus/execution and can fail fast (`preflight_risk_gate_failed`) before expensive loops.
+   - strict auto-merge head-SHA discipline: merge target drift during run blocks fusion (`head_sha_mismatch`).
+   - structured `evidence_manifest.json` is written for passed `WorkflowEngine` runs.
+   - failed tasks now auto-emit regression tasks to `.agents/regressions/failure_tasks.json`, and benchmark harness can include them by default (`--include-regression`).
 
 <br/>
 

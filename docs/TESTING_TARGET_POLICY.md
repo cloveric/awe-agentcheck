@@ -34,6 +34,7 @@ Primary sandbox path:
 6. Store benchmark tasks and expected outcomes in sandbox docs/tests.
 7. Use the fixed benchmark suite for regression comparisons:
    - task set: `ops/benchmark_tasks.json`
+   - generated failures: `.agents/regressions/failure_tasks.json`
    - runner: `scripts/benchmark_harness.py`
    - reports: `.agents/benchmarks/benchmark-*.json|md`
 

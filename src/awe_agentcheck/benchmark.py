@@ -64,6 +64,50 @@ def load_benchmark_tasks(path: str | Path | None = None) -> list[dict[str, str]]
     return out or list(DEFAULT_BENCHMARK_TASKS)
 
 
+def load_regression_tasks(path: str | Path | None = None) -> list[dict[str, str]]:
+    target = Path(path).resolve(strict=False) if path else None
+    if target is None or not target.exists():
+        return []
+    try:
+        raw = target.read_text(encoding='utf-8')
+        data = json.loads(raw)
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, str]] = []
+    for i, item in enumerate(data):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get('title') or '').strip()
+        description = str(item.get('description') or '').strip()
+        if not title or not description:
+            continue
+        task_id = str(item.get('id') or '').strip() or f'regression-{i + 1:02d}'
+        out.append({'id': task_id, 'title': title, 'description': description})
+    return out
+
+
+def merge_benchmark_tasks(base: list[dict[str, str]], extras: list[dict[str, str]]) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in [*(base or []), *(extras or [])]:
+        if not isinstance(item, dict):
+            continue
+        task_id = str(item.get('id') or '').strip()
+        title = str(item.get('title') or '').strip()
+        description = str(item.get('description') or '').strip()
+        if not task_id or not title or not description:
+            continue
+        key = task_id.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append({'id': task_id, 'title': title, 'description': description})
+    return merged
+
+
 def summarize_benchmark_results(results: list[dict]) -> dict[str, float | int]:
     rows = list(results or [])
     total = len(rows)
