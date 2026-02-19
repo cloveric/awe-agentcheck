@@ -9,10 +9,13 @@ Reviewer-first multi-CLI control tower for vibe coding. Run Codex, Claude, Gemin
 AWE-AgentForge orchestrates multiple coding CLIs in one observable workflow:
 - reviewer-first consensus loops
 - structured reviewer output (JSON + fallback controls)
+- structured adapter runtime-error results (no silent empty runs)
 - architecture audit (`off|warn|hard`)
+- expanded architecture hard checks (service/workflow/dashboard size, prompt hotspot, adapter runtime-raise policy)
 - preflight policy guards and evidence-gated completion (`No evidence, no merge`)
 - auto-merge and sandbox promotion controls
 - analytics + benchmark feedback loop for self-improving runs
+- cross-platform operation scripts for Windows + Linux/macOS
 
 Built for teams and solo vibe coders who do not trust single-agent confidence.
 
@@ -25,10 +28,13 @@ Built for teams and solo vibe coders who do not trust single-agent confidence.
 AWE-AgentForge 把多智能体协作工程化为一条可观测流水线：
 - reviewer-first 共识闭环
 - 结构化审阅输出（JSON + 兼容兜底）
+- 结构化适配层运行时错误返回（避免“空跑不清楚”）
 - 架构审计（`off|warn|hard`）
+- 扩展架构硬规则（service/workflow/dashboard 体量、prompt 热点、adapter 运行时 raise 策略）
 - 预检策略门禁 + 证据硬门禁（`No evidence, no merge`）
 - 自动融合与沙盒晋升控制
 - 基于 analytics + benchmark 的自我进化回路
+- 同时覆盖 Windows 与 Linux/macOS 的运维脚本
 
 适合不再相信“单智能体说没问题就真没问题”的开发者。
 

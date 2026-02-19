@@ -102,6 +102,16 @@ def _ok_result_no_evidence(verdict: str = 'no_blocker') -> AdapterResult:
     return AdapterResult(output=line, verdict=verdict, next_action=None, returncode=0, duration_seconds=0.1)
 
 
+def _error_result(reason: str) -> AdapterResult:
+    return AdapterResult(
+        output=reason,
+        verdict='unknown',
+        next_action='stop',
+        returncode=2,
+        duration_seconds=0.1,
+    )
+
+
 def test_workflow_passes_on_first_round(tmp_path: Path):
     runner = FakeRunner([
         _ok_result(),  # discussion
@@ -138,6 +148,77 @@ def test_workflow_passes_on_first_round(tmp_path: Path):
     assert any(e['type'] == 'review_started' for e in sink.events)
     assert any(e['type'] == 'verification_started' for e in sink.events)
     assert any('Execution context:' in prompt for prompt in runner.prompts)
+
+
+def test_workflow_blocks_when_author_discussion_runtime_fails(tmp_path: Path):
+    runner = FakeRunner([
+        _error_result('command_not_found provider=codex command=codex exec'),
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-author-discussion-fail',
+            title='Runtime fail',
+            description='author command fails before implementation',
+            author=parse_participant_id('codex#author-A'),
+            reviewers=[parse_participant_id('claude#review-B')],
+            evolution_level=0,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'failed_gate'
+    assert result.gate_reason == 'command_not_found'
+    assert any(
+        str(e.get('type') or '') == 'gate_failed'
+        and str(e.get('stage') or '') == 'discussion'
+        and str(e.get('reason') or '') == 'command_not_found'
+        for e in sink.events
+    )
+
+
+def test_workflow_blocks_when_author_implementation_runtime_fails(tmp_path: Path):
+    runner = FakeRunner([
+        _ok_result(),
+        _error_result('command_timeout provider=codex command=codex exec timeout_seconds=240'),
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-author-impl-fail',
+            title='Runtime fail',
+            description='author command times out in implementation',
+            author=parse_participant_id('codex#author-A'),
+            reviewers=[parse_participant_id('claude#review-B')],
+            evolution_level=0,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'failed_gate'
+    assert result.gate_reason == 'command_timeout'
+    assert any(
+        str(e.get('type') or '') == 'gate_failed'
+        and str(e.get('stage') or '') == 'implementation'
+        and str(e.get('reason') or '') == 'command_timeout'
+        for e in sink.events
+    )
 
 
 def test_workflow_emits_precompletion_checklist_event(tmp_path: Path):
@@ -1149,6 +1230,119 @@ def test_workflow_evolution_level_2_hard_fails_on_architecture_thresholds(tmp_pa
         and str(e.get('stage') or '') == 'architecture_audit'
         for e in sink.events
     )
+
+
+def test_workflow_architecture_thresholds_support_env_override(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv('AWE_ARCH_AUDIT_MODE', 'hard')
+    monkeypatch.setenv('AWE_ARCH_PYTHON_FILE_LINES_MAX', '20')
+    oversized = tmp_path / 'tiny_over_limit.py'
+    oversized.write_text('\n'.join(['x = 1'] * 25), encoding='utf-8')
+    runner = FakeRunner([
+        _ok_result(),
+        _ok_result(),
+        _ok_result(),
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-arch-env',
+            title='Architecture env override',
+            description='enforce custom threshold',
+            author=parse_participant_id('claude#author-A'),
+            reviewers=[parse_participant_id('codex#review-B')],
+            evolution_level=1,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'failed_gate'
+    assert result.gate_reason == 'architecture_threshold_exceeded'
+    audit = [e for e in sink.events if e.get('type') == 'architecture_audit'][-1]
+    assert int(audit.get('thresholds', {}).get('python_file_lines_max', 0)) == 20
+
+
+def test_workflow_architecture_audit_flags_cross_platform_script_gap(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv('AWE_ARCH_AUDIT_MODE', 'hard')
+    scripts = tmp_path / 'scripts'
+    scripts.mkdir(parents=True, exist_ok=True)
+    (scripts / 'start_api.ps1').write_text('Write-Host "start"', encoding='utf-8')
+    runner = FakeRunner([
+        _ok_result(),
+        _ok_result(),
+        _ok_result(),
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-arch-scripts',
+            title='Cross platform scripts',
+            description='detect script variant gap',
+            author=parse_participant_id('claude#author-A'),
+            reviewers=[parse_participant_id('codex#review-B')],
+            evolution_level=1,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'failed_gate'
+    audit = [e for e in sink.events if e.get('type') == 'architecture_audit'][-1]
+    assert any(str(v.get('kind') or '') == 'script_cross_platform_gap' for v in audit.get('violations', []))
+
+
+def test_workflow_architecture_audit_flags_runtimeerror_raises_in_adapter(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv('AWE_ARCH_AUDIT_MODE', 'hard')
+    src_dir = tmp_path / 'src' / 'awe_agentcheck'
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / 'adapters.py').write_text(
+        'def bad():\n'
+        '    raise RuntimeError("provider_limit provider=claude")\n',
+        encoding='utf-8',
+    )
+    runner = FakeRunner([
+        _ok_result(),
+        _ok_result(),
+        _ok_result(),
+    ])
+    executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)
+    sink = EventSink()
+    engine = WorkflowEngine(runner=runner, command_executor=executor)
+
+    result = engine.run(
+        RunConfig(
+            task_id='t-arch-adapter-raise',
+            title='Adapter runtime handling',
+            description='detect raw runtime raise behavior',
+            author=parse_participant_id('claude#author-A'),
+            reviewers=[parse_participant_id('codex#review-B')],
+            evolution_level=1,
+            evolve_until=None,
+            cwd=tmp_path,
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        ),
+        on_event=sink,
+    )
+
+    assert result.status == 'failed_gate'
+    audit = [e for e in sink.events if e.get('type') == 'architecture_audit'][-1]
+    assert any(str(v.get('kind') or '') == 'adapter_runtime_raise_detected' for v in audit.get('violations', []))
 
 
 def test_workflow_langgraph_backend_executes_classic_flow(tmp_path: Path):

@@ -143,6 +143,20 @@
 31. 新增静态资源路由：
    - `GET /web/assets/{asset_name}` 安全提供拆分后的 Dashboard 资源。
    - 通过 root-relative guard 防止路径穿越。
+32. 适配层运行时错误改为结构化返回（加固）：
+   - 已知 provider 运行失败（`command_not_found`、`command_timeout`、`provider_limit`、非零退出）不再直接 `RuntimeError` 中断，而是返回结构化结果。
+   - workflow/service 会按明确原因进入门禁流程，减少“空跑但不清晰”的状态。
+33. 作者阶段运行时失败升级为硬门禁：
+   - discussion/implementation 阶段若出现运行时失败，会立即以明确 gate reason 失败（如 `command_timeout`、`command_not_found`），避免后续状态漂移。
+34. 架构审计扩展为更全的硬规则覆盖 + 可配置阈值：
+   - 新增检查：`service_monolith_too_large`、`workflow_monolith_too_large`、`dashboard_monolith_too_large`、`prompt_assembly_hotspot`、`adapter_runtime_raise_detected`。
+   - 新增阈值环境变量：`AWE_ARCH_*`（文件行数、prompt 构建热点、adapter 运行时 raise 限制）。
+35. 新增 Linux/macOS shell 脚本：
+   - `scripts/start_api.sh`、`scripts/stop_api.sh`
+   - `scripts/start_overnight_until_7.sh`、`scripts/stop_overnight.sh`
+   - `scripts/supervise_until.sh`
+36. 新增 `.env.example`：
+   - 提供统一环境变量基线（运行时、provider 命令、API/融合策略、架构审计门禁阈值）。
 
 <br/>
 
@@ -306,6 +320,8 @@ queued → running → waiting_manual → (approve) → queued → running → p
 git clone https://github.com/cloveric/awe-agentforge.git
 cd awe-agentforge
 pip install -e .[dev]
+# 可选：复制环境变量模板后再按需修改
+cp .env.example .env
 ```
 
 ### 第 2 步：配置环境
@@ -326,6 +342,8 @@ $env:AWE_ARTIFACT_ROOT=".agents"
 $env:AWE_WORKFLOW_BACKEND="langgraph"
 ```
 
+也可以先复制 `.env.example`，再在当前 shell 中导出对应变量。
+
 <details>
 <summary><b>所有环境变量参考</b></summary>
 
@@ -337,29 +355,44 @@ $env:AWE_WORKFLOW_BACKEND="langgraph"
 | `AWE_CLAUDE_COMMAND` | `claude -p --dangerously-skip-permissions --effort low --model claude-opus-4-6` | Claude CLI 调用命令模板 |
 | `AWE_CODEX_COMMAND` | `codex exec --skip-git-repo-check ... -c model_reasoning_effort=xhigh` | Codex CLI 调用命令模板 |
 | `AWE_GEMINI_COMMAND` | `gemini --yolo` | Gemini CLI 调用命令模板 |
-| `AWE_PARTICIPANT_TIMEOUT_SECONDS` | `240` | 单个参与者（Claude/Codex/Gemini）每步最大运行秒数 |
+| `AWE_PARTICIPANT_TIMEOUT_SECONDS` | `3600` | 单个参与者（Claude/Codex/Gemini）每步最大运行秒数 |
 | `AWE_COMMAND_TIMEOUT_SECONDS` | `300` | 测试/lint 命令最大运行秒数 |
 | `AWE_PARTICIPANT_TIMEOUT_RETRIES` | `1` | 参与者超时后的重试次数 |
 | `AWE_MAX_CONCURRENT_RUNNING_TASKS` | `1` | 可同时运行的任务数量 |
 | `AWE_WORKFLOW_BACKEND` | `langgraph` | 工作流后端（推荐 `langgraph`，可回退 `classic`） |
 | `AWE_ARCH_AUDIT_MODE` | _(随 evolution level 自动)_ | 架构审计执行级别：`off`、`warn`、`hard` |
+| `AWE_ARCH_PYTHON_FILE_LINES_MAX` | `1200` | 架构审计中 Python 文件最大行数覆盖值 |
+| `AWE_ARCH_FRONTEND_FILE_LINES_MAX` | `2500` | 架构审计中前端文件最大行数覆盖值 |
+| `AWE_ARCH_RESPONSIBILITY_KEYWORDS_MAX` | `10` | 大型 Python 文件职责关键词命中上限 |
+| `AWE_ARCH_SERVICE_FILE_LINES_MAX` | `4500` | `src/awe_agentcheck/service.py` 行数上限 |
+| `AWE_ARCH_WORKFLOW_FILE_LINES_MAX` | `2600` | `src/awe_agentcheck/workflow.py` 行数上限 |
+| `AWE_ARCH_DASHBOARD_JS_LINES_MAX` | `3800` | `web/assets/dashboard.js` 行数上限 |
+| `AWE_ARCH_PROMPT_BUILDER_COUNT_MAX` | `14` | prompt 构建热点阈值 |
+| `AWE_ARCH_ADAPTER_RUNTIME_RAISE_MAX` | `0` | adapter 运行时路径允许的 `RuntimeError` 次数上限 |
 | `AWE_PROVIDER_ADAPTERS_JSON` | _(无)_ | 额外 provider 适配器 JSON 映射，例如 `{"qwen":"qwen-cli --yolo"}` |
 | `AWE_PROMOTION_GUARD_ENABLED` | `true` | 在自动融合/轮次晋升前启用 promotion guard 检查 |
 | `AWE_PROMOTION_ALLOWED_BRANCHES` | _(空)_ | 可选逗号分隔分支白名单（空表示不限制分支） |
 | `AWE_PROMOTION_REQUIRE_CLEAN` | `false` | guard 启用时是否要求 git 工作区干净 |
 | `AWE_SANDBOX_USE_PUBLIC_BASE` | `false` | 仅在显式设置为 `1/true` 时使用共享/公共沙盒根目录 |
+| `AWE_API_ALLOW_REMOTE` | `false` | 是否允许非 loopback 远程访问 API（默认仅本机） |
+| `AWE_API_TOKEN` | _(无)_ | API 鉴权 token（可选） |
+| `AWE_API_TOKEN_HEADER` | `Authorization` | API token 使用的请求头 |
 | `AWE_DRY_RUN` | `false` | 设为 `true` 时不实际调用参与者 |
 | `AWE_SERVICE_NAME` | `awe-agentcheck` | 可观测性中的服务名称 |
 | `AWE_OTEL_EXPORTER_OTLP_ENDPOINT` | _(无)_ | OpenTelemetry 收集器端点 |
 
 > [!NOTE]
-> 没有 `AWE_DATABASE_URL`（或 PostgreSQL 不可用）时，系统自动使用内存数据库。适合开发和测试，但重启后数据会丢失。
+> 若未设置 `AWE_DATABASE_URL` 且使用项目自带启动脚本，默认会落到本地 SQLite（`.agents/runtime/awe-agentcheck.sqlite3`），重启后历史可保留。仅在自定义启动路径下才可能退回内存数据库。
 </details>
 
 ### 第 3 步：启动 API 服务
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File "scripts/start_api.ps1" -ForceRestart
+```
+
+```bash
+bash scripts/start_api.sh --force-restart
 ```
 
 健康检查：
@@ -378,6 +411,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "scripts/start_api.ps1" -ForceRest
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File "scripts/stop_api.ps1"
+```
+
+```bash
+bash scripts/stop_api.sh
 ```
 
 ### 第 4 步：打开 Web 控制台

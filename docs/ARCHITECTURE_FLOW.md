@@ -88,6 +88,14 @@ Task-level strategy controls:
 - merge discipline hard gate:
   - auto-merge requires merge-target head SHA unchanged since task start
   - drift blocks fusion with `head_sha_mismatch`
+- architecture hard gate (configurable):
+  - `AWE_ARCH_AUDIT_MODE=off|warn|hard`
+  - expanded checks include:
+    - monolith size (`service.py`, `workflow.py`, `dashboard.js`)
+    - prompt assembly hotspot (`*_prompt` concentration)
+    - adapter runtime-raise policy (`adapter_runtime_raise_detected`)
+    - script cross-platform coverage (`.ps1` without matching `.sh`)
+  - thresholds are tunable via `AWE_ARCH_*` vars.
 - multi-round candidate mode:
   - when `max_rounds>1` and `auto_merge=0`, service enforces fresh sandbox isolation
   - per-round artifacts are captured at gate events (`round-N.patch`, `round-N.md`, round snapshots)
@@ -122,7 +130,7 @@ Task-level strategy controls:
 ## 4) Overnight Loop (auto-evolve)
 
 ```text
-start_overnight_until_7.ps1
+start_overnight_until_7.ps1 / start_overnight_until_7.sh
   -> start/reuse API
   -> launch overnight_autoevolve.py
       -> create auto-start task

@@ -351,7 +351,21 @@ class WorkflowEngine:
                             ),
                         )
                         review_text = str(debate_review.output or '').strip()
-                        usable = self._is_actionable_debate_review_text(review_text)
+                        runtime_reason = self._runtime_error_reason_from_result(debate_review)
+                        if runtime_reason:
+                            review_text = f'[debate_review_error] {runtime_reason}'
+                            usable = False
+                            emit(
+                                {
+                                    'type': 'debate_review_error',
+                                    'round': round_no,
+                                    'participant': reviewer.participant_id,
+                                    'provider': reviewer.provider,
+                                    'output': review_text,
+                                }
+                            )
+                        else:
+                            usable = self._is_actionable_debate_review_text(review_text)
                     except Exception as exc:
                         review_text = f'[debate_review_error] {str(exc or "review_failed").strip() or "review_failed"}'
                         usable = False
@@ -484,6 +498,17 @@ class WorkflowEngine:
                     'duration_seconds': discussion.duration_seconds,
                 }
             )
+            discussion_runtime_reason = self._runtime_error_reason_from_result(discussion)
+            if discussion_runtime_reason:
+                emit(
+                    {
+                        'type': 'gate_failed',
+                        'round': round_no,
+                        'reason': discussion_runtime_reason,
+                        'stage': 'discussion',
+                    }
+                )
+                return RunResult(status='failed_gate', rounds=round_no, gate_reason=discussion_runtime_reason)
             discussion_output = str(discussion.output or '').strip()
             if discussion_output:
                 implementation_context = discussion_output
@@ -555,6 +580,17 @@ class WorkflowEngine:
                     'duration_seconds': implementation.duration_seconds,
                 }
             )
+            implementation_runtime_reason = self._runtime_error_reason_from_result(implementation)
+            if implementation_runtime_reason:
+                emit(
+                    {
+                        'type': 'gate_failed',
+                        'round': round_no,
+                        'reason': implementation_runtime_reason,
+                        'stage': 'implementation',
+                    }
+                )
+                return RunResult(status='failed_gate', rounds=round_no, gate_reason=implementation_runtime_reason)
 
             if check_cancel():
                 emit({'type': 'canceled', 'round': round_no})
@@ -616,6 +652,30 @@ class WorkflowEngine:
                                 else None
                             ),
                         )
+                        runtime_reason = self._runtime_error_reason_from_result(review)
+                        if runtime_reason:
+                            emit(
+                                {
+                                    'type': 'review_error',
+                                    'round': round_no,
+                                    'participant': reviewer.participant_id,
+                                    'reason': runtime_reason,
+                                }
+                            )
+                            verdict = ReviewVerdict.UNKNOWN
+                            verdicts.append(verdict)
+                            review_outputs.append(f'[review_error] {runtime_reason}')
+                            emit(
+                                {
+                                    'type': 'review',
+                                    'round': round_no,
+                                    'participant': reviewer.participant_id,
+                                    'verdict': verdict.value,
+                                    'output': f'[review_error] {runtime_reason}',
+                                    'duration_seconds': review.duration_seconds,
+                                }
+                            )
+                            continue
                     except Exception as exc:
                         reason = str(exc or 'review_failed').strip() or 'review_failed'
                         emit(
@@ -1041,16 +1101,48 @@ class WorkflowEngine:
     def _architecture_thresholds_for_level(level: int) -> dict[str, int]:
         normalized = max(0, min(2, int(level)))
         if normalized >= 2:
-            return {
+            thresholds = {
                 'python_file_lines_max': 1000,
                 'frontend_file_lines_max': 2000,
                 'python_responsibility_keywords_max': 8,
+                'service_file_lines_max': 3500,
+                'workflow_file_lines_max': 2200,
+                'dashboard_js_lines_max': 3200,
+                'prompt_builder_count_max': 10,
+                'adapter_runtime_raise_max': 0,
             }
-        return {
+        else:
+            thresholds = {
             'python_file_lines_max': 1200,
             'frontend_file_lines_max': 2500,
             'python_responsibility_keywords_max': 10,
+            'service_file_lines_max': 4500,
+            'workflow_file_lines_max': 2600,
+            'dashboard_js_lines_max': 3800,
+            'prompt_builder_count_max': 14,
+            'adapter_runtime_raise_max': 0,
         }
+
+        env_map = {
+            'python_file_lines_max': ('AWE_ARCH_PYTHON_FILE_LINES_MAX', 10),
+            'frontend_file_lines_max': ('AWE_ARCH_FRONTEND_FILE_LINES_MAX', 10),
+            'python_responsibility_keywords_max': ('AWE_ARCH_RESPONSIBILITY_KEYWORDS_MAX', 1),
+            'service_file_lines_max': ('AWE_ARCH_SERVICE_FILE_LINES_MAX', 10),
+            'workflow_file_lines_max': ('AWE_ARCH_WORKFLOW_FILE_LINES_MAX', 10),
+            'dashboard_js_lines_max': ('AWE_ARCH_DASHBOARD_JS_LINES_MAX', 10),
+            'prompt_builder_count_max': ('AWE_ARCH_PROMPT_BUILDER_COUNT_MAX', 1),
+            'adapter_runtime_raise_max': ('AWE_ARCH_ADAPTER_RUNTIME_RAISE_MAX', 0),
+        }
+        for key, (env_name, minimum) in env_map.items():
+            raw = str(os.getenv(env_name, '') or '').strip()
+            if not raw:
+                continue
+            try:
+                parsed = int(raw)
+            except ValueError:
+                continue
+            thresholds[key] = max(minimum, parsed)
+        return thresholds
 
     @staticmethod
     def _run_architecture_audit(*, config: RunConfig) -> ArchitectureAuditResult:
@@ -1147,6 +1239,50 @@ class WorkflowEngine:
                                 'suggestion': 'Extract domain concerns into focused modules.',
                             }
                         )
+                if rel == 'src/awe_agentcheck/service.py' and line_count > int(thresholds['service_file_lines_max']):
+                    violations.append(
+                        {
+                            'kind': 'service_monolith_too_large',
+                            'path': rel,
+                            'lines': int(line_count),
+                            'limit': int(thresholds['service_file_lines_max']),
+                            'suggestion': 'Split service lifecycle/orchestration concerns into focused modules.',
+                        }
+                    )
+                if rel == 'src/awe_agentcheck/workflow.py' and line_count > int(thresholds['workflow_file_lines_max']):
+                    violations.append(
+                        {
+                            'kind': 'workflow_monolith_too_large',
+                            'path': rel,
+                            'lines': int(line_count),
+                            'limit': int(thresholds['workflow_file_lines_max']),
+                            'suggestion': 'Extract prompt/phase controllers into smaller workflow modules.',
+                        }
+                    )
+                if rel in {'src/awe_agentcheck/workflow.py', 'src/awe_agentcheck/service.py'} and ext == '.py':
+                    prompt_builder_hits = int(file_text.count('_prompt('))
+                    if prompt_builder_hits > int(thresholds['prompt_builder_count_max']):
+                        violations.append(
+                            {
+                                'kind': 'prompt_assembly_hotspot',
+                                'path': rel,
+                                'prompt_builder_hits': prompt_builder_hits,
+                                'limit': int(thresholds['prompt_builder_count_max']),
+                                'suggestion': 'Move prompt templates into dedicated files and compose with data-only bindings.',
+                            }
+                        )
+                if rel == 'src/awe_agentcheck/adapters.py':
+                    runtime_raise_hits = len(re.findall(r'raise\s+RuntimeError\s*\(', file_text))
+                    if runtime_raise_hits > int(thresholds['adapter_runtime_raise_max']):
+                        violations.append(
+                            {
+                                'kind': 'adapter_runtime_raise_detected',
+                                'path': rel,
+                                'runtime_raise_hits': int(runtime_raise_hits),
+                                'limit': int(thresholds['adapter_runtime_raise_max']),
+                                'suggestion': 'Return structured adapter errors and let workflow decide retry/fallback/gate.',
+                            }
+                        )
                 if ext in frontend_ext and line_count > int(thresholds['frontend_file_lines_max']):
                     violations.append(
                         {
@@ -1155,6 +1291,16 @@ class WorkflowEngine:
                             'lines': int(line_count),
                             'limit': int(thresholds['frontend_file_lines_max']),
                             'suggestion': 'Split UI into smaller files/components.',
+                        }
+                    )
+                if rel == 'web/assets/dashboard.js' and line_count > int(thresholds['dashboard_js_lines_max']):
+                    violations.append(
+                        {
+                            'kind': 'dashboard_monolith_too_large',
+                            'path': rel,
+                            'lines': int(line_count),
+                            'limit': int(thresholds['dashboard_js_lines_max']),
+                            'suggestion': 'Split dashboard runtime by panel/feature modules.',
                         }
                     )
 
@@ -1263,6 +1409,11 @@ class WorkflowEngine:
             return (
                 'Verification is repeating failures. Switch to test-first micro-fix: isolate one failing area, '
                 'change minimal files, rerun verification, then continue.'
+            )
+        if reason in {'command_timeout', 'command_not_found', 'command_not_configured', 'command_failed'}:
+            return (
+                'Agent runtime failed before producing reliable output. Fix CLI command/runtime configuration first, '
+                'then rerun with a minimal reproducible scope.'
             )
         if reason in {'review_blocker', 'review_unknown'}:
             return (
@@ -1750,7 +1901,45 @@ class WorkflowEngine:
             return False
         if 'provider_limit provider=' in lowered:
             return False
+        if 'command_not_found provider=' in lowered:
+            return False
+        if 'command_failed provider=' in lowered:
+            return False
+        if 'command_not_configured provider=' in lowered:
+            return False
         return True
+
+    @staticmethod
+    def _runtime_error_reason_from_text(text: str) -> str | None:
+        lowered = str(text or '').strip().lower()
+        if not lowered:
+            return None
+        if 'provider_limit provider=' in lowered:
+            return 'provider_limit'
+        if 'command_timeout provider=' in lowered:
+            return 'command_timeout'
+        if 'command_not_found provider=' in lowered:
+            return 'command_not_found'
+        if 'command_not_configured provider=' in lowered:
+            return 'command_not_configured'
+        if 'command_failed provider=' in lowered:
+            return 'command_failed'
+        return None
+
+    @staticmethod
+    def _runtime_error_reason_from_result(result: object) -> str | None:
+        output = str(getattr(result, 'output', '') or '').strip()
+        reason = WorkflowEngine._runtime_error_reason_from_text(output)
+        if reason:
+            return reason
+        returncode_raw = getattr(result, 'returncode', 0)
+        try:
+            returncode = int(returncode_raw)
+        except Exception:
+            returncode = 0
+        if returncode != 0:
+            return 'participant_runtime_error'
+        return None
 
     @staticmethod
     def _is_audit_discovery_task(config: RunConfig) -> bool:

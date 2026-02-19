@@ -1,5 +1,49 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-19, adapter structured errors + expanded architecture hard gate + cross-platform scripts)
+
+1. Adapter runtime failure handling is now structured instead of hard-raising:
+   - `ParticipantRunner.run` now returns `AdapterResult(verdict=unknown, next_action=stop, returncode=2)` for known runtime failures:
+     - `command_not_configured`
+     - `command_not_found`
+     - `command_timeout`
+     - `provider_limit`
+     - `command_failed` (non-zero process exit)
+   - keeps reason text in `output` for deterministic downstream gating/analytics buckets.
+2. Workflow now hard-gates author runtime failures by phase:
+   - if discussion/implementation returns runtime-failure result, workflow exits `failed_gate` with explicit reason (`command_timeout`, `command_not_found`, etc.).
+   - reviewer runtime-failure results (non-exception path) now emit `review_error` and downgrade verdict to `unknown`.
+3. Architecture audit hard-rule coverage expanded:
+   - new violation kinds:
+     - `service_monolith_too_large`
+     - `workflow_monolith_too_large`
+     - `dashboard_monolith_too_large`
+     - `prompt_assembly_hotspot`
+     - `adapter_runtime_raise_detected`
+   - new env overrides:
+     - `AWE_ARCH_PYTHON_FILE_LINES_MAX`
+     - `AWE_ARCH_FRONTEND_FILE_LINES_MAX`
+     - `AWE_ARCH_RESPONSIBILITY_KEYWORDS_MAX`
+     - `AWE_ARCH_SERVICE_FILE_LINES_MAX`
+     - `AWE_ARCH_WORKFLOW_FILE_LINES_MAX`
+     - `AWE_ARCH_DASHBOARD_JS_LINES_MAX`
+     - `AWE_ARCH_PROMPT_BUILDER_COUNT_MAX`
+     - `AWE_ARCH_ADAPTER_RUNTIME_RAISE_MAX`
+4. Cross-platform script coverage implemented:
+   - added shell equivalents:
+     - `scripts/start_api.sh`, `scripts/stop_api.sh`
+     - `scripts/start_overnight_until_7.sh`, `scripts/stop_overnight.sh`
+     - `scripts/supervise_until.sh`
+   - added `.env.example` as centralized env baseline for runtime/policy/audit vars.
+5. Tests added/updated:
+   - `tests/unit/test_adapters.py`: runtime failures now assert structured results instead of exceptions.
+   - `tests/unit/test_workflow.py`: added author runtime hard-gate tests + architecture env-override/script-gap/adapter-raise coverage.
+6. Verification:
+   - `py -m ruff check src tests/unit scripts`
+   - `py -m pytest tests/unit/test_adapters.py tests/unit/test_workflow.py -q`
+   - `py -m pytest tests/unit/test_service.py -q`
+   - `py -m pytest tests/unit -q`
+
 ## Update (2026-02-19, reviewer-json + architecture-audit + registry + split-web + langgraph-nodes)
 
 1. Reviewer control parsing hardened (P0):

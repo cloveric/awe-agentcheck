@@ -242,7 +242,10 @@ class ParticipantRunner:
         provider = str(participant.provider or '').strip().lower()
         command = self.commands.get(provider)
         if not command:
-            raise ValueError(f'no command configured for provider: {provider}')
+            return self._runtime_error_result(
+                reason=f'command_not_configured provider={provider}',
+                duration_seconds=0.0,
+            )
         provider_spec = dict(self.provider_registry.get(provider) or {})
 
         argv = self._build_argv(
@@ -305,9 +308,11 @@ class ParticipantRunner:
                     )
                 break
             except FileNotFoundError as exc:
-                raise RuntimeError(
-                    f'command_not_found provider={provider} command={effective_command}'
-                ) from exc
+                _ = exc
+                return self._runtime_error_result(
+                    reason=f'command_not_found provider={provider} command={effective_command}',
+                    duration_seconds=(time.monotonic() - started),
+                )
             except subprocess.TimeoutExpired as exc:
                 last_timeout = exc
                 if attempt >= attempts:
@@ -320,9 +325,11 @@ class ParticipantRunner:
                 f'command_timeout provider={provider} command={effective_command} '
                 f'timeout_seconds={timeout_seconds} attempts={attempts} attempts_made={attempts_made}'
             )
-            if last_timeout is not None:
-                raise RuntimeError(reason) from last_timeout
-            raise RuntimeError(reason)
+            _ = last_timeout
+            return self._runtime_error_result(
+                reason=reason,
+                duration_seconds=(time.monotonic() - started),
+            )
         assert completed is not None
         elapsed = time.monotonic() - started
 
@@ -332,7 +339,18 @@ class ParticipantRunner:
             output = '\n'.join([p for p in [output, stderr] if p]).strip()
 
         if self._is_provider_limit_output(output):
-            raise RuntimeError(f'provider_limit provider={provider} command={effective_command}')
+            return self._runtime_error_result(
+                reason=f'provider_limit provider={provider} command={effective_command}',
+                duration_seconds=elapsed,
+            )
+        if completed.returncode != 0:
+            return self._runtime_error_result(
+                reason=(
+                    f'command_failed provider={provider} command={effective_command} '
+                    f'returncode={completed.returncode}'
+                ),
+                duration_seconds=elapsed,
+            )
 
         verdict = parse_verdict(output)
         next_action = parse_next_action(output)
@@ -344,6 +362,17 @@ class ParticipantRunner:
             next_action=next_action,
             returncode=completed.returncode,
             duration_seconds=elapsed,
+        )
+
+    @staticmethod
+    def _runtime_error_result(*, reason: str, duration_seconds: float) -> AdapterResult:
+        text = str(reason or '').strip() or 'adapter_runtime_error'
+        return AdapterResult(
+            output=text,
+            verdict='unknown',
+            next_action='stop',
+            returncode=2,
+            duration_seconds=max(0.0, float(duration_seconds)),
         )
 
     @staticmethod

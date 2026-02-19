@@ -4893,6 +4893,10 @@ class OrchestratorService:
             return False
         if 'command_not_found provider=' in lowered:
             return False
+        if 'command_failed provider=' in lowered:
+            return False
+        if 'command_not_configured provider=' in lowered:
+            return False
         return True
 
     @staticmethod

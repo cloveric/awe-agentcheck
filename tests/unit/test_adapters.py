@@ -60,12 +60,14 @@ def test_participant_runner_dry_run_returns_simulated_output(tmp_path: Path):
 
 def test_participant_runner_reports_command_not_found_with_provider_context(tmp_path: Path):
     runner = ParticipantRunner(command_overrides={'claude': 'this_binary_should_not_exist_12345'}, dry_run=False)
-    with pytest.raises(RuntimeError, match='command_not_found'):
-        runner.run(
-            participant=parse_participant_id('claude#author-A'),
-            prompt='hello',
-            cwd=tmp_path,
-        )
+    result = runner.run(
+        participant=parse_participant_id('claude#author-A'),
+        prompt='hello',
+        cwd=tmp_path,
+    )
+    assert result.returncode != 0
+    assert result.verdict == 'unknown'
+    assert 'command_not_found provider=claude' in result.output
 
 
 def test_participant_runner_retries_once_on_timeout_and_succeeds(tmp_path: Path, monkeypatch):
@@ -91,7 +93,7 @@ def test_participant_runner_retries_once_on_timeout_and_succeeds(tmp_path: Path,
     assert len(calls['inputs'][1]) < len(calls['inputs'][0])
 
 
-def test_participant_runner_raises_timeout_after_retries_exhausted(tmp_path: Path, monkeypatch):
+def test_participant_runner_returns_timeout_result_after_retries_exhausted(tmp_path: Path, monkeypatch):
     calls = {'n': 0}
 
     def fake_run(*args, **kwargs):
@@ -100,13 +102,15 @@ def test_participant_runner_raises_timeout_after_retries_exhausted(tmp_path: Pat
 
     monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
     runner = ParticipantRunner(command_overrides={'claude': 'claude -p'}, dry_run=False, timeout_retries=1)
-    with pytest.raises(RuntimeError, match='command_timeout'):
-        runner.run(
-            participant=parse_participant_id('claude#author-A'),
-            prompt='hello',
-            cwd=tmp_path,
-            timeout_seconds=1,
-        )
+    result = runner.run(
+        participant=parse_participant_id('claude#author-A'),
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=1,
+    )
+    assert result.returncode != 0
+    assert result.verdict == 'unknown'
+    assert 'command_timeout provider=claude' in result.output
     assert calls['n'] == 2
 
 
@@ -133,14 +137,16 @@ def test_participant_runner_stops_retry_when_total_timeout_budget_is_exhausted(t
     monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
     runner = ParticipantRunner(command_overrides={'claude': 'claude -p'}, dry_run=False, timeout_retries=1)
 
-    with pytest.raises(RuntimeError, match='command_timeout'):
-        runner.run(
-            participant=parse_participant_id('claude#author-A'),
-            prompt='hello',
-            cwd=tmp_path,
-            timeout_seconds=4,
-        )
+    result = runner.run(
+        participant=parse_participant_id('claude#author-A'),
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=4,
+    )
 
+    assert result.returncode != 0
+    assert result.verdict == 'unknown'
+    assert 'command_timeout provider=claude' in result.output
     assert calls['n'] == 1
     assert calls['timeouts'] == [pytest.approx(2.0)]
 
@@ -193,7 +199,7 @@ def test_participant_runner_keeps_retry_slice_when_backoff_would_consume_budget(
     assert sleeps[0] <= 0.05 + 1e-9
 
 
-def test_participant_runner_raises_provider_limit_when_cli_reports_quota_message(tmp_path: Path, monkeypatch):
+def test_participant_runner_returns_provider_limit_result_when_cli_reports_quota_message(tmp_path: Path, monkeypatch):
     def fake_run(*args, **kwargs):
         return subprocess.CompletedProcess(
             args=['claude'],
@@ -204,13 +210,15 @@ def test_participant_runner_raises_provider_limit_when_cli_reports_quota_message
 
     monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
     runner = ParticipantRunner(command_overrides={'claude': 'claude -p'}, dry_run=False)
-    with pytest.raises(RuntimeError, match='provider_limit'):
-        runner.run(
-            participant=parse_participant_id('claude#author-A'),
-            prompt='hello',
-            cwd=tmp_path,
-            timeout_seconds=1,
-        )
+    result = runner.run(
+        participant=parse_participant_id('claude#author-A'),
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=1,
+    )
+    assert result.returncode != 0
+    assert result.verdict == 'unknown'
+    assert 'provider_limit provider=claude' in result.output
 
 
 @pytest.mark.parametrize(
@@ -403,14 +411,16 @@ def test_participant_runner_detects_gemini_capacity_output_as_provider_limit(tmp
 
     monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
     runner = ParticipantRunner(command_overrides={'gemini': 'gemini --approval-mode yolo'}, dry_run=False)
-    with pytest.raises(RuntimeError, match='provider_limit'):
-        runner.run(
-            participant=parse_participant_id('gemini#review-B'),
-            prompt='hello',
-            cwd=tmp_path,
-            timeout_seconds=1,
-            model='gemini-3-pro-preview',
-        )
+    result = runner.run(
+        participant=parse_participant_id('gemini#review-B'),
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=1,
+        model='gemini-3-pro-preview',
+    )
+    assert result.returncode != 0
+    assert result.verdict == 'unknown'
+    assert 'provider_limit provider=gemini' in result.output
 
 
 def test_participant_runner_resolves_executable_with_shutil_which(tmp_path: Path, monkeypatch):

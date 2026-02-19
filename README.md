@@ -143,6 +143,20 @@
 31. Added explicit static asset serving route:
    - `GET /web/assets/{asset_name}` now serves split dashboard resources safely.
    - path traversal is blocked by root-relative guard checks.
+32. Adapter runtime handling is now structured (hardening):
+   - known provider/runtime failures (`command_not_found`, `command_timeout`, `provider_limit`, non-zero command failures) return structured adapter results instead of raising `RuntimeError` directly.
+   - workflow/service now gate on those reasons deterministically (less silent empty-run behavior).
+33. Author runtime errors are now hard-gated at phase boundary:
+   - discussion/implementation phase runtime failures now fail fast with explicit gate reasons (`command_timeout`, `command_not_found`, etc.) instead of drifting into ambiguous downstream states.
+34. Architecture audit now has broader hard-rule coverage and configurable thresholds:
+   - new checks: `service_monolith_too_large`, `workflow_monolith_too_large`, `dashboard_monolith_too_large`, `prompt_assembly_hotspot`, `adapter_runtime_raise_detected`.
+   - new env thresholds: `AWE_ARCH_*` (file-line limits, prompt-builder limit, adapter-runtime-raise limit).
+35. Added cross-platform shell script set (Linux/macOS):
+   - `scripts/start_api.sh`, `scripts/stop_api.sh`
+   - `scripts/start_overnight_until_7.sh`, `scripts/stop_overnight.sh`
+   - `scripts/supervise_until.sh`
+36. Added `.env.example`:
+   - centralized baseline for core runtime, provider commands, API/promotion policy, and architecture-audit hard-gate thresholds.
 
 <br/>
 
@@ -306,6 +320,8 @@ queued → running → waiting_manual → (approve) → queued → running → p
 git clone https://github.com/cloveric/awe-agentforge.git
 cd awe-agentforge
 pip install -e .[dev]
+# Optional: copy baseline env and adjust
+cp .env.example .env
 ```
 
 ### Step 2: Configure Environment
@@ -326,6 +342,8 @@ $env:AWE_ARTIFACT_ROOT=".agents"
 $env:AWE_WORKFLOW_BACKEND="langgraph"
 ```
 
+Or use `.env.example` as a starter and export the values in your shell.
+
 <details>
 <summary><b>All environment variables reference</b></summary>
 
@@ -337,29 +355,44 @@ $env:AWE_WORKFLOW_BACKEND="langgraph"
 | `AWE_CLAUDE_COMMAND` | `claude -p --dangerously-skip-permissions --effort low --model claude-opus-4-6` | Command template for invoking Claude CLI |
 | `AWE_CODEX_COMMAND` | `codex exec --skip-git-repo-check ... -c model_reasoning_effort=xhigh` | Command template for invoking Codex CLI |
 | `AWE_GEMINI_COMMAND` | `gemini --yolo` | Command template for invoking Gemini CLI |
-| `AWE_PARTICIPANT_TIMEOUT_SECONDS` | `240` | Max seconds a single participant (Claude/Codex/Gemini) can run per step |
+| `AWE_PARTICIPANT_TIMEOUT_SECONDS` | `3600` | Max seconds a single participant (Claude/Codex/Gemini) can run per step |
 | `AWE_COMMAND_TIMEOUT_SECONDS` | `300` | Max seconds for test/lint commands |
 | `AWE_PARTICIPANT_TIMEOUT_RETRIES` | `1` | Retry count when a participant times out |
 | `AWE_MAX_CONCURRENT_RUNNING_TASKS` | `1` | How many tasks can run simultaneously |
 | `AWE_WORKFLOW_BACKEND` | `langgraph` | Workflow backend (`langgraph` preferred, `classic` fallback) |
 | `AWE_ARCH_AUDIT_MODE` | _(auto by evolution level)_ | Architecture audit enforcement mode: `off`, `warn`, `hard` |
+| `AWE_ARCH_PYTHON_FILE_LINES_MAX` | `1200` | Override max lines for a Python file in architecture audit |
+| `AWE_ARCH_FRONTEND_FILE_LINES_MAX` | `2500` | Override max lines for frontend files in architecture audit |
+| `AWE_ARCH_RESPONSIBILITY_KEYWORDS_MAX` | `10` | Override mixed-responsibility keyword threshold for large Python files |
+| `AWE_ARCH_SERVICE_FILE_LINES_MAX` | `4500` | Override max lines for `src/awe_agentcheck/service.py` |
+| `AWE_ARCH_WORKFLOW_FILE_LINES_MAX` | `2600` | Override max lines for `src/awe_agentcheck/workflow.py` |
+| `AWE_ARCH_DASHBOARD_JS_LINES_MAX` | `3800` | Override max lines for `web/assets/dashboard.js` |
+| `AWE_ARCH_PROMPT_BUILDER_COUNT_MAX` | `14` | Override prompt-builder hotspot threshold |
+| `AWE_ARCH_ADAPTER_RUNTIME_RAISE_MAX` | `0` | Max allowed raw `RuntimeError` raises in adapter runtime path |
 | `AWE_PROVIDER_ADAPTERS_JSON` | _(none)_ | JSON map for extra providers, e.g. `{"qwen":"qwen-cli --yolo"}` |
 | `AWE_PROMOTION_GUARD_ENABLED` | `true` | Enable promotion guard checks before auto-merge/promote-round |
 | `AWE_PROMOTION_ALLOWED_BRANCHES` | _(empty)_ | Optional comma-separated allowed branches (empty = allow any branch) |
 | `AWE_PROMOTION_REQUIRE_CLEAN` | `false` | Require clean git worktree for promotion when guard is enabled |
 | `AWE_SANDBOX_USE_PUBLIC_BASE` | `false` | Use shared/public sandbox root only when explicitly set to `1/true` |
+| `AWE_API_ALLOW_REMOTE` | `false` | Allow non-loopback API access (`false` keeps local-only default) |
+| `AWE_API_TOKEN` | _(none)_ | Optional bearer token for API protection |
+| `AWE_API_TOKEN_HEADER` | `Authorization` | Header name used for API token validation |
 | `AWE_DRY_RUN` | `false` | When `true`, participants are not actually invoked |
 | `AWE_SERVICE_NAME` | `awe-agentcheck` | Service name for observability |
 | `AWE_OTEL_EXPORTER_OTLP_ENDPOINT` | _(none)_ | OpenTelemetry collector endpoint |
 
 > [!NOTE]
-> Without `AWE_DATABASE_URL` (or when PostgreSQL is down), the system automatically uses an in-memory database. This is fine for development and testing, but data is lost on restart.
+> If `AWE_DATABASE_URL` is unset and you start via provided scripts, runtime defaults to local SQLite (`.agents/runtime/awe-agentcheck.sqlite3`) so history survives restarts. Direct custom startup paths may still choose in-memory fallback.
 </details>
 
 ### Step 3: Start the API Server
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File "scripts/start_api.ps1" -ForceRestart
+```
+
+```bash
+bash scripts/start_api.sh --force-restart
 ```
 
 Health check:
@@ -378,6 +411,10 @@ Stop API safely:
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File "scripts/stop_api.ps1"
+```
+
+```bash
+bash scripts/stop_api.sh
 ```
 
 ### Step 4: Open the Web Monitor

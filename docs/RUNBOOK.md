@@ -18,6 +18,18 @@ $env:PYTHONPATH="C:/Users/hangw/awe-agentcheck/src"
 pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_api.ps1" -ForceRestart
 ```
 
+Linux/macOS equivalent:
+
+```bash
+cd /path/to/awe-agentforge
+pip install -e .[dev]
+export PYTHONPATH="src"
+export AWE_DRY_RUN="true"
+export AWE_DATABASE_URL="sqlite+pysqlite:///./.agents/runtime/awe-agentcheck.sqlite3"
+export AWE_ARTIFACT_ROOT=".agents"
+bash scripts/start_api.sh --force-restart
+```
+
 If PostgreSQL is unavailable, `start_api.ps1` defaults to local persistent SQLite (`.agents/runtime/awe-agentcheck.sqlite3`) so task history survives restarts.
 
 Health check:
@@ -33,13 +45,22 @@ $env:AWE_DRY_RUN="false"
 $env:AWE_CLAUDE_COMMAND="claude -p --dangerously-skip-permissions --effort low --model claude-opus-4-6"
 $env:AWE_CODEX_COMMAND="codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh"
 $env:AWE_GEMINI_COMMAND="gemini --yolo"
-$env:AWE_PARTICIPANT_TIMEOUT_SECONDS="240"
+$env:AWE_PARTICIPANT_TIMEOUT_SECONDS="3600"
 $env:AWE_COMMAND_TIMEOUT_SECONDS="300"
 $env:AWE_PARTICIPANT_TIMEOUT_RETRIES="1"
 $env:AWE_MAX_CONCURRENT_RUNNING_TASKS="1"
 $env:AWE_WORKFLOW_BACKEND="langgraph"
 # Optional: architecture audit enforcement (off|warn|hard). Default follows evolution level.
 $env:AWE_ARCH_AUDIT_MODE=""
+# Optional: architecture audit threshold overrides
+$env:AWE_ARCH_PYTHON_FILE_LINES_MAX="1200"
+$env:AWE_ARCH_FRONTEND_FILE_LINES_MAX="2500"
+$env:AWE_ARCH_RESPONSIBILITY_KEYWORDS_MAX="10"
+$env:AWE_ARCH_SERVICE_FILE_LINES_MAX="4500"
+$env:AWE_ARCH_WORKFLOW_FILE_LINES_MAX="2600"
+$env:AWE_ARCH_DASHBOARD_JS_LINES_MAX="3800"
+$env:AWE_ARCH_PROMPT_BUILDER_COUNT_MAX="14"
+$env:AWE_ARCH_ADAPTER_RUNTIME_RAISE_MAX="0"
 $env:AWE_PROMOTION_GUARD_ENABLED="true"
 $env:AWE_PROMOTION_ALLOWED_BRANCHES=""
 $env:AWE_PROMOTION_REQUIRE_CLEAN="false"
@@ -55,10 +76,18 @@ Then restart API with:
 pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_api.ps1" -ForceRestart
 ```
 
+```bash
+bash scripts/start_api.sh --force-restart
+```
+
 Stop API with:
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/stop_api.ps1"
+```
+
+```bash
+bash scripts/stop_api.sh
 ```
 
 If you see `Unable to connect` on `127.0.0.1:8000`, it means API is not listening yet (or startup failed). Use:
@@ -67,6 +96,13 @@ If you see `Unable to connect` on `127.0.0.1:8000`, it means API is not listenin
 pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/start_api.ps1" -ForceRestart
 pwsh -NoProfile -ExecutionPolicy Bypass -File "C:/Users/hangw/awe-agentcheck/scripts/stop_api.ps1"
 ```
+
+Cross-platform helper scripts available:
+1. `scripts/start_api.sh`
+2. `scripts/stop_api.sh`
+3. `scripts/start_overnight_until_7.sh`
+4. `scripts/stop_overnight.sh`
+5. `scripts/supervise_until.sh`
 
 ## 3) Create and run task by CLI
 
