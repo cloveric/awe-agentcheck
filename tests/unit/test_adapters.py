@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import pytest
 import subprocess
@@ -406,10 +407,36 @@ def test_participant_runner_resolves_executable_with_shutil_which(tmp_path: Path
     assert captured['argv'][0].lower().endswith('codex.cmd')
 
 
+def test_participant_runner_prefers_workspace_src_in_pythonpath(tmp_path: Path, monkeypatch):
+    captured = {'env': None}
+    workspace_src = (tmp_path / 'src').resolve()
+    workspace_src.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('PYTHONPATH', os.pathsep.join([r'C:\Users\hangw\awe-agentcheck\src', r'C:\shared\python']))
+
+    def fake_run(argv, **kwargs):
+        captured['env'] = dict(kwargs.get('env') or {})
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout='VERDICT: NO_BLOCKER', stderr='')
+
+    monkeypatch.setattr('awe_agentcheck.adapters.subprocess.run', fake_run)
+    runner = ParticipantRunner(command_overrides={'claude': 'claude -p'}, dry_run=False)
+    runner.run(
+        participant=parse_participant_id('claude#author-A'),
+        prompt='hello',
+        cwd=tmp_path,
+        timeout_seconds=1,
+    )
+
+    py_path = str(captured['env'].get('PYTHONPATH') or '')
+    parts = [p for p in py_path.split(os.pathsep) if p]
+    assert parts
+    assert parts[0] == str(workspace_src)
+    assert all(not p.replace('\\', '/').lower().endswith('/awe-agentcheck/src') for p in parts[1:])
+
+
 def test_participant_runner_stream_callback_receives_chunks(tmp_path: Path, monkeypatch):
     captured = []
 
-    def fake_streaming(*, argv, runtime_input, cwd, timeout_seconds, on_stream):
+    def fake_streaming(*, argv, runtime_input, cwd, timeout_seconds, on_stream, env=None):
         on_stream('stdout', 'line-1\n')
         on_stream('stderr', 'warn-1\n')
         return subprocess.CompletedProcess(
@@ -448,7 +475,7 @@ def test_participant_runner_streaming_timeout_retry_shares_budget_and_adds_backo
         sleeps.append(float(seconds))
         clock['now'] += float(seconds)
 
-    def fake_streaming(*, argv, runtime_input, cwd, timeout_seconds, on_stream):
+    def fake_streaming(*, argv, runtime_input, cwd, timeout_seconds, on_stream, env=None):
         calls['n'] += 1
         calls['timeouts'].append(float(timeout_seconds))
         calls['inputs'].append(runtime_input)

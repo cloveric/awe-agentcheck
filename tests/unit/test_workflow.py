@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 import subprocess
 
@@ -493,6 +494,31 @@ def test_shell_command_executor_uses_shell_false(monkeypatch, tmp_path: Path):
     assert result.ok is True
     assert captured['argv'] == ['py', '-m', 'pytest', '-q']
     assert captured['kwargs']['shell'] is False
+
+
+def test_shell_command_executor_prefers_workspace_src_in_pythonpath(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+    workspace_src = (tmp_path / 'src').resolve()
+    workspace_src.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('PYTHONPATH', os.pathsep.join([r'C:\Users\hangw\awe-agentcheck\src', r'C:\shared\python']))
+
+    def fake_run(argv, **kwargs):
+        captured['argv'] = argv
+        captured['kwargs'] = kwargs
+        return subprocess.CompletedProcess(argv, 0, stdout='ok', stderr='')
+
+    monkeypatch.setattr('awe_agentcheck.workflow.subprocess.run', fake_run)
+    executor = ShellCommandExecutor()
+
+    result = executor.run(['py', '-m', 'pytest', '-q'], cwd=tmp_path, timeout_seconds=10)
+
+    assert result.ok is True
+    env = dict(captured['kwargs'].get('env') or {})
+    py_path = str(env.get('PYTHONPATH') or '')
+    parts = [p for p in py_path.split(os.pathsep) if p]
+    assert parts
+    assert parts[0] == str(workspace_src)
+    assert all(not p.replace('\\', '/').lower().endswith('/awe-agentcheck/src') for p in parts[1:])
 
 
 def test_shell_command_executor_treats_shell_metachar_as_literal(monkeypatch, tmp_path: Path):

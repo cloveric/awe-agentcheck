@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import time
 from typing import Iterator
 from uuid import uuid4
 
@@ -22,7 +23,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 from awe_agentcheck.repository import decode_task_meta, encode_task_meta
@@ -88,8 +89,16 @@ class TaskEventCounterEntity(Base):
 
 class Database:
     def __init__(self, url: str):
-        self.engine = create_engine(url, future=True)
+        engine_kwargs: dict[str, object] = {
+            'future': True,
+        }
+        if str(url or '').strip().lower().startswith('sqlite'):
+            # Improve sqlite writer stability under concurrent API/task traffic.
+            engine_kwargs['connect_args'] = {'check_same_thread': False, 'timeout': 30}
+        self.engine = create_engine(url, **engine_kwargs)
         self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False, class_=Session)
+        if self.engine.dialect.name == 'sqlite':
+            self._configure_sqlite_pragmas()
 
     def create_schema(self) -> None:
         Base.metadata.create_all(self.engine)
@@ -106,10 +115,30 @@ class Database:
         finally:
             session.close()
 
+    def _configure_sqlite_pragmas(self) -> None:
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql('PRAGMA journal_mode=WAL')
+            conn.exec_driver_sql('PRAGMA synchronous=NORMAL')
+            conn.exec_driver_sql('PRAGMA foreign_keys=ON')
+            conn.exec_driver_sql('PRAGMA busy_timeout=30000')
+
 
 class SqlTaskRepository:
     def __init__(self, db: Database):
         self.db = db
+
+    def _sqlite_lock_retry_attempts(self) -> int:
+        return 8 if self.db.engine.dialect.name == 'sqlite' else 1
+
+    @staticmethod
+    def _is_sqlite_lock_error(exc: Exception) -> bool:
+        text = str(exc or '').lower()
+        return 'database is locked' in text or 'database table is locked' in text
+
+    @staticmethod
+    def _sqlite_lock_backoff_seconds(attempt: int) -> float:
+        # Small exponential backoff capped to keep API responsive.
+        return min(0.2, 0.02 * (2 ** max(0, int(attempt) - 1)))
 
     def create_task(
         self,
@@ -205,18 +234,26 @@ class SqlTaskRepository:
         reason: str | None,
         rounds_completed: int | None = None,
     ) -> dict:
-        with self.db.session() as session:
-            row = session.get(TaskEntity, task_id)
-            if row is None:
-                raise KeyError(task_id)
-            row.status = status
-            row.last_gate_reason = reason
-            if rounds_completed is not None:
-                row.rounds_completed = int(rounds_completed)
-            row.updated_at = datetime.now(timezone.utc)
-            session.add(row)
-            session.flush()
-            return self._task_to_dict(row)
+        attempts = self._sqlite_lock_retry_attempts()
+        for attempt in range(1, attempts + 1):
+            try:
+                with self.db.session() as session:
+                    row = session.get(TaskEntity, task_id)
+                    if row is None:
+                        raise KeyError(task_id)
+                    row.status = status
+                    row.last_gate_reason = reason
+                    if rounds_completed is not None:
+                        row.rounds_completed = int(rounds_completed)
+                    row.updated_at = datetime.now(timezone.utc)
+                    session.add(row)
+                    session.flush()
+                    return self._task_to_dict(row)
+            except OperationalError as exc:
+                if (not self._is_sqlite_lock_error(exc)) or attempt >= attempts:
+                    raise
+                time.sleep(self._sqlite_lock_backoff_seconds(attempt))
+        raise RuntimeError('update_task_status_retry_exhausted')
 
     def update_task_status_if(
         self,
@@ -228,55 +265,79 @@ class SqlTaskRepository:
         rounds_completed: int | None = None,
         set_cancel_requested: bool | None = None,
     ) -> dict | None:
-        now = datetime.now(timezone.utc)
-        with self.db.session() as session:
-            values: dict[str, object] = {
-                'status': status,
-                'last_gate_reason': reason,
-                'updated_at': now,
-            }
-            if rounds_completed is not None:
-                values['rounds_completed'] = int(rounds_completed)
-            if set_cancel_requested is not None:
-                values['cancel_requested'] = bool(set_cancel_requested)
+        attempts = self._sqlite_lock_retry_attempts()
+        for attempt in range(1, attempts + 1):
+            try:
+                now = datetime.now(timezone.utc)
+                with self.db.session() as session:
+                    values: dict[str, object] = {
+                        'status': status,
+                        'last_gate_reason': reason,
+                        'updated_at': now,
+                    }
+                    if rounds_completed is not None:
+                        values['rounds_completed'] = int(rounds_completed)
+                    if set_cancel_requested is not None:
+                        values['cancel_requested'] = bool(set_cancel_requested)
 
-            result = session.execute(
-                update(TaskEntity)
-                .where(
-                    TaskEntity.task_id == task_id,
-                    TaskEntity.status == expected_status,
-                )
-                .values(**values)
-            )
-            session.flush()
-            if int(result.rowcount or 0) == 0:
-                existing = session.get(TaskEntity, task_id)
-                if existing is None:
-                    raise KeyError(task_id)
-                return None
+                    result = session.execute(
+                        update(TaskEntity)
+                        .where(
+                            TaskEntity.task_id == task_id,
+                            TaskEntity.status == expected_status,
+                        )
+                        .values(**values)
+                    )
+                    session.flush()
+                    if int(result.rowcount or 0) == 0:
+                        existing = session.get(TaskEntity, task_id)
+                        if existing is None:
+                            raise KeyError(task_id)
+                        return None
 
-            row = session.get(TaskEntity, task_id)
-            if row is None:
-                raise KeyError(task_id)
-            return self._task_to_dict(row)
+                    row = session.get(TaskEntity, task_id)
+                    if row is None:
+                        raise KeyError(task_id)
+                    return self._task_to_dict(row)
+            except OperationalError as exc:
+                if (not self._is_sqlite_lock_error(exc)) or attempt >= attempts:
+                    raise
+                time.sleep(self._sqlite_lock_backoff_seconds(attempt))
+        raise RuntimeError('update_task_status_if_retry_exhausted')
 
     def set_cancel_requested(self, task_id: str, *, requested: bool) -> dict:
-        with self.db.session() as session:
-            row = session.get(TaskEntity, task_id)
-            if row is None:
-                raise KeyError(task_id)
-            row.cancel_requested = bool(requested)
-            row.updated_at = datetime.now(timezone.utc)
-            session.add(row)
-            session.flush()
-            return self._task_to_dict(row)
+        attempts = self._sqlite_lock_retry_attempts()
+        for attempt in range(1, attempts + 1):
+            try:
+                with self.db.session() as session:
+                    row = session.get(TaskEntity, task_id)
+                    if row is None:
+                        raise KeyError(task_id)
+                    row.cancel_requested = bool(requested)
+                    row.updated_at = datetime.now(timezone.utc)
+                    session.add(row)
+                    session.flush()
+                    return self._task_to_dict(row)
+            except OperationalError as exc:
+                if (not self._is_sqlite_lock_error(exc)) or attempt >= attempts:
+                    raise
+                time.sleep(self._sqlite_lock_backoff_seconds(attempt))
+        raise RuntimeError('set_cancel_requested_retry_exhausted')
 
     def is_cancel_requested(self, task_id: str) -> bool:
-        with self.db.session() as session:
-            row = session.get(TaskEntity, task_id)
-            if row is None:
-                raise KeyError(task_id)
-            return bool(row.cancel_requested)
+        attempts = self._sqlite_lock_retry_attempts()
+        for attempt in range(1, attempts + 1):
+            try:
+                with self.db.session() as session:
+                    row = session.get(TaskEntity, task_id)
+                    if row is None:
+                        raise KeyError(task_id)
+                    return bool(row.cancel_requested)
+            except OperationalError as exc:
+                if (not self._is_sqlite_lock_error(exc)) or attempt >= attempts:
+                    raise
+                time.sleep(self._sqlite_lock_backoff_seconds(attempt))
+        raise RuntimeError('is_cancel_requested_retry_exhausted')
 
     def append_event(
         self,
@@ -287,7 +348,7 @@ class SqlTaskRepository:
         round_number: int | None = None,
     ) -> dict:
         now = datetime.now(timezone.utc)
-        max_attempts = 3
+        max_attempts = max(3, self._sqlite_lock_retry_attempts())
         for attempt in range(max_attempts):
             try:
                 with self.db.session() as session:
@@ -310,6 +371,10 @@ class SqlTaskRepository:
             except IntegrityError:
                 if attempt + 1 >= max_attempts:
                     raise
+            except OperationalError as exc:
+                if (not self._is_sqlite_lock_error(exc)) or attempt + 1 >= max_attempts:
+                    raise
+                time.sleep(self._sqlite_lock_backoff_seconds(attempt + 1))
         raise RuntimeError('append_event_retry_exhausted')
 
     def list_events(self, task_id: str) -> list[dict]:

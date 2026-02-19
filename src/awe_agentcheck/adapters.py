@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from queue import Empty, Queue
+import os
 import random
 import re
 import shlex
@@ -159,6 +160,7 @@ class ParticipantRunner:
                         errors='replace',
                         cwd=str(cwd),
                         timeout=attempt_timeout,
+                        env=self._build_subprocess_env(cwd),
                     )
                 else:
                     completed = self._run_streaming(
@@ -167,6 +169,7 @@ class ParticipantRunner:
                         cwd=cwd,
                         timeout_seconds=attempt_timeout,
                         on_stream=on_stream,
+                        env=self._build_subprocess_env(cwd),
                     )
                 break
             except FileNotFoundError as exc:
@@ -469,6 +472,7 @@ class ParticipantRunner:
         cwd: Path,
         timeout_seconds: float,
         on_stream: Callable[[str, str], None],
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess:
         stdin_pipe = subprocess.PIPE if runtime_input else subprocess.DEVNULL
         process = subprocess.Popen(
@@ -481,6 +485,7 @@ class ParticipantRunner:
             errors='replace',
             cwd=str(cwd),
             bufsize=1,
+            env=env,
         )
 
         if runtime_input and process.stdin is not None:
@@ -548,3 +553,32 @@ class ParticipantRunner:
             stdout=''.join(stdout_chunks),
             stderr=''.join(stderr_chunks),
         )
+
+    @staticmethod
+    def _build_subprocess_env(cwd: Path) -> dict[str, str]:
+        env = dict(os.environ)
+        workspace_src = (Path(cwd) / 'src').resolve(strict=False)
+        if not workspace_src.is_dir():
+            return env
+
+        current_raw = str(env.get('PYTHONPATH', '') or '').strip()
+        current_items = [item for item in current_raw.split(os.pathsep) if str(item).strip()]
+
+        ordered: list[str] = [str(workspace_src)]
+        workspace_norm = str(workspace_src).replace('\\', '/').lower()
+        for item in current_items:
+            text = str(item).strip()
+            if not text:
+                continue
+            resolved = str(Path(text).resolve(strict=False))
+            resolved_norm = resolved.replace('\\', '/').lower()
+            if resolved_norm == workspace_norm:
+                continue
+            # Drop stale main-workspace src entries to avoid cross-workspace
+            # import contamination when running in sandbox tasks.
+            if resolved_norm.endswith('/awe-agentcheck/src'):
+                continue
+            ordered.append(text)
+
+        env['PYTHONPATH'] = os.pathsep.join(ordered)
+        return env

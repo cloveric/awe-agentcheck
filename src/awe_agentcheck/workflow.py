@@ -83,6 +83,7 @@ class ShellCommandExecutor:
             encoding='utf-8',
             errors='replace',
             timeout=timeout_seconds,
+            env=self._build_subprocess_env(cwd),
         )
         elapsed = time.monotonic() - started
         _log.debug('shell_command command=%s ok=%s duration=%.2fs',
@@ -94,6 +95,31 @@ class ShellCommandExecutor:
             stdout=completed.stdout or '',
             stderr=completed.stderr or '',
         )
+
+    @staticmethod
+    def _build_subprocess_env(cwd: Path) -> dict[str, str]:
+        env = dict(os.environ)
+        workspace_src = (Path(cwd) / 'src').resolve(strict=False)
+        if not workspace_src.is_dir():
+            return env
+
+        current_raw = str(env.get('PYTHONPATH', '') or '').strip()
+        current_items = [item for item in current_raw.split(os.pathsep) if str(item).strip()]
+        workspace_norm = str(workspace_src).replace('\\', '/').lower()
+        ordered: list[str] = [str(workspace_src)]
+        for item in current_items:
+            text = str(item).strip()
+            if not text:
+                continue
+            resolved = str(Path(text).resolve(strict=False))
+            resolved_norm = resolved.replace('\\', '/').lower()
+            if resolved_norm == workspace_norm:
+                continue
+            if resolved_norm.endswith('/awe-agentcheck/src'):
+                continue
+            ordered.append(text)
+        env['PYTHONPATH'] = os.pathsep.join(ordered)
+        return env
 
 
 @dataclass(frozen=True)

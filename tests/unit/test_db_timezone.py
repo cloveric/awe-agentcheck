@@ -5,6 +5,8 @@ from pathlib import Path
 
 from awe_agentcheck.db import Database, SqlTaskRepository
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 
 def _create_task(repo: SqlTaskRepository, workspace: Path) -> dict:
@@ -59,6 +61,17 @@ def test_sql_repository_event_timestamps_include_timezone_offset(tmp_path: Path)
     assert ('+' in ts) or ts.endswith('Z')
 
 
+def test_sqlite_database_sets_busy_timeout_and_foreign_keys(tmp_path: Path):
+    db_file = tmp_path / 'awe-pragmas.sqlite3'
+    db = Database(f"sqlite+pysqlite:///{db_file.as_posix()}")
+    db.create_schema()
+    with db.session() as session:
+        busy_timeout = int(session.execute(text('PRAGMA busy_timeout')).scalar_one())
+        foreign_keys = int(session.execute(text('PRAGMA foreign_keys')).scalar_one())
+    assert busy_timeout >= 30000
+    assert foreign_keys == 1
+
+
 def test_sql_repository_append_event_assigns_unique_seq_under_50_threads(tmp_path: Path):
     db_file = tmp_path / 'awe-concurrency.sqlite3'
     db = Database(f"sqlite+pysqlite:///{db_file.as_posix()}")
@@ -86,6 +99,33 @@ def test_sql_repository_append_event_assigns_unique_seq_under_50_threads(tmp_pat
     seqs = [int(row['seq']) for row in rows]
     assert len(set(seqs)) == workers
     assert seqs == list(range(1, workers + 1))
+
+
+def test_sql_repository_append_event_retries_on_sqlite_lock(tmp_path: Path, monkeypatch):
+    db_file = tmp_path / 'awe-lock-retry.sqlite3'
+    db = Database(f"sqlite+pysqlite:///{db_file.as_posix()}")
+    db.create_schema()
+    repo = SqlTaskRepository(db)
+    created = _create_task(repo, tmp_path)
+
+    original_reserve = repo._reserve_next_event_seq
+    calls = {'n': 0}
+
+    def flaky_reserve(session, task_id: str):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise OperationalError('insert', {}, Exception('database is locked'))
+        return original_reserve(session, task_id)
+
+    monkeypatch.setattr(repo, '_reserve_next_event_seq', flaky_reserve)
+    event = repo.append_event(
+        created['task_id'],
+        event_type='discussion',
+        payload={'type': 'discussion', 'output': 'lock retry'},
+        round_number=1,
+    )
+    assert int(event['seq']) == 1
+    assert calls['n'] >= 2
 
 
 def test_sql_repository_update_task_status_if_returns_none_on_conflict(tmp_path: Path):
