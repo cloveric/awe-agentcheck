@@ -34,6 +34,8 @@
   <a href="README.zh-CN.md">&#127464;&#127475; 中文文档</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="docs/RUNBOOK.md">Runbook</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="docs/ARCHITECTURE_FLOW.md">Architecture</a>&nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="CONTRIBUTING.md">Contributing</a>&nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="SECURITY.md">Security</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="#beginner-dashboard-guide-button-by-button">Dashboard Guide</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="#project-pulse-stars">Stars</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="#quick-start">Quick Start</a>
@@ -100,6 +102,12 @@
      - `prompt_prefix_reuse_rate_50`
      - `prompt_cache_break_count_50`
      - `prompt_cache_break_model_50` / `prompt_cache_break_toolset_50` / `prompt_cache_break_prefix_50`.
+12. Governance baseline completed:
+   - added `SECURITY.md`, `CONTRIBUTING.md`, and `.github/CODEOWNERS`.
+   - CI now enforces governance file presence.
+13. Cross-platform operations hardening:
+   - added `scripts/README.md` with PowerShell/Bash script matrix.
+   - CI now runs Bash syntax checks (`bash -n scripts/*.sh`) to keep Linux/macOS script paths healthy.
 
 ## Previous Update (2026-02-19)
 

@@ -34,6 +34,8 @@
   <a href="README.md">&#127468;&#127463; English</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="docs/RUNBOOK.md">运维手册</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="docs/ARCHITECTURE_FLOW.md">架构文档</a>&nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="CONTRIBUTING.md">贡献指南</a>&nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="SECURITY.md">安全策略</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="#新手面板操作指南逐按钮解释">面板操作指南</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="#项目热度stars">Stars</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="#快速开始">快速开始</a>
@@ -102,6 +104,12 @@
      - `prompt_prefix_reuse_rate_50`
      - `prompt_cache_break_count_50`
      - `prompt_cache_break_model_50` / `prompt_cache_break_toolset_50` / `prompt_cache_break_prefix_50`。
+12. 治理基线已补齐：
+   - 新增 `SECURITY.md`、`CONTRIBUTING.md`、`.github/CODEOWNERS`。
+   - CI 增加治理文件存在性检查，避免后续缺失回归。
+13. 跨平台运维脚本加固：
+   - 新增 `scripts/README.md`，明确 PowerShell/Bash 脚本对照矩阵。
+   - CI 新增 Bash 脚本语法检查（`bash -n scripts/*.sh`），持续保障 Linux/macOS 可用路径。
 
 ## 上一版更新（2026-02-19）
 

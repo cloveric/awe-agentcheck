@@ -1,0 +1,14 @@
+# Default owner for repository content.
+* @cloveric
+
+# Ops/runtime scripts
+/scripts/ @cloveric
+
+# Core orchestration/runtime
+/src/awe_agentcheck/ @cloveric
+
+# Public docs and governance
+/README.md @cloveric
+/README.zh-CN.md @cloveric
+/SECURITY.md @cloveric
+/CONTRIBUTING.md @cloveric
