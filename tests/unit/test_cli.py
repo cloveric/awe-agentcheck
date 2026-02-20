@@ -7,8 +7,10 @@ from awe_agentcheck.cli import (
     _parse_participant_agent_overrides,
     _parse_provider_model_params,
     _parse_provider_models,
+    _supported_provider_set,
     build_parser,
 )
+import pytest
 
 
 def test_cli_parser_run_subcommand_accepts_author_and_reviewers():
@@ -282,3 +284,146 @@ def test_cli_parse_participant_agent_overrides_accepts_boolean_values():
     )
     assert parsed['claude#author-A'] is True
     assert parsed['codex#review-B'] is False
+
+
+def test_supported_provider_set_handles_settings_error(monkeypatch):
+    monkeypatch.setattr(cli_module, 'load_settings', lambda: (_ for _ in ()).throw(RuntimeError('boom')))
+    providers = _supported_provider_set()
+    assert 'claude' in providers
+    assert 'codex' in providers
+    assert 'gemini' in providers
+
+
+def test_parse_provider_models_and_params_validation_errors():
+    with pytest.raises(ValueError):
+        _parse_provider_models(['bad-format'])
+    with pytest.raises(ValueError):
+        _parse_provider_models(['claude='])
+    with pytest.raises(ValueError):
+        _parse_provider_models(['unknown=model'])
+
+    with pytest.raises(ValueError):
+        _parse_provider_model_params(['bad-format'])
+    with pytest.raises(ValueError):
+        _parse_provider_model_params(['codex='])
+    with pytest.raises(ValueError):
+        _parse_provider_model_params(['unknown=--x'])
+
+    with pytest.raises(ValueError):
+        _parse_participant_agent_overrides(['invalid'], flag_name='--flag')
+    with pytest.raises(ValueError):
+        _parse_participant_agent_overrides([' =1'], flag_name='--flag')
+    with pytest.raises(ValueError):
+        _parse_participant_agent_overrides(['claude#author-A=maybe'], flag_name='--flag')
+
+
+class _FakeResponse:
+    def __init__(self, status_code=200, payload=None, text='ok'):
+        self.status_code = int(status_code)
+        self._payload = payload if payload is not None else {'ok': True}
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+class _FakeClient:
+    def __init__(self, response=None):
+        self.calls = []
+        self._response = response or _FakeResponse()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def get(self, url, params=None):
+        self.calls.append(('GET', url, params, None))
+        return self._response
+
+    def post(self, url, json=None):
+        self.calls.append(('POST', url, None, json))
+        return self._response
+
+
+def test_cli_main_routes_http_commands(monkeypatch, capsys):
+    fake = _FakeClient(response=_FakeResponse(status_code=200, payload={'ok': True}))
+    monkeypatch.setattr(cli_module.httpx, 'Client', lambda timeout=60: fake)
+
+    cases = [
+        (['status', 'task-1'], 'GET', '/api/tasks/task-1'),
+        (['tasks', '--limit', '5'], 'GET', '/api/tasks'),
+        (['stats'], 'GET', '/api/stats'),
+        (['analytics', '--limit', '12'], 'GET', '/api/analytics'),
+        (['policy-templates', '--workspace-path', 'C:/repo'], 'GET', '/api/policy-templates'),
+        (['start', 'task-1', '--background'], 'POST', '/api/tasks/task-1/start'),
+        (['cancel', 'task-1'], 'POST', '/api/tasks/task-1/cancel'),
+        (['force-fail', 'task-1', '--reason', 'timeout'], 'POST', '/api/tasks/task-1/force-fail'),
+        (['promote-round', 'task-1', '--round', '2', '--merge-target-path', 'C:/target'], 'POST', '/api/tasks/task-1/promote-round'),
+        (['events', 'task-1'], 'GET', '/api/tasks/task-1/events'),
+        (['github-summary', 'task-1'], 'GET', '/api/tasks/task-1/github-summary'),
+        (['tree', '--workspace-path', 'C:/repo', '--max-depth', '2', '--max-entries', '10'], 'GET', '/api/workspace-tree'),
+        (['gate', 'task-1', '--tests-ok', '--lint-ok', '--verdict', 'no_blocker'], 'POST', '/api/tasks/task-1/gate'),
+        (['decide', 'task-1', '--approve', '--note', 'ship', '--auto-start'], 'POST', '/api/tasks/task-1/author-decision'),
+    ]
+
+    for argv, method, endpoint in cases:
+        fake.calls.clear()
+        code = cli_module.main(argv)
+        assert code == 0
+        assert fake.calls
+        call = fake.calls[-1]
+        assert call[0] == method
+        assert call[1].endswith(endpoint)
+        assert '"ok": true' in capsys.readouterr().out.lower()
+
+
+def test_cli_main_run_posts_task_payload(monkeypatch):
+    fake = _FakeClient(response=_FakeResponse(status_code=200, payload={'task_id': 'task-1'}))
+    monkeypatch.setattr(cli_module.httpx, 'Client', lambda timeout=60: fake)
+
+    code = cli_module.main(
+        [
+            'run',
+            '--task',
+            'Fix bug',
+            '--description',
+            'desc',
+            '--author',
+            'codex#author-A',
+            '--reviewer',
+            'claude#review-B',
+            '--provider-model',
+            'codex=gpt-5.3-codex',
+            '--provider-model-param',
+            'codex=-c model_reasoning_effort=xhigh',
+            '--claude-team-agent-override',
+            'claude#review-B=1',
+            '--codex-multi-agent-override',
+            'codex#author-A=0',
+            '--sandbox-mode',
+            '1',
+            '--self-loop-mode',
+            '1',
+            '--max-rounds',
+            '2',
+        ]
+    )
+    assert code == 0
+    assert fake.calls
+    method, url, _params, payload = fake.calls[-1]
+    assert method == 'POST'
+    assert url.endswith('/api/tasks')
+    assert payload['title'] == 'Fix bug'
+    assert payload['provider_models']['codex'] == 'gpt-5.3-codex'
+    assert payload['provider_model_params']['codex'].startswith('-c')
+    assert payload['self_loop_mode'] == 1
+
+
+def test_cli_main_http_error_returns_non_zero(monkeypatch, capsys):
+    fake = _FakeClient(response=_FakeResponse(status_code=500, payload={'ok': False}, text='error'))
+    monkeypatch.setattr(cli_module.httpx, 'Client', lambda timeout=60: fake)
+    code = cli_module.main(['status', 'task-1'])
+    assert code == 1
+    assert 'HTTP 500' in capsys.readouterr().err

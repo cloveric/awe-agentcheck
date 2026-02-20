@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
+import types
 
 from awe_agentcheck.observability import (
     _JsonFormatter,
@@ -112,3 +114,113 @@ def test_json_formatter_includes_exception():
     parsed = json.loads(output)
     assert 'exc' in parsed
     assert 'boom' in parsed['exc']
+
+
+def test_configure_observability_skips_blank_otlp_endpoint(monkeypatch):
+    import awe_agentcheck.observability as observability
+
+    monkeypatch.setattr(observability, '_configured', False)
+    monkeypatch.setattr(observability, '_configured_otlp_endpoint', None)
+    configure_observability(service_name='awe-agentcheck', otlp_endpoint='   ')
+    assert observability._configured is True
+    assert observability._configured_otlp_endpoint is None
+
+
+def test_configure_observability_logs_warning_when_opentelemetry_import_fails(monkeypatch):
+    import awe_agentcheck.observability as observability
+
+    logger = logging.getLogger('awe_agentcheck.observability')
+    records: list[logging.LogRecord] = []
+
+    class _CaptureHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _CaptureHandler()
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+
+    monkeypatch.setattr(observability, '_configured', False)
+    monkeypatch.setattr(observability, '_configured_otlp_endpoint', None)
+
+    real_import = __import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: ANN001
+        if name.startswith('opentelemetry'):
+            raise ImportError('forced')
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr('builtins.__import__', fake_import)
+    try:
+        configure_observability(service_name='svc', otlp_endpoint='http://127.0.0.1:4318/v1/traces')
+    finally:
+        logger.removeHandler(handler)
+
+    assert any('OpenTelemetry import failed' in str(r.getMessage()) for r in records)
+    assert observability._configured_otlp_endpoint is None
+
+
+def test_configure_observability_sets_otlp_endpoint_once(monkeypatch):
+    import awe_agentcheck.observability as observability
+
+    monkeypatch.setattr(observability, '_configured', False)
+    monkeypatch.setattr(observability, '_configured_otlp_endpoint', None)
+
+    trace_calls: list[object] = []
+
+    class DummyProvider:
+        def __init__(self, resource=None):
+            self.resource = resource
+            self.processors = []
+
+        def add_span_processor(self, processor):
+            self.processors.append(processor)
+
+    class DummyResource:
+        @staticmethod
+        def create(payload):
+            return {'resource': dict(payload)}
+
+    class DummyExporter:
+        def __init__(self, endpoint):
+            self.endpoint = endpoint
+
+    class DummyBatchProcessor:
+        def __init__(self, exporter):
+            self.exporter = exporter
+
+    trace_module = types.SimpleNamespace(
+        set_tracer_provider=lambda provider: trace_calls.append(provider),
+    )
+
+    monkeypatch.setitem(sys.modules, 'opentelemetry', types.SimpleNamespace(trace=trace_module))
+    monkeypatch.setitem(sys.modules, 'opentelemetry.trace', trace_module)
+    monkeypatch.setitem(
+        sys.modules,
+        'opentelemetry.exporter.otlp.proto.http.trace_exporter',
+        types.SimpleNamespace(OTLPSpanExporter=DummyExporter),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        'opentelemetry.sdk.resources',
+        types.SimpleNamespace(Resource=DummyResource),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        'opentelemetry.sdk.trace',
+        types.SimpleNamespace(TracerProvider=DummyProvider),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        'opentelemetry.sdk.trace.export',
+        types.SimpleNamespace(BatchSpanProcessor=DummyBatchProcessor),
+    )
+
+    endpoint = 'http://127.0.0.1:4318/v1/traces'
+    configure_observability(service_name='svc', otlp_endpoint=endpoint)
+    assert observability._configured_otlp_endpoint == endpoint
+    assert len(trace_calls) == 1
+
+    # Same endpoint should early-return and not set provider again.
+    configure_observability(service_name='svc', otlp_endpoint=endpoint)
+    assert len(trace_calls) == 1
