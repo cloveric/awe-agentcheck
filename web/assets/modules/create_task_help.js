@@ -22,8 +22,13 @@ export const CREATE_TASK_HELP_ITEMS = [
   },
   {
   field: 'Policy Template',
-  en: 'Preset control policy by repo size/risk profile. Click "Apply Policy" to fill recommended controls. Use "custom" to keep your manual settings unchanged.',
-  zh: '按仓库规模/风险给出策略模板。点击“Apply Policy”可自动填入推荐控制项。选择“custom”可保留你当前手动配置，不覆盖。',
+  en: 'Preset control policy. Default is "deep-discovery-first" (audit-focused). Click "Apply Policy" to fill controls; use "custom" to keep manual settings unchanged.',
+  zh: '策略模板预设。默认是“deep-discovery-first”（偏审计发现）。点击“Apply Policy”会自动填入控制项；选择“custom”保留当前手动配置。',
+  },
+  {
+  field: 'Policy Templates (What each one does)',
+  en: 'deep-discovery-first (default): audit-first + broader discovery, self_loop=1, auto_merge=1, rounds=3, evolution=2. balanced-default: daily stable baseline, self_loop=0, auto_merge=1, rounds=1, evolution=0. safe-review: conservative and risk-first, self_loop=0, auto_merge=0, rounds=2, evolution=0. rapid-fix: fastest small patch path, self_loop=1, auto_merge=1, rounds=1, evolution=0. deep-evolve: deep structural refactor mode, self_loop=1, auto_merge=0, rounds=3, evolution=2. frontier-evolve: aggressive proactive mode, self_loop=1, auto_merge=1, rounds=4, evolution=3.',
+  zh: 'deep-discovery-first（默认）：发现优先审计风格，self_loop=1、auto_merge=1、rounds=3、evolution=2。balanced-default：日常稳态基线，self_loop=0、auto_merge=1、rounds=1、evolution=0。safe-review：保守风控优先，self_loop=0、auto_merge=0、rounds=2、evolution=0。rapid-fix：最快小修路径，self_loop=1、auto_merge=1、rounds=1、evolution=0。deep-evolve：深度结构演进模式，self_loop=1、auto_merge=0、rounds=3、evolution=2。frontier-evolve：激进主动模式，self_loop=1、auto_merge=1、rounds=4、evolution=3。',
   },
   {
   field: 'Claude/Codex/Gemini Model',
@@ -42,8 +47,8 @@ export const CREATE_TASK_HELP_ITEMS = [
   },
   {
   field: 'Evolution Level',
-  en: '0=fix-only, 1=guided evolution, 2=proactive evolution.',
-  zh: '0=仅修复，1=引导进化，2=主动进化。',
+  en: '0=fix-only, 1=guided evolution, 2=proactive evolution, 3=frontier/aggressive evolution (actively proposes feature, framework, and UI upgrades with stronger audit pressure).',
+  zh: '0=仅修复，1=引导进化，2=主动进化，3=前沿/激进进化（主动提出功能、框架与 UI 升级，并施加更强审计压力）。',
   },
   {
   field: 'Repair Mode',

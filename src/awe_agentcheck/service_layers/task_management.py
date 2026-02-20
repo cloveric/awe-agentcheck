@@ -54,7 +54,7 @@ class TaskManagementService:
                 field='workspace_path',
             )
 
-        evolution_level = max(0, min(2, int(payload.evolution_level)))
+        evolution_level = max(0, min(3, int(payload.evolution_level)))
         evolve_until = self._normalize_evolve_until(payload.evolve_until)
         conversation_language = self._normalize_conversation_language(
             payload.conversation_language,

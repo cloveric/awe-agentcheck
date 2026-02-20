@@ -26,7 +26,7 @@ class CreateTaskRequest(BaseModel):
     description: str = Field(min_length=1)
     author_participant: str = Field(min_length=1)
     reviewer_participants: list[str] = Field(min_length=1)
-    evolution_level: int = Field(default=0, ge=0, le=2)
+    evolution_level: int = Field(default=0, ge=0, le=3)
     evolve_until: str | None = Field(default=None, max_length=64)
     conversation_language: str = Field(default='en', min_length=2, max_length=16)
     provider_models: dict[str, str] = Field(default_factory=dict)
@@ -186,6 +186,7 @@ class PolicyTemplateDefaultsResponse(BaseModel):
     plain_mode: int
     stream_mode: int
     repair_mode: str
+    evolution_level: int
 
 
 class PolicyTemplateItemResponse(BaseModel):

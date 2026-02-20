@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-DEFAULT_POLICY_TEMPLATE = 'balanced-default'
+DEEP_DISCOVERY_POLICY_TEMPLATE = 'deep-discovery-first'
+DEFAULT_POLICY_TEMPLATE = DEEP_DISCOVERY_POLICY_TEMPLATE
 
 DEFAULT_RISK_POLICY_CONTRACT: dict[str, object] = {
     'version': '1',
@@ -19,6 +20,22 @@ DEFAULT_RISK_POLICY_CONTRACT: dict[str, object] = {
 }
 
 POLICY_TEMPLATE_CATALOG: dict[str, dict] = {
+    'deep-discovery-first': {
+        'id': 'deep-discovery-first',
+        'label': 'Deep Discovery First',
+        'description': 'Default audit-first profile with deeper repository-wide discovery and autonomous execution.',
+        'defaults': {
+            'sandbox_mode': 1,
+            'self_loop_mode': 1,
+            'auto_merge': 1,
+            'max_rounds': 3,
+            'debate_mode': 1,
+            'plain_mode': 1,
+            'stream_mode': 1,
+            'repair_mode': 'balanced',
+            'evolution_level': 2,
+        },
+    },
     'balanced-default': {
         'id': 'balanced-default',
         'label': 'Balanced Default',
@@ -32,6 +49,7 @@ POLICY_TEMPLATE_CATALOG: dict[str, dict] = {
             'plain_mode': 1,
             'stream_mode': 1,
             'repair_mode': 'balanced',
+            'evolution_level': 0,
         },
     },
     'safe-review': {
@@ -47,6 +65,7 @@ POLICY_TEMPLATE_CATALOG: dict[str, dict] = {
             'plain_mode': 1,
             'stream_mode': 1,
             'repair_mode': 'minimal',
+            'evolution_level': 0,
         },
     },
     'rapid-fix': {
@@ -62,6 +81,7 @@ POLICY_TEMPLATE_CATALOG: dict[str, dict] = {
             'plain_mode': 1,
             'stream_mode': 1,
             'repair_mode': 'minimal',
+            'evolution_level': 0,
         },
     },
     'deep-evolve': {
@@ -77,6 +97,23 @@ POLICY_TEMPLATE_CATALOG: dict[str, dict] = {
             'plain_mode': 1,
             'stream_mode': 1,
             'repair_mode': 'structural',
+            'evolution_level': 2,
+        },
+    },
+    'frontier-evolve': {
+        'id': 'frontier-evolve',
+        'label': 'Frontier Evolve',
+        'description': 'Aggressive proactive evolution: feature ideas, framework upgrades, and UI improvements.',
+        'defaults': {
+            'sandbox_mode': 1,
+            'self_loop_mode': 1,
+            'auto_merge': 1,
+            'max_rounds': 4,
+            'debate_mode': 1,
+            'plain_mode': 1,
+            'stream_mode': 1,
+            'repair_mode': 'structural',
+            'evolution_level': 3,
         },
     },
 }

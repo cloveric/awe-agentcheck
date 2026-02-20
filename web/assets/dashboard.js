@@ -2214,6 +2214,7 @@ import { CREATE_TASK_HELP_ITEMS } from './modules/create_task_help.js';
       if (el.plainMode) el.plainMode.value = mapNum(defaults.plain_mode, 1);
       if (el.streamMode) el.streamMode.value = mapNum(defaults.stream_mode, 1);
       if (el.repairMode && defaults.repair_mode) el.repairMode.value = String(defaults.repair_mode);
+      if (el.evolutionLevel) el.evolutionLevel.value = mapNum(defaults.evolution_level, 0);
       syncCreateTaskPolicyControls('policyTemplate');
       if (el.createStatus) {
         el.createStatus.textContent = `Applied policy template: ${selectedId}`;

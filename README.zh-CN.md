@@ -534,8 +534,9 @@ http://localhost:8000/
 | `Reviewers` | 审阅者（逗号分隔） | 至少 1 个 |
 | `Claude Model / Codex Model / Gemini Model` | 按提供者模型绑定（下拉可选 + 可编辑） | 建议从默认开始（`claude-opus-4-6`、`gpt-5.3-codex`、`gemini-3-pro-preview`） |
 | `Claude/Codex/Gemini Model Params` | 每个提供者的附加参数（可选） | Codex 建议 `-c model_reasoning_effort=xhigh` |
+| `Policy Template` | 一组预设执行策略（会一次性应用多项控制） | 建议先用 `deep-discovery-first`；要激进探索新功能/框架/UI 用 `frontier-evolve` |
 | `Claude Team Agents` | 是否启用 Claude `--agents` 模式 | `0`（关闭） |
-| `Evolution Level` | `0`仅修复，`1`引导进化，`2`主动进化 | 先用 `0` |
+| `Evolution Level` | `0`仅修复，`1`引导进化，`2`主动进化，`3`前沿/激进进化 | 先用 `0` |
 | `Repair Mode` | `minimal` / `balanced` / `structural` | 建议先用 `balanced` |
 | `Max Rounds` | `self_loop_mode=0` 时为共识轮目标；`self_loop_mode=1` 时为无截止时间的重试上限 | `1` |
 | `Evolve Until` | 可选截止时间（`YYYY-MM-DD HH:MM`） | 非夜跑可留空 |
@@ -552,6 +553,14 @@ http://localhost:8000/
 | `Description` | 任务详细要求 | 写清验收标准 |
 
 UI 策略说明：当 `Sandbox Mode = 0` 时，面板会强制 `Auto Merge = 0` 并锁定该选项。
+
+策略模板速览：
+
+- `deep-discovery-first`（默认）：发现优先审计风格，`evolution_level=2`。
+- `frontier-evolve`：激进主动进化模式，`evolution_level=3`。
+- `deep-evolve`：深度结构重构姿态，默认 `auto_merge=0`。
+- `safe-review`：保守风控优先/人工偏好。
+- `rapid-fix`：最快小修补姿态。
 
 ### 创建按钮
 

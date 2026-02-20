@@ -16,6 +16,7 @@ from awe_agentcheck.benchmark import (
     merge_benchmark_tasks,
     summarize_benchmark_results,
 )
+from awe_agentcheck.policy_templates import DEFAULT_POLICY_TEMPLATE
 
 
 TERMINAL_STATUSES = {'passed', 'failed_gate', 'failed_system', 'canceled'}
@@ -31,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--report-dir', default='.agents/benchmarks')
     parser.add_argument('--variant-a-name', default='A')
     parser.add_argument('--variant-b-name', default='B')
-    parser.add_argument('--variant-a-template', default='balanced-default')
+    parser.add_argument('--variant-a-template', default=DEFAULT_POLICY_TEMPLATE)
     parser.add_argument('--variant-b-template', default='safe-review')
     parser.add_argument('--variant-a-overrides', default='{}', help='JSON map of task payload overrides for variant A')
     parser.add_argument('--variant-b-overrides', default='{}', help='JSON map of task payload overrides for variant B')

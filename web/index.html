@@ -218,8 +218,9 @@
               <label for="evolutionLevel">Evolution Level</label>
               <select id="evolutionLevel">
                 <option value="0">0 | fix-only</option>
-                <option value="1">1 | guided evolve</option>
+                <option value="1" selected>1 | guided evolve</option>
                 <option value="2">2 | proactive evolve</option>
+                <option value="3">3 | frontier evolve (aggressive)</option>
               </select>
             </div>
             <div style="flex:0 0 220px;">
@@ -232,7 +233,7 @@
             </div>
             <div style="flex:0 0 180px;">
               <label for="maxRounds">Max Rounds (fallback)</label>
-              <input id="maxRounds" type="number" min="1" max="20" value="1" />
+              <input id="maxRounds" type="number" min="1" max="20" value="3" />
             </div>
             <div style="flex:1; min-width:220px;">
               <label for="evolveUntil">Evolve Until (optional)</label>
@@ -284,8 +285,8 @@
             <div style="flex:0 0 220px;">
               <label for="selfLoopMode">Self Loop Mode</label>
               <select id="selfLoopMode">
-                <option value="0">0 | discuss then ask author (default)</option>
-                <option value="1">1 | autonomous execute</option>
+                <option value="0">0 | discuss then ask author</option>
+                <option value="1" selected>1 | autonomous execute (default)</option>
               </select>
             </div>
             <div style="flex:0 0 220px;">

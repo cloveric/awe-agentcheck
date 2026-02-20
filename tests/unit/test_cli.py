@@ -25,7 +25,7 @@ def test_cli_parser_run_subcommand_accepts_author_and_reviewers():
             '--reviewer',
             'claude#review-C',
             '--evolution-level',
-            '2',
+            '3',
             '--evolve-until',
             '2026-02-13 06:00',
             '--conversation-language',
@@ -59,7 +59,7 @@ def test_cli_parser_run_subcommand_accepts_author_and_reviewers():
     assert args.command == 'run'
     assert args.author == 'claude#author-A'
     assert args.reviewer == ['codex#review-B', 'claude#review-C']
-    assert args.evolution_level == 2
+    assert args.evolution_level == 3
     assert args.evolve_until == '2026-02-13 06:00'
     assert args.conversation_language == 'zh'
     assert args.sandbox_mode == 1

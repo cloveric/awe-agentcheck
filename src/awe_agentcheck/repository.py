@@ -153,7 +153,7 @@ class InMemoryTaskRepository:
             'description': description,
             'author_participant': author_participant,
             'reviewer_participants': reviewer_participants,
-            'evolution_level': int(max(0, min(2, int(evolution_level)))),
+            'evolution_level': int(max(0, min(3, int(evolution_level)))),
             'evolve_until': (str(evolve_until).strip() if evolve_until else None),
             'conversation_language': str(conversation_language or 'en').strip().lower() or 'en',
             'provider_models': {str(k).strip().lower(): str(v).strip() for k, v in (provider_models or {}).items() if str(k).strip() and str(v).strip()},
@@ -364,7 +364,7 @@ def encode_task_meta(
 ) -> str:
     payload = {
         'participants': [str(v) for v in reviewer_participants],
-        'evolution_level': int(max(0, min(2, int(evolution_level)))),
+        'evolution_level': int(max(0, min(3, int(evolution_level)))),
         'evolve_until': (str(evolve_until).strip() if evolve_until else None),
         'conversation_language': str(conversation_language or 'en').strip().lower() or 'en',
         'provider_models': {str(k).strip().lower(): str(v).strip() for k, v in (provider_models or {}).items() if str(k).strip() and str(v).strip()},
@@ -451,7 +451,7 @@ def decode_task_meta(raw: str) -> dict:
             level_int = int(level)
         except Exception:
             level_int = 0
-        level_int = max(0, min(2, level_int))
+        level_int = max(0, min(3, level_int))
         evolve_until = parsed.get('evolve_until')
         evolve_until_text = (str(evolve_until).strip() if evolve_until else None)
         conversation_language = str(parsed.get('conversation_language') or 'en').strip().lower() or 'en'

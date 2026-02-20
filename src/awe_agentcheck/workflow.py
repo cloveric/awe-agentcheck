@@ -1244,8 +1244,19 @@ class WorkflowEngine:
 
     @staticmethod
     def _architecture_thresholds_for_level(level: int) -> dict[str, int]:
-        normalized = max(0, min(2, int(level)))
-        if normalized >= 2:
+        normalized = max(0, min(3, int(level)))
+        if normalized >= 3:
+            thresholds = {
+                'python_file_lines_max': 800,
+                'frontend_file_lines_max': 1500,
+                'python_responsibility_keywords_max': 6,
+                'service_file_lines_max': 2800,
+                'workflow_file_lines_max': 1800,
+                'dashboard_js_lines_max': 2600,
+                'prompt_builder_count_max': 8,
+                'adapter_runtime_raise_max': 0,
+            }
+        elif normalized >= 2:
             thresholds = {
                 'python_file_lines_max': 1000,
                 'frontend_file_lines_max': 2000,
@@ -1291,7 +1302,7 @@ class WorkflowEngine:
 
     @staticmethod
     def _run_architecture_audit(*, config: RunConfig) -> ArchitectureAuditResult:
-        level = max(0, min(2, int(config.evolution_level)))
+        level = max(0, min(3, int(config.evolution_level)))
         if level < 1:
             return ArchitectureAuditResult(
                 enabled=False,
@@ -1493,7 +1504,7 @@ class WorkflowEngine:
         raw = str(os.getenv('AWE_ARCH_AUDIT_MODE', '') or '').strip().lower()
         if raw in {'off', 'warn', 'hard'}:
             return raw
-        normalized = max(0, min(2, int(level)))
+        normalized = max(0, min(3, int(level)))
         return 'hard' if normalized >= 2 else 'warn'
 
     @staticmethod
@@ -1832,7 +1843,7 @@ class WorkflowEngine:
         environment_context: str | None = None,
         strategy_hint: str | None = None,
     ) -> str:
-        level = max(0, min(2, int(config.evolution_level)))
+        level = max(0, min(3, int(config.evolution_level)))
         repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
@@ -1848,6 +1859,14 @@ class WorkflowEngine:
                 "Mode guidance: prioritize bug/risk fixes first, then proactively propose 1-2 evolution directions.\n"
                 "If proposing, include lines: EVOLUTION_PROPOSAL_1: ... and optional EVOLUTION_PROPOSAL_2: ...\n"
                 "Ensure rollout stays incremental and testable."
+            )
+        elif level >= 3:
+            mode_guidance = (
+                "Mode guidance: frontier evolve mode. Prioritize blocker/risk fixes, then aggressively propose 2-4\n"
+                "high-impact directions across feature ideas, framework/runtime upgrades, UI/UX improvements, and\n"
+                "developer-experience upgrades.\n"
+                "Use lines: EVOLUTION_PROPOSAL_1..N and include impact/risk/effort/verification path for each.\n"
+                "Prefer incremental slices that keep tests/lint green."
             )
         previous_gate_context = ''
         if round_no > 1 and previous_gate_reason:
@@ -1883,7 +1902,7 @@ class WorkflowEngine:
         environment_context: str | None = None,
         strategy_hint: str | None = None,
     ) -> str:
-        level = max(0, min(2, int(config.evolution_level)))
+        level = max(0, min(3, int(config.evolution_level)))
         repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
@@ -1917,7 +1936,7 @@ class WorkflowEngine:
         strategy_hint: str | None = None,
     ) -> str:
         clipped = WorkflowEngine._clip_text(reviewer_context, max_chars=3200)
-        level = max(0, min(2, int(config.evolution_level)))
+        level = max(0, min(3, int(config.evolution_level)))
         repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
@@ -1949,7 +1968,7 @@ class WorkflowEngine:
         strategy_hint: str | None = None,
     ) -> str:
         clipped = WorkflowEngine._clip_text(discussion_output, max_chars=3000)
-        level = max(0, min(2, int(config.evolution_level)))
+        level = max(0, min(3, int(config.evolution_level)))
         repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
@@ -1963,6 +1982,11 @@ class WorkflowEngine:
             mode_guidance = (
                 "Resolve blockers first, then proactively implement one incremental evolution direction "
                 "from discussion if tests/lint can remain green."
+            )
+        elif level >= 3:
+            mode_guidance = (
+                "Resolve blockers first, then implement one high-impact evolution slice from discussion "
+                "(feature/framework/UI/idea). Keep migration risk explicit and maintain green tests/lint."
             )
         base = WorkflowEngine._render_prompt_template(
             'implementation_prompt.txt',
@@ -2146,7 +2170,7 @@ class WorkflowEngine:
         strategy_hint: str | None = None,
     ) -> str:
         clipped = WorkflowEngine._clip_text(implementation_output, max_chars=3000)
-        level = max(0, min(2, int(config.evolution_level)))
+        level = max(0, min(3, int(config.evolution_level)))
         repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
@@ -2400,9 +2424,17 @@ class WorkflowEngine:
 
     @staticmethod
     def _review_checklist_guidance(level: int) -> str:
-        normalized = max(0, min(2, int(level)))
+        normalized = max(0, min(3, int(level)))
         if normalized < 1:
             return "Checklist: focus on correctness, security, and regression evidence."
+        if normalized >= 3:
+            return (
+                "Required checklist (cover every item with evidence path or explicit 'n/a'): "
+                "security; concurrency/state transitions; DB lock/retry handling; architecture size/responsibility "
+                "(oversized files/modules); frontend maintainability (single-file UI bloat); cross-platform runtime/scripts; "
+                "feature opportunity map (2+ concrete ideas); framework/runtime upgrade candidates; UI/UX upgrade ideas; "
+                "each opportunity must include impact/risk/effort and validation path."
+            )
         return (
             "Required checklist (cover every item with evidence path or explicit 'n/a'): "
             "security; concurrency/state transitions; DB lock/retry handling; architecture size/responsibility "

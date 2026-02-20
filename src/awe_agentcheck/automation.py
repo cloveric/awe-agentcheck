@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 from typing import Callable, Iterator
 
+from awe_agentcheck.policy_templates import DEFAULT_POLICY_TEMPLATE
+
 
 def parse_until(value: str) -> datetime:
     text = (value or '').strip()
@@ -94,7 +96,7 @@ def recommend_process_followup_topic(status: str, reason: str | None) -> str | N
 def derive_policy_adjustment_from_analytics(
     analytics: dict | None,
     *,
-    fallback_template: str = 'balanced-default',
+    fallback_template: str = DEFAULT_POLICY_TEMPLATE,
 ) -> dict:
     payload = analytics if isinstance(analytics, dict) else {}
     taxonomy = payload.get('failure_taxonomy')
@@ -131,7 +133,7 @@ def derive_policy_adjustment_from_analytics(
             high_drift_score = drift_score
             high_drift_participant = participant
 
-    template = str(fallback_template or 'balanced-default').strip() or 'balanced-default'
+    template = str(fallback_template or DEFAULT_POLICY_TEMPLATE).strip() or DEFAULT_POLICY_TEMPLATE
     reason = 'no_failure_signal'
     overrides: dict[str, object] = {}
 
@@ -166,7 +168,7 @@ def derive_policy_adjustment_from_analytics(
             'max_rounds': 1,
         }
     elif top_bucket in {'tests_failed', 'lint_failed'}:
-        template = 'balanced-default'
+        template = DEFAULT_POLICY_TEMPLATE
         reason = 'verification_failure_cluster'
         overrides = {
             'evolution_level': 0,

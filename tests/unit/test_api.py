@@ -168,11 +168,17 @@ def test_api_policy_templates_endpoint_returns_profile_and_templates(tmp_path: P
     resp = client.get('/api/policy-templates', params={'workspace_path': str(project)})
     assert resp.status_code == 200
     body = resp.json()
-    assert body['recommended_template'] in {'balanced-default', 'safe-review', 'rapid-fix'}
+    assert body['recommended_template'] == 'deep-discovery-first'
     assert body['profile']['exists'] is True
     assert body['profile']['workspace_path']
     ids = {item['id'] for item in body['templates']}
-    assert {'balanced-default', 'safe-review', 'rapid-fix', 'deep-evolve'}.issubset(ids)
+    assert {'deep-discovery-first', 'balanced-default', 'safe-review', 'rapid-fix', 'deep-evolve', 'frontier-evolve'}.issubset(ids)
+    deep_defaults = next(
+        item['defaults']
+        for item in body['templates']
+        if item['id'] == 'deep-discovery-first'
+    )
+    assert deep_defaults['evolution_level'] == 2
 
 
 def test_api_analytics_endpoint_returns_failure_and_drift_views(tmp_path: Path):
@@ -368,7 +374,7 @@ def test_api_create_task_accepts_evolution_fields(tmp_path: Path):
             'description': 'evolution',
             'author_participant': 'claude#author-A',
             'reviewer_participants': ['codex#review-B'],
-            'evolution_level': 2,
+            'evolution_level': 3,
             'evolve_until': '2026-02-13 06:00',
             'sandbox_mode': False,
             'self_loop_mode': 1,
@@ -380,7 +386,7 @@ def test_api_create_task_accepts_evolution_fields(tmp_path: Path):
     )
     assert resp.status_code == 201
     body = resp.json()
-    assert body['evolution_level'] == 2
+    assert body['evolution_level'] == 3
     assert body['evolve_until'] == '2026-02-13T06:00:00'
     assert body['sandbox_mode'] is False
     assert body['sandbox_generated'] is False

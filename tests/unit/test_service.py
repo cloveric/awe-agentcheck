@@ -494,11 +494,11 @@ def test_service_create_task_accepts_evolution_fields(tmp_path: Path):
             description='Implement parser for feed',
             author_participant='claude#author-A',
             reviewer_participants=['codex#review-B'],
-            evolution_level=2,
+            evolution_level=3,
             evolve_until='2026-02-13 06:00',
         )
     )
-    assert task.evolution_level == 2
+    assert task.evolution_level == 3
     assert task.evolve_until == '2026-02-13T06:00:00'
 
 
@@ -2268,6 +2268,55 @@ def test_service_scope_ambiguity_is_non_blocking_for_proposal_review(tmp_path: P
     assert 'Scope ambiguity is non-blocking' in output
 
 
+def test_service_proposal_author_prompt_frontier_level_is_more_open(tmp_path: Path):
+    cfg = RunConfig(
+        task_id='t-proposal-author-e3',
+        title='E3 openness',
+        description='find bugs and propose upgrades',
+        author=parse_participant_id('codex#author-A'),
+        reviewers=[parse_participant_id('claude#review-B')],
+        evolution_level=3,
+        evolve_until=None,
+        cwd=tmp_path,
+        max_rounds=1,
+        test_command='py -m pytest -q',
+        lint_command='py -m ruff check .',
+        conversation_language='en',
+        plain_mode=True,
+    )
+    prompt = OrchestratorService._proposal_author_prompt(
+        config=cfg,
+        merged_context='Reviewer findings here.',
+        review_payload=[{'verdict': 'no_blocker'}],
+    )
+    assert 'optional proactive evolution candidates' in prompt
+    assert 'impact/risk/effort' in prompt
+
+
+def test_service_proposal_author_prompt_non_frontier_keeps_strict_scope(tmp_path: Path):
+    cfg = RunConfig(
+        task_id='t-proposal-author-e2',
+        title='E2 strict scope',
+        description='fix bugs',
+        author=parse_participant_id('codex#author-A'),
+        reviewers=[parse_participant_id('claude#review-B')],
+        evolution_level=2,
+        evolve_until=None,
+        cwd=tmp_path,
+        max_rounds=1,
+        test_command='py -m pytest -q',
+        lint_command='py -m ruff check .',
+        conversation_language='en',
+        plain_mode=True,
+    )
+    prompt = OrchestratorService._proposal_author_prompt(
+        config=cfg,
+        merged_context='Reviewer findings here.',
+        review_payload=[{'verdict': 'no_blocker'}],
+    )
+    assert 'Do not invent unrelated changes.' in prompt
+
+
 def test_service_clear_project_history_removes_terminal_tasks_only(tmp_path: Path):
     svc = build_service(tmp_path)
     project_root = tmp_path / 'repo'
@@ -2552,12 +2601,19 @@ def test_service_policy_templates_return_recommended_profile(tmp_path: Path):
     (project / 'deploy-prod.yaml').write_text('kind: Deployment\n', encoding='utf-8')
 
     payload = svc.get_policy_templates(workspace_path=str(project))
-    assert payload['recommended_template'] in {'balanced-default', 'safe-review', 'rapid-fix'}
+    assert payload['recommended_template'] == 'deep-discovery-first'
     assert payload['profile']['exists'] is True
     assert payload['profile']['workspace_path']
     assert payload['profile']['file_count'] >= 1
     ids = {item['id'] for item in payload['templates']}
-    assert {'balanced-default', 'safe-review', 'rapid-fix', 'deep-evolve'}.issubset(ids)
+    assert {'deep-discovery-first', 'balanced-default', 'safe-review', 'rapid-fix', 'deep-evolve', 'frontier-evolve'}.issubset(ids)
+    deep_defaults = next(
+        item['defaults']
+        for item in payload['templates']
+        if item['id'] == 'deep-discovery-first'
+    )
+    assert deep_defaults['evolution_level'] == 2
+    assert deep_defaults['self_loop_mode'] == 1
 
 
 def test_service_analytics_reports_failure_taxonomy_and_reviewer_drift(tmp_path: Path):

@@ -13,7 +13,7 @@ param(
   [string[]]$Reviewers = @('codex#review-B','claude#review-C'),
   [string]$FallbackAuthor = 'codex#author-A',
   [string[]]$FallbackReviewers = @('codex#review-B'),
-  [ValidateRange(0,2)][int]$EvolutionLevel = 0,
+  [ValidateRange(0,3)][int]$EvolutionLevel = 0,
   [ValidateRange(0,1)][int]$SelfLoopMode = 1,
   [ValidateRange(0,1)][int]$PlainMode = 1,
   [ValidateRange(0,1)][int]$StreamMode = 0,

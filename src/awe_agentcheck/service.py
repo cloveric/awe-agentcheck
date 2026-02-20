@@ -946,12 +946,6 @@ class OrchestratorService:
 
     @staticmethod
     def _recommend_policy_template(*, profile: dict) -> str:
-        repo_size = str(profile.get('repo_size') or '').strip().lower()
-        risk = str(profile.get('risk_level') or '').strip().lower()
-        if repo_size == 'large' or risk == 'high':
-            return 'safe-review'
-        if repo_size == 'small' and risk == 'low':
-            return 'rapid-fix'
         return DEFAULT_POLICY_TEMPLATE
 
     @staticmethod
@@ -1913,7 +1907,7 @@ class OrchestratorService:
                     description=row['description'],
                     author=author,
                     reviewers=reviewers,
-                    evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
+                    evolution_level=max(0, min(3, int(row.get('evolution_level', 0)))),
                     evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
                     conversation_language=self._normalize_conversation_language(row.get('conversation_language')),
                     provider_models=dict(row.get('provider_models', {})),
@@ -2520,7 +2514,7 @@ class OrchestratorService:
                 description=str(row.get('description', '')),
                 author=author,
                 reviewers=reviewers,
-                evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
+                evolution_level=max(0, min(3, int(row.get('evolution_level', 0)))),
                 evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
                 conversation_language=self._normalize_conversation_language(row.get('conversation_language')),
                 provider_models=dict(row.get('provider_models', {})),
@@ -4079,9 +4073,24 @@ class OrchestratorService:
         clipped = WorkflowEngine._clip_text(merged_context, max_chars=3200)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         plain_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
+        level = max(0, min(3, int(config.evolution_level)))
         no_blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value)
         blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.BLOCKER.value)
         unknown = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.UNKNOWN.value)
+        if level >= 3:
+            author_scope_guidance = (
+                "Primary plan must still map to reviewer findings and user intent. "
+                "You may append 1-3 optional proactive evolution candidates if they are low-risk and testable."
+            )
+            evolution_author_guidance = (
+                "For each optional candidate, include impact/risk/effort and a concrete verification path."
+            )
+        else:
+            author_scope_guidance = (
+                "Do not invent unrelated changes. "
+                "Only propose changes that map to reviewer findings and user intent."
+            )
+            evolution_author_guidance = ""
         audit_author_guidance = (
             "This is audit/discovery intent. Convert reviewer findings into a concrete execution plan: "
             "scope(files/modules), checks/tests, expected outputs, and stop conditions."
@@ -4096,6 +4105,8 @@ class OrchestratorService:
             no_blocker=no_blocker,
             blocker=blocker,
             unknown=unknown,
+            author_scope_guidance=author_scope_guidance,
+            evolution_author_guidance=evolution_author_guidance,
             audit_author_guidance=audit_author_guidance,
             context_text=clipped,
         )
@@ -4307,7 +4318,7 @@ class OrchestratorService:
             description=str(row['description']),
             author_participant=str(row['author_participant']),
             reviewer_participants=[str(v) for v in row.get('reviewer_participants', [])],
-            evolution_level=max(0, min(2, int(row.get('evolution_level', 0)))),
+            evolution_level=max(0, min(3, int(row.get('evolution_level', 0)))),
             evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
             conversation_language=OrchestratorService._normalize_conversation_language(row.get('conversation_language')),
             provider_models={str(k): str(v) for k, v in dict(row.get('provider_models', {})).items()},

@@ -1,5 +1,28 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-20, evolution level 3 + frontier template + author openness tuning)
+
+1. End-to-end support for `evolution_level=3` is now enabled:
+   - API schema: `CreateTaskRequest.evolution_level` accepts `0..3`.
+   - CLI: `--evolution-level` choices expanded to `0|1|2|3`.
+   - task normalization/storage/service/workflow clamps expanded to `min(3, ...)`.
+   - overnight scripts updated (`ValidateRange(0,3)` / payload clamp to 3).
+2. New policy template added:
+   - `frontier-evolve` in `src/awe_agentcheck/policy_templates.py`
+   - defaults: sandbox on, self-loop on, auto-merge on, rounds=4, repair=`structural`, `evolution_level=3`.
+3. Prompt behavior for level 3:
+   - discussion/implementation/review guidance now includes aggressive proactive evolution cues
+     (feature ideas, framework/runtime upgrades, UI/UX improvements).
+   - review checklist expanded for level 3 with opportunity mapping and impact/risk/effort/verification requirements.
+4. Author openness tuning (level 3 only):
+   - proposal-author prompt now allows `1..3` optional proactive evolution candidates.
+   - bug/blocker baseline remains unchanged (`BLOCKER` still tied to correctness/regression/security/data-loss risks).
+5. UI/docs/tests sync:
+   - Web `Evolution Level` dropdown now includes `3 | frontier evolve (aggressive)`.
+   - Create Task help includes level-3 and `frontier-evolve` descriptions.
+   - README EN/CN + architecture docs updated.
+   - tests added/updated across `test_cli.py`, `test_api.py`, `test_service.py`, `test_workflow.py`.
+
 ## Update (2026-02-20, service package split + prompt templates + langgraph per-round)
 
 1. `service_layers` monolith was replaced by a package:
@@ -124,7 +147,7 @@
      - scripts cross-platform coverage gap (`.ps1` without matching `.sh`)
    - enforcement mode:
      - `AWE_ARCH_AUDIT_MODE=off|warn|hard`
-     - default fallback: `warn` for `evolution_level=1`, `hard` for `evolution_level=2`
+     - default fallback: `warn` for `evolution_level=1`, `hard` for `evolution_level>=2`
 3. Adapter provider registry refactor (P1):
    - command template/model-flag/capabilities now come from a provider registry.
    - `AWE_PROVIDER_ADAPTERS_JSON` providers are auto-registered with defaults.
@@ -746,7 +769,7 @@ start_overnight_until_7.ps1
    - `scripts/selftest_local_smoke.py`
    - launches isolated dry-run API and validates end-to-end pass status automatically.
 27. Added task strategy controls:
-   - `evolution_level` (`0|1|2`) on task create
+   - `evolution_level` (`0|1|2|3`) on task create
    - `evolve_until` datetime deadline for discussion/evolution phase.
 28. Added workspace structure endpoint:
    - `GET /api/workspace-tree` for directory/file tree rendering.
@@ -754,7 +777,7 @@ start_overnight_until_7.ps1
    - left top now shows project structure tree (not just project list).
 30. Added launcher deadline and intensity controls:
    - `start_overnight_until_7.ps1 -Until "..."`
-   - `start_overnight_until_7.ps1 -EvolutionLevel 0|1|2`
+   - `start_overnight_until_7.ps1 -EvolutionLevel 0|1|2|3`
 31. Added monitor UI multi-theme support:
    - `Neon Grid` (existing hacker style)
    - `Terminal Pixel` (new pixel-terminal style via toolbar switch)

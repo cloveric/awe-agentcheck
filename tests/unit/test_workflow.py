@@ -604,6 +604,46 @@ def test_discussion_prompt_includes_evolution_guidance_for_level_2(tmp_path: Pat
     assert 'EVOLUTION_PROPOSAL_1' in prompt
 
 
+def test_discussion_prompt_includes_frontier_guidance_for_level_3(tmp_path: Path):
+    cfg = RunConfig(
+        task_id='t7-e3',
+        title='Frontier evolve test',
+        description='aggressive evolve',
+        author=parse_participant_id('claude#author-A'),
+        reviewers=[parse_participant_id('codex#review-B')],
+        evolution_level=3,
+        evolve_until=None,
+        cwd=tmp_path,
+        max_rounds=1,
+        test_command='py -m pytest -q',
+        lint_command='py -m ruff check .',
+    )
+    prompt = WorkflowEngine._discussion_prompt(cfg, 1, None)
+    assert 'EvolutionLevel: 3' in prompt
+    assert 'framework/runtime upgrades' in prompt
+    assert 'EVOLUTION_PROPOSAL_1..N' in prompt
+
+
+def test_review_prompt_includes_frontier_checklist_for_level_3(tmp_path: Path):
+    cfg = RunConfig(
+        task_id='t6-e3',
+        title='Frontier checklist test',
+        description='review deeply',
+        author=parse_participant_id('claude#author-A'),
+        reviewers=[parse_participant_id('codex#review-B')],
+        evolution_level=3,
+        evolve_until=None,
+        cwd=tmp_path,
+        max_rounds=1,
+        test_command='py -m pytest -q',
+        lint_command='py -m ruff check .',
+    )
+    prompt = WorkflowEngine._review_prompt(cfg, 1, 'impl summary')
+    assert 'feature opportunity map' in prompt
+    assert 'framework/runtime upgrade candidates' in prompt
+    assert 'UI/UX upgrade ideas' in prompt
+
+
 def test_workflow_stops_when_deadline_reached(tmp_path: Path):
     runner = FakeRunner([_ok_result(), _ok_result(), _ok_result()])
     executor = FakeCommandExecutor(tests_ok=True, lint_ok=True)

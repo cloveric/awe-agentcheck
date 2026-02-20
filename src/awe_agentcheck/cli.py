@@ -32,7 +32,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument('--description', default='', help='Optional task description')
     run.add_argument('--author', required=True, help='Author participant id')
     run.add_argument('--reviewer', action='append', required=True, help='Reviewer participant id (repeatable)')
-    run.add_argument('--evolution-level', type=int, default=0, choices=[0, 1, 2], help='0=fix-only, 1=guided evolve, 2=proactive evolve')
+    run.add_argument(
+        '--evolution-level',
+        type=int,
+        default=0,
+        choices=[0, 1, 2, 3],
+        help='0=fix-only, 1=guided evolve, 2=proactive evolve, 3=frontier evolve',
+    )
     run.add_argument('--evolve-until', default='', help='Optional local datetime deadline, e.g. 2026-02-13 06:00')
     run.add_argument('--conversation-language', default='en', choices=['en', 'zh'], help='Conversation output language: en or zh')
     run.add_argument('--sandbox-mode', type=int, default=1, choices=[0, 1], help='1=run in sandbox workspace (default), 0=run in main workspace')

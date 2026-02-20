@@ -534,8 +534,9 @@ If this is your first time, operate in this exact order:
 | `Reviewers` | One or more reviewers, comma-separated | At least 1 reviewer |
 | `Claude Model / Codex Model / Gemini Model` | Per-provider model pinning (dropdown + editable) | Start from defaults (`claude-opus-4-6`, `gpt-5.3-codex`, `gemini-3-pro-preview`) |
 | `Claude/Codex/Gemini Model Params` | Optional extra args per provider | For Codex use `-c model_reasoning_effort=xhigh` |
+| `Policy Template` | Preset execution posture (applies multiple controls at once) | Start with `deep-discovery-first`; use `frontier-evolve` for aggressive idea/framework/UI exploration |
 | `Claude Team Agents` | Enable/disable Claude `--agents` mode | `0` (disabled) |
-| `Evolution Level` | `0` fix-only, `1` guided evolve, `2` proactive evolve | Start with `0` |
+| `Evolution Level` | `0` fix-only, `1` guided evolve, `2` proactive evolve, `3` frontier/aggressive evolve | Start with `0` |
 | `Repair Mode` | `minimal` / `balanced` / `structural` | Start with `balanced` |
 | `Max Rounds` | `self_loop_mode=0`: required consensus rounds; `self_loop_mode=1`: retry cap fallback when no deadline | `1` |
 | `Evolve Until` | Optional deadline (`YYYY-MM-DD HH:MM`) | Empty unless running overnight |
@@ -552,6 +553,14 @@ If this is your first time, operate in this exact order:
 | `Description` | Detailed requirement text | Include acceptance criteria |
 
 UI policy note: when `Sandbox Mode = 0`, the dashboard forces `Auto Merge = 0` and locks that selector.
+
+Policy template quick map:
+
+- `deep-discovery-first` (default): audit-first, broad discovery, `evolution_level=2`.
+- `frontier-evolve`: aggressive proactive evolution, `evolution_level=3`.
+- `deep-evolve`: deep structural refactor posture, `auto_merge=0`.
+- `safe-review`: conservative risk-first/manual bias.
+- `rapid-fix`: fastest small-patch posture.
 
 ### Create Buttons
 
@@ -662,7 +671,7 @@ py -m awe_agentcheck.cli run `
 | `--max-rounds` | No | `3` | Manual mode: required consensus rounds. Autonomous mode: max gate retries when no deadline |
 | `--test-command` | No | `py -m pytest -q` | Command to run tests |
 | `--lint-command` | No | `py -m ruff check .` | Command to run linter |
-| `--evolution-level` | No | `0` | `0` = fix-only, `1` = guided evolve, `2` = proactive evolve |
+| `--evolution-level` | No | `0` | `0` = fix-only, `1` = guided evolve, `2` = proactive evolve, `3` = frontier/aggressive evolve |
 | `--repair-mode` | No | `balanced` | Repair policy (`minimal` / `balanced` / `structural`) |
 | `--evolve-until` | No | — | Deadline for evolution (e.g. `2026-02-13 06:00`) |
 | `--conversation-language` | No | `en` | Agent output language (`en` or `zh`) |

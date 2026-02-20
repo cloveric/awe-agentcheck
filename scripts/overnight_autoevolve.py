@@ -24,6 +24,7 @@ from awe_agentcheck.automation import (
     should_switch_back_to_primary,
     should_switch_to_fallback,
 )
+from awe_agentcheck.policy_templates import DEFAULT_POLICY_TEMPLATE
 
 
 TERMINAL_STATUSES = {'passed', 'failed_gate', 'failed_system', 'canceled'}
@@ -94,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--adaptive-policy', type=int, default=1, choices=[0, 1])
     parser.add_argument('--adaptive-interval', type=int, default=1)
     parser.add_argument('--analytics-limit', type=int, default=300)
-    parser.add_argument('--policy-template', default='balanced-default')
+    parser.add_argument('--policy-template', default=DEFAULT_POLICY_TEMPLATE)
     parser.add_argument('--test-command', default='py -m pytest -q')
     parser.add_argument('--lint-command', default='py -m ruff check .')
     parser.add_argument('--topic-file', default='')
@@ -165,7 +166,7 @@ def create_task(
         'description': str(description or '').strip() or build_task_description(topic),
         'author_participant': participants.author,
         'reviewer_participants': participants.reviewers,
-        'evolution_level': int(max(0, min(2, int(evolution_level)))),
+        'evolution_level': int(max(0, min(3, int(evolution_level)))),
         'evolve_until': (str(evolve_until).strip() if evolve_until else None),
         'workspace_path': workspace_path,
         'sandbox_mode': int(sandbox_mode) == 1,
@@ -311,7 +312,11 @@ def resolve_policy_overrides(
         template_defaults[tid] = dict(defaults)
 
     recommended_by_profile = str(policy_templates_payload.get('recommended_template') or '').strip()
-    fallback = recommended_by_profile or str(fallback_template or 'balanced-default').strip() or 'balanced-default'
+    fallback = (
+        recommended_by_profile
+        or str(fallback_template or DEFAULT_POLICY_TEMPLATE).strip()
+        or DEFAULT_POLICY_TEMPLATE
+    )
     adjustment = derive_policy_adjustment_from_analytics(analytics_payload, fallback_template=fallback)
     chosen_template = str(adjustment.get('recommended_template') or fallback).strip() or fallback
     merged_overrides = dict(template_defaults.get(chosen_template, {}))
@@ -455,7 +460,7 @@ def main(argv: list[str] | None = None) -> int:
     primary_disabled_until: datetime | None = None
     followup_queue: Deque[tuple[str, str, str]] = deque()
     followup_keys: set[str] = set()
-    current_policy_template = str(args.policy_template or 'balanced-default').strip() or 'balanced-default'
+    current_policy_template = str(args.policy_template or DEFAULT_POLICY_TEMPLATE).strip() or DEFAULT_POLICY_TEMPLATE
     current_policy_overrides: dict = {}
     current_policy_adjustment: dict = {}
 

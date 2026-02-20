@@ -71,6 +71,9 @@ Task-level strategy controls:
   - `0` fix-only
   - `1` guided evolution
   - `2` proactive evolution
+  - `3` frontier/aggressive evolution (feature/framework/UI proactive upgrades)
+  - behavior note: level `3` keeps blocker criteria unchanged for bug/regression/security/data-loss,
+    but gives author higher openness to optional proactive evolution candidates.
 - `repair_mode`:
   - `minimal` smallest safe patch
   - `balanced` root-cause + focused scope (default)
