@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import shutil
 import stat
 import subprocess
@@ -20,7 +19,7 @@ from awe_agentcheck.domain.gate import evaluate_medium_gate
 from awe_agentcheck.domain.models import ReviewVerdict, TaskStatus
 from awe_agentcheck.fusion import AutoFusionManager
 from awe_agentcheck.observability import get_logger, set_task_context
-from awe_agentcheck.participants import get_supported_providers, parse_participant_id
+from awe_agentcheck.participants import parse_participant_id
 from awe_agentcheck.policy_templates import (
     DEFAULT_POLICY_TEMPLATE,
     DEFAULT_RISK_POLICY_CONTRACT,
@@ -36,7 +35,30 @@ from awe_agentcheck.service_layers import (
     TaskManagementService,
 )
 from awe_agentcheck.storage.artifacts import ArtifactStore
+from awe_agentcheck.task_options import (
+    coerce_bool_override_value,
+    extract_model_from_command,
+    normalize_bool_flag,
+    normalize_conversation_language,
+    normalize_evolve_until,
+    normalize_merge_target_path,
+    normalize_participant_agent_overrides,
+    normalize_participant_agent_overrides_runtime,
+    normalize_participant_model_params,
+    normalize_participant_models,
+    normalize_plain_mode,
+    normalize_provider_model_params,
+    normalize_provider_models,
+    normalize_repair_mode,
+    resolve_agent_toggle_for_participant,
+    resolve_model_for_participant,
+    resolve_model_params_for_participant,
+    supported_providers,
+)
 from awe_agentcheck.workflow import RunConfig, ShellCommandExecutor, WorkflowEngine
+from awe_agentcheck.workflow_architecture import build_environment_context
+from awe_agentcheck.workflow_prompting import inject_prompt_extras
+from awe_agentcheck.workflow_text import clip_text
 
 _log = get_logger('awe_agentcheck.service')
 
@@ -182,15 +204,13 @@ _DEFAULT_PROVIDER_MODELS = {
     ],
 }
 
-_SUPPORTED_CONVERSATION_LANGUAGES = {'en', 'zh'}
-_SUPPORTED_REPAIR_MODES = {'minimal', 'balanced', 'structural'}
 _ARTIFACT_TASK_ID_RE = re.compile(r'^[A-Za-z0-9._-]+$')
 _PROPOSAL_STALL_RETRY_LIMIT = 10
 _PROPOSAL_REPEAT_ROUNDS_LIMIT = 4
 
 
 def _supported_providers() -> set[str]:
-    return get_supported_providers()
+    return supported_providers()
 
 
 def _reason_bucket(reason: str | None) -> str | None:
@@ -352,7 +372,7 @@ class OrchestratorService:
                 provider = str(raw_provider or '').strip().lower()
                 if provider not in supported:
                     continue
-                detected = self._extract_model_from_command(str(raw_command or ''))
+                detected = extract_model_from_command(str(raw_command or ''))
                 if detected:
                     add_model(provider, detected)
 
@@ -536,7 +556,7 @@ class OrchestratorService:
             seq_raw = raw.get('seq')
             try:
                 seq_value = int(seq_raw)
-            except Exception:
+            except (TypeError, ValueError):
                 seq_value = next_seq
             if seq_value < 1:
                 seq_value = next_seq
@@ -564,7 +584,7 @@ class OrchestratorService:
             round_raw = raw.get('round')
             try:
                 round_number = int(round_raw) if round_raw is not None else None
-            except Exception:
+            except (TypeError, ValueError):
                 round_number = None
 
             created_at = str(raw.get('created_at') or '').strip() or datetime.now().isoformat()
@@ -635,7 +655,7 @@ class OrchestratorService:
                 if events:
                     return events
             except Exception:
-                pass
+                _log.exception('list_events_failed task_id=%s', task_id)
 
         if task_dir is None:
             return []
@@ -650,7 +670,7 @@ class OrchestratorService:
                     continue
                 try:
                     obj = json.loads(text)
-                except Exception:
+                except json.JSONDecodeError:
                     continue
                 if isinstance(obj, dict):
                     out.append(obj)
@@ -1005,7 +1025,7 @@ class OrchestratorService:
                 continue
             try:
                 parsed = json.loads(candidate.read_text(encoding='utf-8'))
-            except Exception:
+            except (OSError, json.JSONDecodeError):
                 continue
             if not isinstance(parsed, dict):
                 continue
@@ -1185,7 +1205,7 @@ class OrchestratorService:
                 errors='replace',
                 timeout=5,
             )
-        except Exception:
+        except (OSError, subprocess.SubprocessError):
             return False, ''
         if completed.returncode != 0:
             return False, (completed.stderr or completed.stdout or '').strip()
@@ -1307,7 +1327,7 @@ class OrchestratorService:
             return {}
         try:
             data = json.loads(raw)
-        except Exception:
+        except json.JSONDecodeError:
             return {}
         return data if isinstance(data, dict) else {}
 
@@ -1324,7 +1344,7 @@ class OrchestratorService:
                         continue
                     try:
                         obj = json.loads(text)
-                    except Exception:
+                    except json.JSONDecodeError:
                         continue
                     if isinstance(obj, dict):
                         created_at = str(obj.get('created_at') or '').strip()
@@ -1350,7 +1370,7 @@ class OrchestratorService:
             for raw in reversed(lines):
                 try:
                     obj = json.loads(raw)
-                except Exception:
+                except json.JSONDecodeError:
                     continue
                 if isinstance(obj, dict):
                     created_at = str(obj.get('created_at') or '').strip()
@@ -1480,7 +1500,7 @@ class OrchestratorService:
                 payload=payload,
                 round_number=None,
             )
-            self.artifact_store.append_event(task_id, {'type': 'start_deduped', **payload})
+            self.artifact_store.append_event(task_id, {'type': EventType.START_DEDUPED.value, **payload})
             return self._to_view(row)
         try:
             return self._start_task_impl(task_id)
@@ -1521,7 +1541,7 @@ class OrchestratorService:
                 payload=payload,
                 round_number=None,
             )
-            self.artifact_store.append_event(task_id, {'type': 'workspace_resume_guard_blocked', **payload})
+            self.artifact_store.append_event(task_id, {'type': EventType.WORKSPACE_RESUME_GUARD_BLOCKED.value, **payload})
             self.artifact_store.write_artifact_json(
                 task_id,
                 name='workspace_resume_guard',
@@ -1573,7 +1593,7 @@ class OrchestratorService:
             payload=preflight_guard,
             round_number=None,
         )
-        self.artifact_store.append_event(task_id, {'type': 'preflight_risk_gate', **preflight_guard})
+        self.artifact_store.append_event(task_id, {'type': EventType.PREFLIGHT_RISK_GATE.value, **preflight_guard})
         self.artifact_store.write_artifact_json(task_id, name='preflight_risk_gate', payload=preflight_guard)
         self.artifact_store.update_state(task_id, {'preflight_risk_gate_last': preflight_guard})
         if not bool(preflight_guard.get('passed', False)):
@@ -1590,7 +1610,7 @@ class OrchestratorService:
                 payload=preflight_guard,
                 round_number=None,
             )
-            self.artifact_store.append_event(task_id, {'type': 'preflight_risk_gate_failed', **preflight_guard})
+            self.artifact_store.append_event(task_id, {'type': EventType.PREFLIGHT_RISK_GATE_FAILED.value, **preflight_guard})
             self.artifact_store.update_state(
                 task_id,
                 {
@@ -1628,7 +1648,7 @@ class OrchestratorService:
             payload=head_guard_payload,
             round_number=None,
         )
-        self.artifact_store.append_event(task_id, {'type': 'head_sha_captured', **head_guard_payload})
+        self.artifact_store.append_event(task_id, {'type': EventType.HEAD_SHA_CAPTURED.value, **head_guard_payload})
         self.artifact_store.update_state(task_id, {'head_sha_captured': head_guard_payload})
         if bool(row.get('auto_merge', True)) and merge_target_is_git and not merge_target_head_before_run:
             blocked_reason = 'head_sha_missing: merge_target_start_sha_missing'
@@ -1644,7 +1664,7 @@ class OrchestratorService:
                 payload=missing_payload,
                 round_number=None,
             )
-            self.artifact_store.append_event(task_id, {'type': 'head_sha_missing', **missing_payload})
+            self.artifact_store.append_event(task_id, {'type': EventType.HEAD_SHA_MISSING.value, **missing_payload})
             updated = self.repository.update_task_status(
                 task_id,
                 status=TaskStatus.FAILED_GATE.value,
@@ -1749,6 +1769,7 @@ class OrchestratorService:
                     )
                     evidence_payload['artifact_path'] = str(artifact_path)
                 except Exception as exc:
+                    _log.exception('evidence_bundle_artifact_write_failed task_id=%s round=%s', task_id, round_no)
                     evidence_payload['artifact_error'] = str(exc)
                 latest_evidence_bundle[0] = dict(evidence_payload)
                 self.repository.append_event(
@@ -1757,7 +1778,7 @@ class OrchestratorService:
                     payload=evidence_payload,
                     round_number=round_no,
                 )
-                self.artifact_store.append_event(task_id, {'type': 'evidence_bundle_ready', **evidence_payload})
+                self.artifact_store.append_event(task_id, {'type': EventType.EVIDENCE_BUNDLE_READY.value, **evidence_payload})
                 self.artifact_store.update_state(task_id, {'evidence_bundle_last': evidence_payload})
             if round_artifacts_enabled and event_type in {'gate_passed', 'gate_failed'} and round_no > 0:
                 previous_snapshot = round_snapshot_holder[0]
@@ -1778,8 +1799,9 @@ class OrchestratorService:
                             payload=round_payload,
                             round_number=round_no,
                         )
-                        self.artifact_store.append_event(task_id, {'type': 'round_artifact_ready', **round_payload})
+                        self.artifact_store.append_event(task_id, {'type': EventType.ROUND_ARTIFACT_READY.value, **round_payload})
                     except Exception as exc:
+                        _log.exception('round_artifact_capture_failed task_id=%s round=%s', task_id, round_no)
                         error_payload = {
                             'round': round_no,
                             'reason': str(exc or 'round_artifact_error').strip() or 'round_artifact_error',
@@ -1790,7 +1812,7 @@ class OrchestratorService:
                             payload=error_payload,
                             round_number=round_no,
                         )
-                        self.artifact_store.append_event(task_id, {'type': 'round_artifact_error', **error_payload})
+                        self.artifact_store.append_event(task_id, {'type': EventType.ROUND_ARTIFACT_ERROR.value, **error_payload})
 
         def should_cancel() -> bool:
             return self.repository.is_cancel_requested(task_id)
@@ -1846,7 +1868,7 @@ class OrchestratorService:
                 final_status = TaskStatus.FAILED_GATE
                 final_reason = str(evidence_guard.get('reason') or 'precompletion_evidence_missing')
                 evidence_payload = {
-                    'type': 'precompletion_guard_failed',
+                    'type': EventType.PRECOMPLETION_GUARD_FAILED.value,
                     'reason': final_reason,
                     'expected_round': max(1, int(result.rounds)),
                     'evidence_bundle': dict(latest_evidence_bundle[0] or {}),
@@ -1883,7 +1905,7 @@ class OrchestratorService:
                 final_status = TaskStatus.FAILED_GATE
                 final_reason = str(manifest_result.get('reason') or 'precompletion_evidence_missing')
                 failure_payload = {
-                    'type': 'evidence_manifest_failed',
+                    'type': EventType.EVIDENCE_MANIFEST_FAILED.value,
                     'reason': final_reason,
                     'manifest': manifest_result,
                 }
@@ -1906,7 +1928,7 @@ class OrchestratorService:
                     payload=manifest_result,
                     round_number=max(1, int(result.rounds)),
                 )
-                self.artifact_store.append_event(task_id, {'type': 'evidence_manifest_ready', **manifest_result})
+                self.artifact_store.append_event(task_id, {'type': EventType.EVIDENCE_MANIFEST_READY.value, **manifest_result})
                 self.artifact_store.update_state(task_id, {'evidence_manifest_last': manifest_result})
         _log.info('task_finished task_id=%s status=%s rounds=%d reason=%s',
                   task_id, final_status.value, result.rounds, final_reason)
@@ -1961,7 +1983,7 @@ class OrchestratorService:
                         payload=missing_payload,
                         round_number=None,
                     )
-                    self.artifact_store.append_event(task_id, {'type': 'head_sha_missing', **missing_payload})
+                    self.artifact_store.append_event(task_id, {'type': EventType.HEAD_SHA_MISSING.value, **missing_payload})
                     updated = self.repository.update_task_status(
                         task_id,
                         status=TaskStatus.FAILED_GATE.value,
@@ -2002,7 +2024,7 @@ class OrchestratorService:
                         payload=mismatch_payload,
                         round_number=None,
                     )
-                    self.artifact_store.append_event(task_id, {'type': 'head_sha_mismatch', **mismatch_payload})
+                    self.artifact_store.append_event(task_id, {'type': EventType.HEAD_SHA_MISMATCH.value, **mismatch_payload})
                     updated = self.repository.update_task_status(
                         task_id,
                         status=TaskStatus.FAILED_GATE.value,
@@ -2033,7 +2055,7 @@ class OrchestratorService:
                     payload=guard,
                     round_number=None,
                 )
-                self.artifact_store.append_event(task_id, {'type': 'promotion_guard_checked', **guard})
+                self.artifact_store.append_event(task_id, {'type': EventType.PROMOTION_GUARD_CHECKED.value, **guard})
                 self.artifact_store.update_state(task_id, {'promotion_guard_last': guard})
                 if not bool(guard.get('guard_allowed', True)):
                     blocked_reason = f'promotion_guard_blocked: {guard.get("guard_reason") or "blocked"}'
@@ -2045,7 +2067,7 @@ class OrchestratorService:
                     )
                     self.artifact_store.append_event(
                         task_id,
-                        {'type': 'promotion_guard_blocked', 'reason': blocked_reason, **guard},
+                        {'type': EventType.PROMOTION_GUARD_BLOCKED.value, 'reason': blocked_reason, **guard},
                     )
                     updated = self.repository.update_task_status(
                         task_id,
@@ -2107,6 +2129,7 @@ class OrchestratorService:
                     self.artifact_store.append_event(task_id, {'type': event_type, **cleanup_payload})
                     self.artifact_store.update_state(task_id, {'sandbox_cleanup_last': cleanup_payload})
             except Exception as exc:
+                _log.exception('auto_merge_or_cleanup_failed task_id=%s', task_id)
                 return self.mark_failed_system(task_id, reason=f'auto_merge_error: {exc}')
 
         if final_status in {TaskStatus.FAILED_GATE, TaskStatus.FAILED_SYSTEM}:
@@ -2157,7 +2180,7 @@ class OrchestratorService:
         )
         self.artifact_store.append_event(
             task_id,
-            {'type': 'author_decision', **payload},
+            {'type': EventType.AUTHOR_DECISION.value, **payload},
         )
 
         rounds = int(row.get('rounds_completed', 0))
@@ -2193,7 +2216,7 @@ class OrchestratorService:
             )
             self.artifact_store.append_event(
                 task_id,
-                {'type': 'author_feedback_requested', **feedback_payload},
+                {'type': EventType.AUTHOR_FEEDBACK_REQUESTED.value, **feedback_payload},
             )
             self.repository.set_cancel_requested(task_id, requested=False)
             updated = self.repository.update_task_status(
@@ -2237,6 +2260,7 @@ class OrchestratorService:
         try:
             events = self.repository.list_events(task_id)
         except Exception:
+            _log.exception('latest_author_feedback_list_events_failed task_id=%s', task_id)
             return None
         for event in reversed(events):
             event_type = str(event.get('type') or '').strip().lower()
@@ -2341,7 +2365,7 @@ class OrchestratorService:
             payload=guard,
             round_number=round_no,
         )
-        self.artifact_store.append_event(task_id, {'type': 'promotion_guard_checked', **guard})
+        self.artifact_store.append_event(task_id, {'type': EventType.PROMOTION_GUARD_CHECKED.value, **guard})
         self.artifact_store.update_state(task_id, {'promotion_guard_last': guard})
         if not bool(guard.get('guard_allowed', True)):
             raise InputValidationError(
@@ -2376,7 +2400,7 @@ class OrchestratorService:
             payload=payload,
             round_number=round_no,
         )
-        self.artifact_store.append_event(task_id, {'type': 'manual_round_promoted', **payload})
+        self.artifact_store.append_event(task_id, {'type': EventType.MANUAL_ROUND_PROMOTED.value, **payload})
         self.artifact_store.write_artifact_json(
             task_id,
             name=f'round-{round_no}-promote-summary',
@@ -2434,7 +2458,11 @@ class OrchestratorService:
                 test_command=str(row.get('test_command', 'py -m pytest -q')),
                 lint_command=str(row.get('lint_command', 'py -m ruff check .')),
             )
-            proposal_environment_context = WorkflowEngine._environment_context(config)
+            proposal_environment_context = build_environment_context(
+                cwd=Path(config.cwd),
+                test_command=config.test_command,
+                lint_command=config.lint_command,
+            )
             claude_team_agents_overrides = self._normalize_participant_agent_overrides_runtime(
                 config.claude_team_agents_overrides
             )
@@ -2537,6 +2565,12 @@ class OrchestratorService:
                                 review_text=review_text,
                             )
                         except Exception as exc:
+                            _log.exception(
+                                'proposal_reviewer_stage_failed task_id=%s round=%s participant=%s',
+                                task_id,
+                                round_no,
+                                reviewer.participant_id,
+                            )
                             reason = str(exc or 'review_failed').strip() or 'review_failed'
                             error_payload = {
                                 'type': error_type,
@@ -2649,7 +2683,7 @@ class OrchestratorService:
                     )
                     self.artifact_store.append_event(
                         task_id,
-                        {'type': 'proposal_consensus_stalled', **stall_payload},
+                        {'type': EventType.PROPOSAL_CONSENSUS_STALLED.value, **stall_payload},
                     )
                     pending_payload = {
                         'summary': summary_text,
@@ -2668,7 +2702,7 @@ class OrchestratorService:
                     )
                     self.artifact_store.append_event(
                         task_id,
-                        {'type': 'author_confirmation_required', **pending_payload},
+                        {'type': EventType.AUTHOR_CONFIRMATION_REQUIRED.value, **pending_payload},
                     )
                     self.artifact_store.write_artifact_json(
                         task_id,
@@ -2770,7 +2804,7 @@ class OrchestratorService:
                                 )
                                 self.artifact_store.append_event(
                                     task_id,
-                                    {'type': 'proposal_precheck_unavailable', **fail_payload},
+                                    {'type': EventType.PROPOSAL_PRECHECK_UNAVAILABLE.value, **fail_payload},
                                 )
                                 self.artifact_store.update_state(
                                     task_id,
@@ -2784,7 +2818,7 @@ class OrchestratorService:
                                 return self._to_view(failed)
 
                         discussion_started = {
-                            'type': 'proposal_discussion_started',
+                            'type': EventType.PROPOSAL_DISCUSSION_STARTED.value,
                             'round': round_no,
                             'provider': author.provider,
                             'participant': author.participant_id,
@@ -2855,9 +2889,15 @@ class OrchestratorService:
                                 ),
                             )
                         except Exception as exc:
+                            _log.exception(
+                                'proposal_discussion_failed task_id=%s round=%s participant=%s',
+                                task_id,
+                                round_no,
+                                author.participant_id,
+                            )
                             reason = str(exc or 'discussion_failed').strip() or 'discussion_failed'
                             error_payload = {
-                                'type': 'proposal_discussion_error',
+                                'type': EventType.PROPOSAL_DISCUSSION_ERROR.value,
                                 'round': round_no,
                                 'attempt': attempt,
                                 'participant': author.participant_id,
@@ -2881,7 +2921,7 @@ class OrchestratorService:
                         round_latest_proposal = discussion_text
                         if discussion_text:
                             discussion_event = {
-                                'type': 'discussion',
+                                'type': EventType.DISCUSSION.value,
                                 'round': round_no,
                                 'participant': author.participant_id,
                                 'provider': author.provider,
@@ -2943,7 +2983,7 @@ class OrchestratorService:
                             )
                             self.artifact_store.append_event(
                                 task_id,
-                                {'type': 'proposal_review_partial', **partial_payload},
+                                {'type': EventType.PROPOSAL_REVIEW_PARTIAL.value, **partial_payload},
                             )
                             actionable_reviews = [
                                 item
@@ -2978,7 +3018,7 @@ class OrchestratorService:
                                 payload=ok_payload,
                                 round_number=round_no,
                             )
-                            self.artifact_store.append_event(task_id, {'type': 'proposal_consensus_reached', **ok_payload})
+                            self.artifact_store.append_event(task_id, {'type': EventType.PROPOSAL_CONSENSUS_REACHED.value, **ok_payload})
                             round_signature = self._proposal_round_signature(
                                 actionable_reviews,
                                 proposal_text=round_latest_proposal,
@@ -2993,7 +3033,7 @@ class OrchestratorService:
                                 last_round_signature = ''
                                 repeated_signature_rounds = 0
                             if target_rounds > 1 and round_signature and repeated_signature_rounds >= repeat_round_limit:
-                                proposal_preview = WorkflowEngine._clip_text(round_latest_proposal, max_chars=800).strip()
+                                proposal_preview = clip_text(round_latest_proposal, max_chars=800).strip()
                                 stall_summary = (
                                     f"Task: {str(row.get('title') or '')}\n"
                                     f"Consensus stalled across rounds: repeated issue signature for {repeated_signature_rounds} rounds.\n"
@@ -3034,14 +3074,14 @@ class OrchestratorService:
                                 payload=retry_payload,
                                 round_number=round_no,
                             )
-                            self.artifact_store.append_event(task_id, {'type': 'proposal_consensus_retry', **retry_payload})
+                            self.artifact_store.append_event(task_id, {'type': EventType.PROPOSAL_CONSENSUS_RETRY.value, **retry_payload})
                             current_seed = self._append_proposal_feedback_context(
                                 merged_after_review,
                                 reviewer_id='consensus',
                                 review_text=f'unresolved blockers={blocker}, unknown={unknown}',
                             )
                             if attempt >= retry_limit:
-                                proposal_preview = WorkflowEngine._clip_text(round_latest_proposal, max_chars=800).strip()
+                                proposal_preview = clip_text(round_latest_proposal, max_chars=800).strip()
                                 stall_summary = (
                                     f"Task: {str(row.get('title') or '')}\n"
                                     f"Consensus stalled in round {round_no}: reached retry limit ({retry_limit}).\n"
@@ -3072,7 +3112,7 @@ class OrchestratorService:
 
                 discussion_text = current_seed
 
-            proposal_preview = WorkflowEngine._clip_text(discussion_text, max_chars=1200).strip()
+            proposal_preview = clip_text(discussion_text, max_chars=1200).strip()
             no_blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value)
             blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.BLOCKER.value)
             unknown = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.UNKNOWN.value)
@@ -3085,6 +3125,7 @@ class OrchestratorService:
             if author_feedback_note:
                 summary = f"{summary}\nAuthor feedback:\n- {author_feedback_note}"
         except Exception as exc:
+            _log.exception('author_confirmation_prepare_failed task_id=%s', task_id)
             return self.mark_failed_system(task_id, reason=f'proposal_error: {exc}')
 
         waiting = self.repository.update_task_status(
@@ -3109,7 +3150,7 @@ class OrchestratorService:
         )
         self.artifact_store.append_event(
             task_id,
-            {'type': 'author_confirmation_required', **pending_payload},
+            {'type': EventType.AUTHOR_CONFIRMATION_REQUIRED.value, **pending_payload},
         )
         self.artifact_store.write_artifact_json(task_id, name='pending_proposal', payload=pending_payload)
 
@@ -3124,7 +3165,7 @@ class OrchestratorService:
                 payload=decision_payload,
                 round_number=None,
             )
-            self.artifact_store.append_event(task_id, {'type': 'author_decision', **decision_payload})
+            self.artifact_store.append_event(task_id, {'type': EventType.AUTHOR_DECISION.value, **decision_payload})
             self.repository.set_cancel_requested(task_id, requested=False)
             approved = self.repository.update_task_status(
                 task_id,
@@ -3186,154 +3227,65 @@ class OrchestratorService:
 
     @staticmethod
     def _normalize_evolve_until(value: str | None) -> str | None:
-        text = str(value or '').strip()
-        if not text:
-            return None
-        candidate = text.replace(' ', 'T')
         try:
-            parsed = datetime.fromisoformat(candidate)
+            return normalize_evolve_until(value)
         except ValueError as exc:
             raise InputValidationError(
                 'evolve_until must be ISO/local datetime',
                 field='evolve_until',
             ) from exc
-        return parsed.replace(microsecond=0).isoformat()
 
     @staticmethod
     def _normalize_merge_target_path(value: str | None) -> str | None:
-        text = str(value or '').strip()
-        if not text:
-            return None
-        return str(Path(text))
+        return normalize_merge_target_path(value)
 
     @staticmethod
     def _normalize_conversation_language(value: str | None, *, strict: bool = False) -> str:
-        text = str(value or '').strip().lower()
-        if not text:
-            return 'en'
-        aliases = {
-            'en': 'en',
-            'english': 'en',
-            'eng': 'en',
-            'zh': 'zh',
-            'zh-cn': 'zh',
-            'cn': 'zh',
-            'chinese': 'zh',
-            '中文': 'zh',
-        }
-        normalized = aliases.get(text, text)
-        if normalized not in _SUPPORTED_CONVERSATION_LANGUAGES:
-            if strict:
-                raise InputValidationError(
-                    f'invalid conversation_language: {text}',
-                    field='conversation_language',
-                )
-            return 'en'
-        return normalized
+        try:
+            return normalize_conversation_language(value, strict=strict)
+        except ValueError as exc:
+            raise InputValidationError(
+                str(exc),
+                field='conversation_language',
+            ) from exc
 
     @staticmethod
     def _normalize_repair_mode(value, *, strict: bool = False) -> str:
-        text = str(value or '').strip().lower()
-        if not text:
-            return 'balanced'
-        if text not in _SUPPORTED_REPAIR_MODES:
-            if strict:
-                raise InputValidationError(
-                    f'invalid repair_mode: {text}',
-                    field='repair_mode',
-                )
-            return 'balanced'
-        return text
+        try:
+            return normalize_repair_mode(value, strict=strict)
+        except ValueError as exc:
+            raise InputValidationError(
+                str(exc),
+                field='repair_mode',
+            ) from exc
 
     @staticmethod
     def _normalize_plain_mode(value) -> bool:
-        text = str(value).strip().lower()
-        if text in {'0', 'false', 'no', 'off'}:
-            return False
-        if text in {'1', 'true', 'yes', 'on'}:
-            return True
-        return bool(value)
+        return normalize_plain_mode(value)
 
     @staticmethod
     def _normalize_bool_flag(value, *, default: bool) -> bool:
-        text = str(value).strip().lower()
-        if text in {'0', 'false', 'no', 'off'}:
-            return False
-        if text in {'1', 'true', 'yes', 'on'}:
-            return True
-        if text in {'', 'none'}:
-            return bool(default)
-        return bool(value)
+        return normalize_bool_flag(value, default=default)
 
     @staticmethod
     def _normalize_provider_models(value: dict[str, str] | None) -> dict[str, str]:
-        if not value:
-            return {}
-        if not isinstance(value, dict):
-            raise InputValidationError('provider_models must be an object', field='provider_models')
-
-        out: dict[str, str] = {}
-        for raw_provider, raw_model in value.items():
-            provider = str(raw_provider or '').strip().lower()
-            model = str(raw_model or '').strip()
-            if provider not in _supported_providers():
-                raise InputValidationError(
-                    f'invalid provider_models key: {provider}',
-                    field='provider_models',
-                )
-            if not model:
-                raise InputValidationError(
-                    f'provider_models[{provider}] cannot be empty',
-                    field=f'provider_models[{provider}]',
-                )
-            out[provider] = model
-        return out
-
-    @staticmethod
-    def _extract_model_from_command(command: str) -> str | None:
-        text = str(command or '').strip()
-        if not text:
-            return None
         try:
-            argv = shlex.split(text, posix=False)
-        except ValueError:
-            argv = text.split()
-        i = 0
-        while i < len(argv):
-            token = str(argv[i]).strip()
-            if token in {'-m', '--model'}:
-                if i + 1 < len(argv):
-                    value = str(argv[i + 1]).strip()
-                    return value or None
-            if token.startswith('--model='):
-                value = token.split('=', 1)[1].strip()
-                return value or None
-            i += 1
-        return None
+            return normalize_provider_models(value)
+        except ValueError as exc:
+            field = 'provider_models'
+            if '[' in str(exc):
+                field = str(exc).split(']', 1)[0] + ']'
+            raise InputValidationError(str(exc), field=field) from exc
 
     @staticmethod
     def _normalize_provider_model_params(value: dict[str, str] | None) -> dict[str, str]:
-        if not value:
-            return {}
-        if not isinstance(value, dict):
-            raise InputValidationError('provider_model_params must be an object', field='provider_model_params')
-
-        out: dict[str, str] = {}
-        for raw_provider, raw_params in value.items():
-            provider = str(raw_provider or '').strip().lower()
-            params = str(raw_params or '').strip()
-            if provider not in _supported_providers():
-                raise InputValidationError(
-                    f'invalid provider_model_params key: {provider}',
-                    field='provider_model_params',
-                )
-            if not params:
-                raise InputValidationError(
-                    f'provider_model_params[{provider}] cannot be empty',
-                    field=f'provider_model_params[{provider}]',
-                )
-            out[provider] = params
-        return out
+        try:
+            return normalize_provider_model_params(value)
+        except ValueError as exc:
+            field = 'provider_model_params'
+            if '[' in str(exc):
+                field = str(exc).split(']', 1)[0] + ']'
+            raise InputValidationError(str(exc), field=field) from exc
 
     @staticmethod
     def _normalize_participant_models(
@@ -3341,34 +3293,16 @@ class OrchestratorService:
         *,
         known_participants: set[str],
     ) -> dict[str, str]:
-        if not value:
-            return {}
-        if not isinstance(value, dict):
-            raise InputValidationError('participant_models must be an object', field='participant_models')
-
-        known = {str(v or '').strip() for v in known_participants if str(v or '').strip()}
-        known_lower = {v.lower() for v in known}
-        out: dict[str, str] = {}
-        for raw_participant, raw_model in value.items():
-            participant = str(raw_participant or '').strip()
-            model = str(raw_model or '').strip()
-            if not participant:
-                raise InputValidationError(
-                    'participant_models key cannot be empty',
-                    field='participant_models',
-                )
-            if participant.lower() not in known_lower:
-                raise InputValidationError(
-                    f'participant_models key is not in task participants: {participant}',
-                    field='participant_models',
-                )
-            if not model:
-                raise InputValidationError(
-                    f'participant_models[{participant}] cannot be empty',
-                    field=f'participant_models[{participant}]',
-                )
-            out[participant] = model
-        return out
+        try:
+            return normalize_participant_models(
+                value,
+                known_participants=known_participants,
+            )
+        except ValueError as exc:
+            field = 'participant_models'
+            if '[' in str(exc):
+                field = str(exc).split(']', 1)[0] + ']'
+            raise InputValidationError(str(exc), field=field) from exc
 
     @staticmethod
     def _normalize_participant_model_params(
@@ -3376,34 +3310,16 @@ class OrchestratorService:
         *,
         known_participants: set[str],
     ) -> dict[str, str]:
-        if not value:
-            return {}
-        if not isinstance(value, dict):
-            raise InputValidationError('participant_model_params must be an object', field='participant_model_params')
-
-        known = {str(v or '').strip() for v in known_participants if str(v or '').strip()}
-        known_lower = {v.lower() for v in known}
-        out: dict[str, str] = {}
-        for raw_participant, raw_params in value.items():
-            participant = str(raw_participant or '').strip()
-            params = str(raw_params or '').strip()
-            if not participant:
-                raise InputValidationError(
-                    'participant_model_params key cannot be empty',
-                    field='participant_model_params',
-                )
-            if participant.lower() not in known_lower:
-                raise InputValidationError(
-                    f'participant_model_params key is not in task participants: {participant}',
-                    field='participant_model_params',
-                )
-            if not params:
-                raise InputValidationError(
-                    f'participant_model_params[{participant}] cannot be empty',
-                    field=f'participant_model_params[{participant}]',
-                )
-            out[participant] = params
-        return out
+        try:
+            return normalize_participant_model_params(
+                value,
+                known_participants=known_participants,
+            )
+        except ValueError as exc:
+            field = 'participant_model_params'
+            if '[' in str(exc):
+                field = str(exc).split(']', 1)[0] + ']'
+            raise InputValidationError(str(exc), field=field) from exc
 
     @staticmethod
     def _normalize_participant_agent_overrides(
@@ -3413,67 +3329,29 @@ class OrchestratorService:
         required_provider: str,
         field: str,
     ) -> dict[str, bool]:
-        if not value:
-            return {}
-        if not isinstance(value, dict):
-            raise InputValidationError(f'{field} must be an object', field=field)
-
-        known = {str(v or '').strip() for v in known_participants if str(v or '').strip()}
-        known_map = {v.lower(): v for v in known}
-        provider_required = str(required_provider or '').strip().lower()
-        out: dict[str, bool] = {}
-        for raw_participant, raw_enabled in value.items():
-            participant = str(raw_participant or '').strip()
-            if not participant:
-                raise InputValidationError(
-                    f'{field} key cannot be empty',
-                    field=field,
-                )
-            canonical = known_map.get(participant.lower())
-            if not canonical:
-                raise InputValidationError(
-                    f'{field} key is not in task participants: {participant}',
-                    field=field,
-                )
-            provider = str(canonical.split('#', 1)[0] if '#' in canonical else '').strip().lower()
-            if provider != provider_required:
-                raise InputValidationError(
-                    f'{field}[{canonical}] must target provider={provider_required}',
-                    field=f'{field}[{canonical}]',
-                )
-            enabled = OrchestratorService._coerce_bool_override_value(
-                raw_enabled,
-                field=f'{field}[{canonical}]',
+        try:
+            return normalize_participant_agent_overrides(
+                value,
+                known_participants=known_participants,
+                required_provider=required_provider,
+                field=field,
             )
-            out[canonical] = enabled
-        return out
+        except ValueError as exc:
+            mapped_field = field
+            if '[' in str(exc):
+                mapped_field = str(exc).split(']', 1)[0] + ']'
+            raise InputValidationError(str(exc), field=mapped_field) from exc
 
     @staticmethod
     def _coerce_bool_override_value(value, *, field: str) -> bool:
-        if isinstance(value, bool):
-            return value
-        text = str(value or '').strip().lower()
-        if text in {'1', 'true', 'yes', 'on'}:
-            return True
-        if text in {'0', 'false', 'no', 'off'}:
-            return False
-        raise InputValidationError(
-            f'{field} must be boolean',
-            field=field,
-        )
+        try:
+            return coerce_bool_override_value(value, field=field)
+        except ValueError as exc:
+            raise InputValidationError(str(exc), field=field) from exc
 
     @staticmethod
     def _normalize_participant_agent_overrides_runtime(value: dict[str, bool] | None) -> dict[str, bool]:
-        out: dict[str, bool] = {}
-        for raw_participant, raw_enabled in (value or {}).items():
-            participant = str(raw_participant or '').strip()
-            if not participant:
-                continue
-            lowered = participant.lower()
-            enabled = bool(raw_enabled)
-            out[participant] = enabled
-            out[lowered] = enabled
-        return out
+        return normalize_participant_agent_overrides_runtime(value)
 
     @staticmethod
     def _resolve_agent_toggle_for_participant(
@@ -3482,14 +3360,11 @@ class OrchestratorService:
         global_enabled: bool,
         overrides: dict[str, bool],
     ) -> bool:
-        participant = str(participant_id or '').strip()
-        if participant:
-            if participant in overrides:
-                return bool(overrides[participant])
-            lowered = participant.lower()
-            if lowered in overrides:
-                return bool(overrides[lowered])
-        return bool(global_enabled)
+        return resolve_agent_toggle_for_participant(
+            participant_id=participant_id,
+            global_enabled=global_enabled,
+            overrides=overrides,
+        )
 
     @staticmethod
     def _resolve_model_for_participant(
@@ -3499,17 +3374,12 @@ class OrchestratorService:
         provider_models: dict[str, str] | None,
         participant_models: dict[str, str] | None,
     ) -> str | None:
-        participant_text = str(participant_id or '').strip()
-        participant_map = dict(participant_models or {})
-        if participant_text:
-            exact = str(participant_map.get(participant_text) or '').strip()
-            if exact:
-                return exact
-            lowered = str(participant_map.get(participant_text.lower()) or '').strip()
-            if lowered:
-                return lowered
-        provider_map = dict(provider_models or {})
-        return str(provider_map.get(str(provider or '').strip().lower()) or '').strip() or None
+        return resolve_model_for_participant(
+            participant_id=participant_id,
+            provider=provider,
+            provider_models=provider_models,
+            participant_models=participant_models,
+        )
 
     @staticmethod
     def _resolve_model_params_for_participant(
@@ -3519,17 +3389,12 @@ class OrchestratorService:
         provider_model_params: dict[str, str] | None,
         participant_model_params: dict[str, str] | None,
     ) -> str | None:
-        participant_text = str(participant_id or '').strip()
-        participant_map = dict(participant_model_params or {})
-        if participant_text:
-            exact = str(participant_map.get(participant_text) or '').strip()
-            if exact:
-                return exact
-            lowered = str(participant_map.get(participant_text.lower()) or '').strip()
-            if lowered:
-                return lowered
-        provider_map = dict(provider_model_params or {})
-        return str(provider_map.get(str(provider or '').strip().lower()) or '').strip() or None
+        return resolve_model_params_for_participant(
+            participant_id=participant_id,
+            provider=provider,
+            provider_model_params=provider_model_params,
+            participant_model_params=participant_model_params,
+        )
 
     @staticmethod
     def _normalize_fingerprint_path(path_text: str | None) -> str:
@@ -3651,7 +3516,7 @@ class OrchestratorService:
             return {'ok': False, 'reason': 'precompletion_evidence_missing'}
         try:
             bundle_round = int(bundle.get('round') or 0)
-        except Exception:
+        except (TypeError, ValueError):
             bundle_round = 0
         if bundle_round != int(expected_round):
             return {'ok': False, 'reason': 'precompletion_evidence_missing'}
@@ -3710,12 +3575,12 @@ class OrchestratorService:
                     try:
                         os.chmod(p, stat.S_IWRITE)
                         func(p)
-                    except Exception:
-                        pass
+                    except OSError:
+                        _log.debug('sandbox_cleanup_onerror_failed path=%s', str(p))
                 shutil.rmtree(sandbox_root, onerror=_onerror)
             payload['ok'] = True
             payload['removed'] = True
-        except Exception as exc:
+        except OSError as exc:
             payload['error'] = str(exc)
         return payload
 
@@ -3912,7 +3777,7 @@ class OrchestratorService:
         stage: str = 'proposal_review',
         environment_context: str | None = None,
     ) -> str:
-        clipped = WorkflowEngine._clip_text(discussion_output, max_chars=2500)
+        clipped = clip_text(discussion_output, max_chars=2500)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         plain_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
         plain_review_format = WorkflowEngine._plain_review_format_instruction(
@@ -3952,7 +3817,7 @@ class OrchestratorService:
             plain_review_format=plain_review_format,
             plan_text=clipped,
         )
-        return WorkflowEngine._inject_prompt_extras(
+        return inject_prompt_extras(
             base=base,
             environment_context=environment_context,
             strategy_hint=None,
@@ -3970,7 +3835,7 @@ class OrchestratorService:
         *,
         environment_context: str | None = None,
     ) -> str:
-        clipped = WorkflowEngine._clip_text(merged_context, max_chars=3200)
+        clipped = clip_text(merged_context, max_chars=3200)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         plain_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
         level = max(0, min(3, int(config.evolution_level)))
@@ -4010,7 +3875,7 @@ class OrchestratorService:
             audit_author_guidance=audit_author_guidance,
             context_text=clipped,
         )
-        return WorkflowEngine._inject_prompt_extras(
+        return inject_prompt_extras(
             base=base,
             environment_context=environment_context,
             strategy_hint=None,
@@ -4128,7 +3993,7 @@ class OrchestratorService:
         if not note:
             return seed
         merged = f"{seed}\n\n[reviewer:{reviewer_id}]\n{note}".strip()
-        return WorkflowEngine._clip_text(merged, max_chars=4500)
+        return clip_text(merged, max_chars=4500)
 
     @staticmethod
     def _proposal_verdict_counts(review_payload: list[dict]) -> tuple[int, int, int]:

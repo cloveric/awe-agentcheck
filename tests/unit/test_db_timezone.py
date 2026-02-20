@@ -4,40 +4,48 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from awe_agentcheck.db import Database, SqlTaskRepository
+from awe_agentcheck.repository import TaskCreateRecord
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 
 def _create_task(repo: SqlTaskRepository, workspace: Path) -> dict:
-    return repo.create_task(
-        title='tz task',
-        description='tz test',
-        author_participant='codex#author-A',
-        reviewer_participants=['claude#review-B'],
-        evolution_level=0,
-        evolve_until=None,
-        conversation_language='en',
-        provider_models={},
-        provider_model_params={},
-        claude_team_agents=False,
-        codex_multi_agents=False,
-        repair_mode='balanced',
-        plain_mode=True,
-        stream_mode=True,
-        debate_mode=True,
-        auto_merge=False,
-        merge_target_path=None,
-        sandbox_mode=False,
-        sandbox_workspace_path=None,
-        sandbox_generated=False,
-        sandbox_cleanup_on_pass=False,
-        project_path=str(workspace),
-        self_loop_mode=1,
-        workspace_path=str(workspace),
-        max_rounds=1,
-        test_command='py -m pytest -q',
-        lint_command='py -m ruff check .',
+    return repo.create_task_record(
+        TaskCreateRecord(
+            title='tz task',
+            description='tz test',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            evolution_level=0,
+            evolve_until=None,
+            conversation_language='en',
+            provider_models={},
+            provider_model_params={},
+            participant_models={},
+            participant_model_params={},
+            claude_team_agents=False,
+            codex_multi_agents=False,
+            claude_team_agents_overrides={},
+            codex_multi_agents_overrides={},
+            repair_mode='balanced',
+            plain_mode=True,
+            stream_mode=True,
+            debate_mode=True,
+            auto_merge=False,
+            merge_target_path=None,
+            sandbox_mode=False,
+            sandbox_workspace_path=None,
+            sandbox_generated=False,
+            sandbox_cleanup_on_pass=False,
+            project_path=str(workspace),
+            self_loop_mode=1,
+            workspace_path=str(workspace),
+            workspace_fingerprint={},
+            max_rounds=1,
+            test_command='py -m pytest -q',
+            lint_command='py -m ruff check .',
+        )
     )
 
 

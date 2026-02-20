@@ -1,5 +1,30 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-21, full completion closeout for remaining 1-15 items)
+
+1. Remaining staged items are now fully closed:
+   - task create persistence is now record-only (`TaskCreateRecord` -> `create_task_record`), legacy long-arg repo/db create path removed.
+   - task option/model/override normalization is centralized in `src/awe_agentcheck/task_options.py` and reused by service/task-management.
+2. Workflow split completed further:
+   - added `src/awe_agentcheck/workflow_architecture.py` (architecture audit + env context helpers).
+   - added `src/awe_agentcheck/workflow_prompting.py` (prompt template loading/rendering + extras).
+   - added `src/awe_agentcheck/workflow_runtime.py` (runtime model/param/override normalization + resolver helpers).
+   - added `src/awe_agentcheck/workflow_text.py` (clip/signature helpers).
+   - `workflow.py` reduced to threshold-safe size for architecture hard-gate.
+3. Event and exception hardening:
+   - remaining core event payload literals migrated to `EventType.*.value`.
+   - broad catches in parse/convert paths narrowed to typed exceptions; orchestration boundary catches now log explicitly.
+4. Stability guard:
+   - subprocess env now strips inherited pytest/coverage variables (`COVERAGE_PROCESS_START`, `COV_CORE_*`, `PYTEST_*`) to prevent coverage pollution during internal task command execution.
+5. Frontend modularization extended:
+   - new `web/assets/modules/formatters.js`.
+   - `web/assets/dashboard.js` reduced below architecture threshold and keeps existing behavior.
+6. Verification:
+   - `py -m ruff check .`
+   - `py -m mypy src`
+   - `py -m bandit -q -r src -lll`
+   - `py -m pytest --cov=src --cov-report=term-missing --cov-fail-under=80 -q` (passes with coverage gate).
+
 ## Update (2026-02-20, one-shot 1-15 hardening batch)
 
 1. Security/runtime hardening completed:

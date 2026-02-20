@@ -10,11 +10,23 @@ import stat
 from uuid import uuid4
 
 from awe_agentcheck.observability import get_logger
-from awe_agentcheck.participants import get_supported_providers, parse_participant_id
+from awe_agentcheck.participants import parse_participant_id
 from awe_agentcheck.repository import TaskCreateRecord
+from awe_agentcheck.task_options import (
+    coerce_bool_override_value,
+    normalize_bool_flag,
+    normalize_conversation_language,
+    normalize_evolve_until,
+    normalize_merge_target_path,
+    normalize_participant_agent_overrides,
+    normalize_participant_model_params,
+    normalize_participant_models,
+    normalize_plain_mode,
+    normalize_provider_model_params,
+    normalize_provider_models,
+    normalize_repair_mode,
+)
 
-_SUPPORTED_CONVERSATION_LANGUAGES = {'en', 'zh'}
-_SUPPORTED_REPAIR_MODES = {'minimal', 'balanced', 'structural'}
 _log = get_logger('awe_agentcheck.service_layers.task_management')
 
 class TaskManagementService:
@@ -175,44 +187,7 @@ class TaskManagementService:
                 test_command=payload.test_command,
                 lint_command=payload.lint_command,
             )
-            create_with_record = getattr(self.repository, 'create_task_record', None)
-            if callable(create_with_record):
-                row = create_with_record(create_record)
-            else:
-                row = self.repository.create_task(
-                    title=create_record.title,
-                    description=create_record.description,
-                    author_participant=create_record.author_participant,
-                    reviewer_participants=create_record.reviewer_participants,
-                    evolution_level=create_record.evolution_level,
-                    evolve_until=create_record.evolve_until,
-                    conversation_language=create_record.conversation_language,
-                    provider_models=create_record.provider_models,
-                    provider_model_params=create_record.provider_model_params,
-                    participant_models=create_record.participant_models,
-                    participant_model_params=create_record.participant_model_params,
-                    claude_team_agents=create_record.claude_team_agents,
-                    codex_multi_agents=create_record.codex_multi_agents,
-                    claude_team_agents_overrides=create_record.claude_team_agents_overrides,
-                    codex_multi_agents_overrides=create_record.codex_multi_agents_overrides,
-                    repair_mode=create_record.repair_mode,
-                    plain_mode=create_record.plain_mode,
-                    stream_mode=create_record.stream_mode,
-                    debate_mode=create_record.debate_mode,
-                    auto_merge=create_record.auto_merge,
-                    merge_target_path=create_record.merge_target_path,
-                    sandbox_mode=create_record.sandbox_mode,
-                    sandbox_workspace_path=create_record.sandbox_workspace_path,
-                    sandbox_generated=create_record.sandbox_generated,
-                    sandbox_cleanup_on_pass=create_record.sandbox_cleanup_on_pass,
-                    project_path=create_record.project_path,
-                    self_loop_mode=create_record.self_loop_mode,
-                    workspace_path=create_record.workspace_path,
-                    workspace_fingerprint=create_record.workspace_fingerprint,
-                    max_rounds=create_record.max_rounds,
-                    test_command=create_record.test_command,
-                    lint_command=create_record.lint_command,
-                )
+            row = self.repository.create_task_record(create_record)
             self.artifact_store.create_task_workspace(row['task_id'])
             self.artifact_store.update_state(
                 row['task_id'],
@@ -245,6 +220,7 @@ class TaskManagementService:
                 },
             )
         except Exception:
+            _log.exception('create_task_failed title=%s', str(payload.title or '').strip())
             self._cleanup_create_task_sandbox_failure(
                 sandbox_mode=sandbox_mode,
                 sandbox_generated=sandbox_generated,
@@ -262,135 +238,62 @@ class TaskManagementService:
     def get_task(self, task_id: str) -> dict | None:
         return self.repository.get_task(task_id)
 
-    @staticmethod
-    def _supported_providers() -> set[str]:
-        return get_supported_providers()
-
     def _normalize_evolve_until(self, value: str | None) -> str | None:
-        text = str(value or '').strip()
-        if not text:
-            return None
-        candidate = text.replace(' ', 'T')
         try:
-            parsed = datetime.fromisoformat(candidate)
+            return normalize_evolve_until(value)
         except ValueError as exc:
             raise self._validation_error_cls(
                 'evolve_until must be ISO/local datetime',
                 field='evolve_until',
             ) from exc
-        return parsed.replace(microsecond=0).isoformat()
 
     @staticmethod
     def _normalize_merge_target_path(value: str | None) -> str | None:
-        text = str(value or '').strip()
-        if not text:
-            return None
-        return str(Path(text))
+        return normalize_merge_target_path(value)
 
     def _normalize_conversation_language(self, value: str | None, *, strict: bool = False) -> str:
-        text = str(value or '').strip().lower()
-        if not text:
-            return 'en'
-        aliases = {
-            'en': 'en',
-            'english': 'en',
-            'eng': 'en',
-            'zh': 'zh',
-            'zh-cn': 'zh',
-            'cn': 'zh',
-            'chinese': 'zh',
-            '中文': 'zh',
-        }
-        normalized = aliases.get(text, text)
-        if normalized not in _SUPPORTED_CONVERSATION_LANGUAGES:
-            if strict:
-                raise self._validation_error_cls(
-                    f'invalid conversation_language: {text}',
-                    field='conversation_language',
-                )
-            return 'en'
-        return normalized
+        try:
+            return normalize_conversation_language(value, strict=strict)
+        except ValueError as exc:
+            raise self._validation_error_cls(
+                str(exc),
+                field='conversation_language',
+            ) from exc
 
     def _normalize_repair_mode(self, value, *, strict: bool = False) -> str:
-        text = str(value or '').strip().lower()
-        if not text:
-            return 'balanced'
-        if text not in _SUPPORTED_REPAIR_MODES:
-            if strict:
-                raise self._validation_error_cls(
-                    f'invalid repair_mode: {text}',
-                    field='repair_mode',
-                )
-            return 'balanced'
-        return text
+        try:
+            return normalize_repair_mode(value, strict=strict)
+        except ValueError as exc:
+            raise self._validation_error_cls(
+                str(exc),
+                field='repair_mode',
+            ) from exc
 
     @staticmethod
     def _normalize_plain_mode(value) -> bool:
-        text = str(value).strip().lower()
-        if text in {'0', 'false', 'no', 'off'}:
-            return False
-        if text in {'1', 'true', 'yes', 'on'}:
-            return True
-        return bool(value)
+        return normalize_plain_mode(value)
 
     @staticmethod
     def _normalize_bool_flag(value, *, default: bool) -> bool:
-        text = str(value).strip().lower()
-        if text in {'0', 'false', 'no', 'off'}:
-            return False
-        if text in {'1', 'true', 'yes', 'on'}:
-            return True
-        if text in {'', 'none'}:
-            return bool(default)
-        return bool(value)
+        return normalize_bool_flag(value, default=default)
 
     def _normalize_provider_models(self, value: dict[str, str] | None) -> dict[str, str]:
-        if not value:
-            return {}
-        if not isinstance(value, dict):
-            raise self._validation_error_cls('provider_models must be an object', field='provider_models')
-
-        out: dict[str, str] = {}
-        supported = self._supported_providers()
-        for raw_provider, raw_model in value.items():
-            provider = str(raw_provider or '').strip().lower()
-            model = str(raw_model or '').strip()
-            if provider not in supported:
-                raise self._validation_error_cls(
-                    f'invalid provider_models key: {provider}',
-                    field='provider_models',
-                )
-            if not model:
-                raise self._validation_error_cls(
-                    f'provider_models[{provider}] cannot be empty',
-                    field=f'provider_models[{provider}]',
-                )
-            out[provider] = model
-        return out
+        try:
+            return normalize_provider_models(value)
+        except ValueError as exc:
+            field = 'provider_models'
+            if '[' in str(exc):
+                field = str(exc).split(']', 1)[0] + ']'
+            raise self._validation_error_cls(str(exc), field=field) from exc
 
     def _normalize_provider_model_params(self, value: dict[str, str] | None) -> dict[str, str]:
-        if not value:
-            return {}
-        if not isinstance(value, dict):
-            raise self._validation_error_cls('provider_model_params must be an object', field='provider_model_params')
-
-        out: dict[str, str] = {}
-        supported = self._supported_providers()
-        for raw_provider, raw_params in value.items():
-            provider = str(raw_provider or '').strip().lower()
-            params = str(raw_params or '').strip()
-            if provider not in supported:
-                raise self._validation_error_cls(
-                    f'invalid provider_model_params key: {provider}',
-                    field='provider_model_params',
-                )
-            if not params:
-                raise self._validation_error_cls(
-                    f'provider_model_params[{provider}] cannot be empty',
-                    field=f'provider_model_params[{provider}]',
-                )
-            out[provider] = params
-        return out
+        try:
+            return normalize_provider_model_params(value)
+        except ValueError as exc:
+            field = 'provider_model_params'
+            if '[' in str(exc):
+                field = str(exc).split(']', 1)[0] + ']'
+            raise self._validation_error_cls(str(exc), field=field) from exc
 
     def _normalize_participant_models(
         self,
@@ -398,34 +301,16 @@ class TaskManagementService:
         *,
         known_participants: set[str],
     ) -> dict[str, str]:
-        if not value:
-            return {}
-        if not isinstance(value, dict):
-            raise self._validation_error_cls('participant_models must be an object', field='participant_models')
-
-        known = {str(v or '').strip() for v in known_participants if str(v or '').strip()}
-        known_lower = {v.lower() for v in known}
-        out: dict[str, str] = {}
-        for raw_participant, raw_model in value.items():
-            participant = str(raw_participant or '').strip()
-            model = str(raw_model or '').strip()
-            if not participant:
-                raise self._validation_error_cls(
-                    'participant_models key cannot be empty',
-                    field='participant_models',
-                )
-            if participant.lower() not in known_lower:
-                raise self._validation_error_cls(
-                    f'participant_models key is not in task participants: {participant}',
-                    field='participant_models',
-                )
-            if not model:
-                raise self._validation_error_cls(
-                    f'participant_models[{participant}] cannot be empty',
-                    field=f'participant_models[{participant}]',
-                )
-            out[participant] = model
-        return out
+        try:
+            return normalize_participant_models(
+                value,
+                known_participants=known_participants,
+            )
+        except ValueError as exc:
+            field = 'participant_models'
+            if '[' in str(exc):
+                field = str(exc).split(']', 1)[0] + ']'
+            raise self._validation_error_cls(str(exc), field=field) from exc
 
     def _normalize_participant_model_params(
         self,
@@ -433,37 +318,16 @@ class TaskManagementService:
         *,
         known_participants: set[str],
     ) -> dict[str, str]:
-        if not value:
-            return {}
-        if not isinstance(value, dict):
-            raise self._validation_error_cls(
-                'participant_model_params must be an object',
-                field='participant_model_params',
+        try:
+            return normalize_participant_model_params(
+                value,
+                known_participants=known_participants,
             )
-
-        known = {str(v or '').strip() for v in known_participants if str(v or '').strip()}
-        known_lower = {v.lower() for v in known}
-        out: dict[str, str] = {}
-        for raw_participant, raw_params in value.items():
-            participant = str(raw_participant or '').strip()
-            params = str(raw_params or '').strip()
-            if not participant:
-                raise self._validation_error_cls(
-                    'participant_model_params key cannot be empty',
-                    field='participant_model_params',
-                )
-            if participant.lower() not in known_lower:
-                raise self._validation_error_cls(
-                    f'participant_model_params key is not in task participants: {participant}',
-                    field='participant_model_params',
-                )
-            if not params:
-                raise self._validation_error_cls(
-                    f'participant_model_params[{participant}] cannot be empty',
-                    field=f'participant_model_params[{participant}]',
-                )
-            out[participant] = params
-        return out
+        except ValueError as exc:
+            field = 'participant_model_params'
+            if '[' in str(exc):
+                field = str(exc).split(']', 1)[0] + ']'
+            raise self._validation_error_cls(str(exc), field=field) from exc
 
     def _normalize_participant_agent_overrides(
         self,
@@ -473,53 +337,24 @@ class TaskManagementService:
         required_provider: str,
         field: str,
     ) -> dict[str, bool]:
-        if not value:
-            return {}
-        if not isinstance(value, dict):
-            raise self._validation_error_cls(f'{field} must be an object', field=field)
-
-        known = {str(v or '').strip() for v in known_participants if str(v or '').strip()}
-        known_map = {v.lower(): v for v in known}
-        provider_required = str(required_provider or '').strip().lower()
-        out: dict[str, bool] = {}
-        for raw_participant, raw_enabled in value.items():
-            participant = str(raw_participant or '').strip()
-            if not participant:
-                raise self._validation_error_cls(
-                    f'{field} key cannot be empty',
-                    field=field,
-                )
-            canonical = known_map.get(participant.lower())
-            if not canonical:
-                raise self._validation_error_cls(
-                    f'{field} key is not in task participants: {participant}',
-                    field=field,
-                )
-            provider = str(canonical.split('#', 1)[0] if '#' in canonical else '').strip().lower()
-            if provider != provider_required:
-                raise self._validation_error_cls(
-                    f'{field}[{canonical}] must target provider={provider_required}',
-                    field=f'{field}[{canonical}]',
-                )
-            enabled = self._coerce_bool_override_value(
-                raw_enabled,
-                field=f'{field}[{canonical}]',
+        try:
+            return normalize_participant_agent_overrides(
+                value,
+                known_participants=known_participants,
+                required_provider=required_provider,
+                field=field,
             )
-            out[canonical] = enabled
-        return out
+        except ValueError as exc:
+            mapped_field = field
+            if '[' in str(exc):
+                mapped_field = str(exc).split(']', 1)[0] + ']'
+            raise self._validation_error_cls(str(exc), field=mapped_field) from exc
 
     def _coerce_bool_override_value(self, value, *, field: str) -> bool:
-        if isinstance(value, bool):
-            return value
-        text = str(value or '').strip().lower()
-        if text in {'1', 'true', 'yes', 'on'}:
-            return True
-        if text in {'0', 'false', 'no', 'off'}:
-            return False
-        raise self._validation_error_cls(
-            f'{field} must be boolean',
-            field=field,
-        )
+        try:
+            return coerce_bool_override_value(value, field=field)
+        except ValueError as exc:
+            raise self._validation_error_cls(str(exc), field=field) from exc
 
     @staticmethod
     def _normalize_fingerprint_path(path_text: str | None) -> str:
@@ -528,7 +363,7 @@ class TaskManagementService:
             return ''
         try:
             resolved = Path(text).resolve(strict=False)
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             resolved = Path(text)
         normalized = str(resolved).replace('\\', '/')
         if os.name == 'nt':
@@ -622,7 +457,7 @@ class TaskManagementService:
         try:
             project_resolved = project_root.resolve()
             sandbox_resolved = sandbox_root.resolve()
-        except Exception:
+        except OSError:
             return
         if sandbox_resolved == project_resolved:
             return
@@ -632,11 +467,11 @@ class TaskManagementService:
                     try:
                         os.chmod(p, stat.S_IWRITE)
                         func(p)
-                    except Exception:
-                        pass
+                    except OSError:
+                        _log.debug('sandbox_cleanup_onerror_failed path=%s', str(p))
                 shutil.rmtree(sandbox_resolved, onerror=_onerror)
-        except Exception:
-            pass
+        except OSError:
+            _log.debug('sandbox_cleanup_failed path=%s', str(sandbox_resolved))
 
     @staticmethod
     def _is_sandbox_ignored(rel_path: str) -> bool:

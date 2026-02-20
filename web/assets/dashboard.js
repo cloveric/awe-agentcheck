@@ -53,6 +53,17 @@ import {
 import {
   renderDialoguePanel,
 } from './modules/dialogue.js';
+import {
+  formatParticipantBoolOverrides,
+  formatParticipantModelParams,
+  formatParticipantModels,
+  formatProviderModelParams,
+  formatProviderModels,
+  isActiveStatus,
+  statusPill,
+  taskSortPriority,
+  taskSortStamp,
+} from './modules/formatters.js';
 
     const state = createInitialState();
     const el = initElements(document);
@@ -414,64 +425,8 @@ import {
       renderParticipantCapabilityMatrix();
     }
 
-    function formatProviderModels(value) {
-      const obj = value && typeof value === 'object' ? value : {};
-      const entries = Object.entries(obj)
-        .map(([provider, model]) => [String(provider || '').trim(), String(model || '').trim()])
-        .filter(([provider, model]) => provider && model);
-      if (!entries.length) return 'n/a';
-      return entries.map(([provider, model]) => `${provider}=${model}`).join(', ');
-    }
-
-    function formatProviderModelParams(value) {
-      const obj = value && typeof value === 'object' ? value : {};
-      const entries = Object.entries(obj)
-        .map(([provider, params]) => [String(provider || '').trim(), String(params || '').trim()])
-        .filter(([provider, params]) => provider && params);
-      if (!entries.length) return 'n/a';
-      return entries.map(([provider, params]) => `${provider}=${params}`).join(' | ');
-    }
-
-    function formatParticipantModels(value) {
-      const obj = value && typeof value === 'object' ? value : {};
-      const entries = Object.entries(obj)
-        .map(([participant, model]) => [String(participant || '').trim(), String(model || '').trim()])
-        .filter(([participant, model]) => participant && model);
-      if (!entries.length) return 'n/a';
-      return entries.map(([participant, model]) => `${participant}=${model}`).join(' | ');
-    }
-
-    function formatParticipantModelParams(value) {
-      const obj = value && typeof value === 'object' ? value : {};
-      const entries = Object.entries(obj)
-        .map(([participant, params]) => [String(participant || '').trim(), String(params || '').trim()])
-        .filter(([participant, params]) => participant && params);
-      if (!entries.length) return 'n/a';
-      return entries.map(([participant, params]) => `${participant}=${params}`).join(' | ');
-    }
-
-    function formatParticipantBoolOverrides(value) {
-      const obj = value && typeof value === 'object' ? value : {};
-      const entries = Object.entries(obj)
-        .map(([participant, enabled]) => [String(participant || '').trim(), !!enabled])
-        .filter(([participant]) => participant);
-      if (!entries.length) return 'n/a';
-      return entries.map(([participant, enabled]) => `${participant}=${enabled ? 1 : 0}`).join(' | ');
-    }
-
     const avatarRenderer = createAvatarRenderer({ state, seededRandom, hashText });
     const roleAvatarHtml = avatarRenderer.roleAvatarHtml;
-
-    function statusPill(status) {
-      const text = String(status || 'unknown');
-      if (text === 'passed') return `<span class="pill ok">${text}</span>`;
-      if (['failed_gate', 'failed_system', 'canceled'].includes(text)) return `<span class="pill warn">${text}</span>`;
-      return `<span class="pill">${text}</span>`;
-    }
-
-    function isActiveStatus(status) {
-      return ['running', 'queued', 'waiting_manual'].includes(String(status || ''));
-    }
 
     function projectGroups() {
       const map = new Map();
@@ -680,27 +635,6 @@ import {
       return out;
     }
 
-    function taskSortPriority(status) {
-      const text = String(status || '').trim().toLowerCase();
-      if (text === 'running') return 30;
-      if (text === 'waiting_manual') return 20;
-      if (text === 'queued') return 10;
-      return 0;
-    }
-
-    function taskSortStamp(task) {
-      const raw = String(
-        task.updated_at
-        || task.created_at
-        || task._history_stamp
-        || ''
-      ).trim();
-      if (!raw) return 0;
-      const dt = parseEventDate(raw);
-      if (Number.isNaN(dt.getTime())) return 0;
-      return dt.getTime();
-    }
-
     function taskChoicesInSelectedProject() {
       const combined = [...tasksInSelectedProject(), ...historyOnlyTasksInSelectedProject()];
       combined.sort((a, b) => {
@@ -708,7 +642,7 @@ import {
         if (sourceDiff !== 0) return sourceDiff;
         const prioDiff = taskSortPriority(b.status) - taskSortPriority(a.status);
         if (prioDiff !== 0) return prioDiff;
-        const stampDiff = taskSortStamp(b) - taskSortStamp(a);
+        const stampDiff = taskSortStamp(b, parseEventDate) - taskSortStamp(a, parseEventDate);
         if (stampDiff !== 0) return stampDiff;
         return String(a.task_id || '').localeCompare(String(b.task_id || ''));
       });

@@ -1,9 +1,7 @@
 from __future__ import annotations
-
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-import hashlib
 import os
 import re
 import shlex
@@ -12,24 +10,39 @@ import subprocess
 import time
 from typing import Callable
 from contextlib import nullcontext
-
 from awe_agentcheck.adapters import ParticipantRunner
 from awe_agentcheck.domain.events import EventType
 from awe_agentcheck.domain.gate import evaluate_medium_gate
 from awe_agentcheck.domain.models import ReviewVerdict
 from awe_agentcheck.observability import get_logger, set_task_context
 from awe_agentcheck.participants import Participant
-
+from awe_agentcheck.workflow_architecture import (
+    build_environment_context,
+    run_architecture_audit,
+)
+from awe_agentcheck.workflow_prompting import (
+    inject_prompt_extras,
+    render_prompt_template,
+)
+from awe_agentcheck.workflow_runtime import (
+    normalize_participant_agent_overrides as runtime_normalize_participant_agent_overrides,
+    normalize_participant_model_params as runtime_normalize_participant_model_params,
+    normalize_participant_models as runtime_normalize_participant_models,
+    normalize_provider_model_params as runtime_normalize_provider_model_params,
+    normalize_provider_models as runtime_normalize_provider_models,
+    normalize_repair_mode as runtime_normalize_repair_mode,
+    resolve_agent_toggle_for_participant as runtime_resolve_agent_toggle_for_participant,
+    resolve_model_for_participant as runtime_resolve_model_for_participant,
+    resolve_model_params_for_participant as runtime_resolve_model_params_for_participant,
+)
+from awe_agentcheck.workflow_text import clip_text, text_signature
 try:
     from langgraph.graph import END, StateGraph
-except Exception:  # pragma: no cover - optional import fallback
+except ImportError:  # pragma: no cover - optional import fallback
     END = None
     StateGraph = None
-
 _log = get_logger('awe_agentcheck.workflow')
 _PROMPT_TEMPLATE_DIR = Path(__file__).resolve().parent / 'prompt_templates'
-
-
 @dataclass(frozen=True)
 class CommandResult:
     ok: bool
@@ -37,8 +50,6 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str
-
-
 class ShellCommandExecutor:
     _ALLOWED_COMMAND_PREFIXES: tuple[tuple[str, ...], ...] = (
         ('py', '-m', 'pytest'),
@@ -104,6 +115,16 @@ class ShellCommandExecutor:
     @staticmethod
     def _build_subprocess_env(cwd: Path) -> dict[str, str]:
         env = dict(os.environ)
+        # Avoid leaking parent pytest/coverage instrumentation into task subprocesses.
+        for key in (
+            'COVERAGE_PROCESS_START',
+            'COV_CORE_SOURCE',
+            'COV_CORE_CONFIG',
+            'COV_CORE_DATAFILE',
+            'PYTEST_CURRENT_TEST',
+            'PYTEST_ADDOPTS',
+        ):
+            env.pop(key, None)
         workspace_src = (Path(cwd) / 'src').resolve(strict=False)
         if not workspace_src.is_dir():
             return env
@@ -125,7 +146,6 @@ class ShellCommandExecutor:
             ordered.append(text)
         env['PYTHONPATH'] = os.pathsep.join(ordered)
         return env
-
 
 @dataclass(frozen=True)
 class RunConfig:
@@ -154,36 +174,19 @@ class RunConfig:
     stream_mode: bool = False
     debate_mode: bool = False
 
-
 @dataclass(frozen=True)
 class RunResult:
     status: str
     rounds: int
     gate_reason: str
-
-
 @dataclass(frozen=True)
 class PreCompletionChecklistResult:
     passed: bool
     reason: str
     checks: dict[str, bool]
     evidence_paths: list[str]
-
-
-@dataclass(frozen=True)
-class ArchitectureAuditResult:
-    enabled: bool
-    passed: bool
-    mode: str
-    reason: str
-    thresholds: dict[str, int]
-    violations: list[dict[str, object]]
-    scanned_files: int
-
-
 class WorkflowEngine:
     _prompt_template_cache: dict[str, Template] = {}
-
     def __init__(
         self,
         *,
@@ -199,7 +202,6 @@ class WorkflowEngine:
         self.command_timeout_seconds = max(1, int(command_timeout_seconds))
         self.workflow_backend = self._normalize_workflow_backend(workflow_backend)
         self._langgraph_compiled = None
-
     def run(
         self,
         config: RunConfig,
@@ -210,7 +212,6 @@ class WorkflowEngine:
         if self.workflow_backend == 'langgraph':
             return self._run_langgraph(config, on_event=on_event, should_cancel=should_cancel)
         return self._run_classic(config, on_event=on_event, should_cancel=should_cancel)
-
     def _run_langgraph(
         self,
         config: RunConfig,
@@ -230,7 +231,6 @@ class WorkflowEngine:
         if not isinstance(result, RunResult):
             raise RuntimeError('langgraph_execution_error: missing RunResult payload')
         return result
-
     def _run_classic(
         self,
         config: RunConfig,
@@ -247,7 +247,6 @@ class WorkflowEngine:
     ) -> RunResult:
         emit = on_event or (lambda event: None)
         check_cancel = should_cancel or (lambda: False)
-
         if emit_task_started:
             emit({'type': EventType.TASK_STARTED.value, 'task_id': config.task_id})
             _log.info('workflow_started task_id=%s max_rounds=%d', config.task_id, config.max_rounds)
@@ -255,17 +254,21 @@ class WorkflowEngine:
         tracer = self._get_tracer()
         previous_gate_reason: str | None = str(initial_previous_gate_reason or '').strip() or None
         deadline = self._parse_deadline(config.evolve_until)
-        provider_models = self._normalize_provider_models(config.provider_models)
-        provider_model_params = self._normalize_provider_model_params(config.provider_model_params)
-        participant_models = self._normalize_participant_models(config.participant_models)
-        participant_model_params = self._normalize_participant_model_params(config.participant_model_params)
-        claude_team_agents_overrides = self._normalize_participant_agent_overrides(
+        provider_models = runtime_normalize_provider_models(config.provider_models)
+        provider_model_params = runtime_normalize_provider_model_params(config.provider_model_params)
+        participant_models = runtime_normalize_participant_models(config.participant_models)
+        participant_model_params = runtime_normalize_participant_model_params(config.participant_model_params)
+        claude_team_agents_overrides = runtime_normalize_participant_agent_overrides(
             config.claude_team_agents_overrides
         )
-        codex_multi_agents_overrides = self._normalize_participant_agent_overrides(
+        codex_multi_agents_overrides = runtime_normalize_participant_agent_overrides(
             config.codex_multi_agents_overrides
         )
-        environment_context = self._environment_context(config)
+        environment_context = build_environment_context(
+            cwd=Path(config.cwd),
+            test_command=config.test_command,
+            lint_command=config.lint_command,
+        )
         loop_tracker = initial_loop_tracker if isinstance(initial_loop_tracker, dict) else self._new_loop_tracker()
         prompt_cache_state = (
             initial_prompt_cache_state
@@ -290,11 +293,9 @@ class WorkflowEngine:
             if deadline is not None and datetime.now(timezone.utc) >= deadline:
                 emit({'type': EventType.DEADLINE_REACHED.value, 'round': round_no, 'deadline': deadline.isoformat()})
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='deadline_reached')
-
             set_task_context(task_id=config.task_id, round_no=round_no)
             _log.info('round_started round=%d', round_no)
             emit({'type': EventType.ROUND_STARTED.value, 'round': round_no})
-
             implementation_context = self._debate_seed_context(
                 config,
                 round_no,
@@ -307,7 +308,7 @@ class WorkflowEngine:
                 debate_review_usable = 0
                 emit(
                     {
-                        'type': 'debate_started',
+                        'type': EventType.DEBATE_STARTED.value,
                         'round': round_no,
                         'mode': 'reviewer_first',
                         'reviewer_count': len(config.reviewers),
@@ -315,12 +316,11 @@ class WorkflowEngine:
                 )
                 for reviewer in config.reviewers:
                     if check_cancel():
-                        emit({'type': 'canceled', 'round': round_no})
+                        emit({'type': EventType.CANCELED.value, 'round': round_no})
                         return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
-
                     emit(
                         {
-                            'type': 'debate_review_started',
+                            'type': EventType.DEBATE_REVIEW_STARTED.value,
                             'round': round_no,
                             'participant': reviewer.participant_id,
                             'provider': reviewer.provider,
@@ -388,7 +388,7 @@ class WorkflowEngine:
                             usable = False
                             emit(
                                 {
-                                    'type': 'debate_review_error',
+                                    'type': EventType.DEBATE_REVIEW_ERROR.value,
                                     'round': round_no,
                                     'participant': reviewer.participant_id,
                                     'provider': reviewer.provider,
@@ -398,25 +398,25 @@ class WorkflowEngine:
                         else:
                             usable = self._is_actionable_debate_review_text(review_text)
                     except Exception as exc:
+                        _log.exception('debate_review_exception round=%s participant=%s', round_no, reviewer.participant_id)
                         review_text = f'[debate_review_error] {str(exc or "review_failed").strip() or "review_failed"}'
                         usable = False
                         emit(
                             {
-                                'type': 'debate_review_error',
+                                'type': EventType.DEBATE_REVIEW_ERROR.value,
                                 'round': round_no,
                                 'participant': reviewer.participant_id,
                                 'provider': reviewer.provider,
                                 'output': review_text,
                             }
                         )
-
                     debate_review_total += 1
                     if usable:
                         debate_review_usable += 1
 
                     emit(
                         {
-                            'type': 'debate_review',
+                            'type': EventType.DEBATE_REVIEW.value,
                             'round': round_no,
                             'participant': reviewer.participant_id,
                             'provider': reviewer.provider,
@@ -433,7 +433,7 @@ class WorkflowEngine:
 
                 emit(
                     {
-                        'type': 'debate_completed',
+                        'type': EventType.DEBATE_COMPLETED.value,
                         'round': round_no,
                         'reviewers_total': debate_review_total,
                         'reviewers_usable': debate_review_usable,
@@ -443,7 +443,7 @@ class WorkflowEngine:
                     reason = 'debate_review_unavailable'
                     emit(
                         {
-                            'type': 'gate_failed',
+                            'type': EventType.GATE_FAILED.value,
                             'round': round_no,
                             'reason': reason,
                             'stage': 'debate_precheck',
@@ -452,13 +452,13 @@ class WorkflowEngine:
                     return RunResult(status='failed_gate', rounds=round_no, gate_reason=reason)
 
             if check_cancel():
-                emit({'type': 'canceled', 'round': round_no})
+                emit({'type': EventType.CANCELED.value, 'round': round_no})
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
 
             with self._span(tracer, 'workflow.discussion', {'task.id': config.task_id, 'round': round_no}):
                 emit(
                     {
-                        'type': 'discussion_started',
+                        'type': EventType.DISCUSSION_STARTED.value,
                         'round': round_no,
                         'participant': config.author.participant_id,
                         'provider': config.author.provider,
@@ -529,7 +529,7 @@ class WorkflowEngine:
                 )
             emit(
                 {
-                    'type': 'discussion',
+                    'type': EventType.DISCUSSION.value,
                     'round': round_no,
                     'participant': config.author.participant_id,
                     'provider': config.author.provider,
@@ -541,7 +541,7 @@ class WorkflowEngine:
             if discussion_runtime_reason:
                 emit(
                     {
-                        'type': 'gate_failed',
+                        'type': EventType.GATE_FAILED.value,
                         'round': round_no,
                         'reason': discussion_runtime_reason,
                         'stage': 'discussion',
@@ -553,13 +553,13 @@ class WorkflowEngine:
                 implementation_context = discussion_output
 
             if check_cancel():
-                emit({'type': 'canceled', 'round': round_no})
+                emit({'type': EventType.CANCELED.value, 'round': round_no})
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
 
             with self._span(tracer, 'workflow.implementation', {'task.id': config.task_id, 'round': round_no}):
                 emit(
                     {
-                        'type': 'implementation_started',
+                        'type': EventType.IMPLEMENTATION_STARTED.value,
                         'round': round_no,
                         'participant': config.author.participant_id,
                         'provider': config.author.provider,
@@ -620,7 +620,7 @@ class WorkflowEngine:
                 )
             emit(
                 {
-                    'type': 'implementation',
+                    'type': EventType.IMPLEMENTATION.value,
                     'round': round_no,
                     'participant': config.author.participant_id,
                     'provider': config.author.provider,
@@ -632,7 +632,7 @@ class WorkflowEngine:
             if implementation_runtime_reason:
                 emit(
                     {
-                        'type': 'gate_failed',
+                        'type': EventType.GATE_FAILED.value,
                         'round': round_no,
                         'reason': implementation_runtime_reason,
                         'stage': 'implementation',
@@ -641,7 +641,7 @@ class WorkflowEngine:
                 return RunResult(status='failed_gate', rounds=round_no, gate_reason=implementation_runtime_reason)
 
             if check_cancel():
-                emit({'type': 'canceled', 'round': round_no})
+                emit({'type': EventType.CANCELED.value, 'round': round_no})
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
 
             verdicts: list[ReviewVerdict] = []
@@ -650,7 +650,7 @@ class WorkflowEngine:
                 with self._span(tracer, 'workflow.review', {'task.id': config.task_id, 'round': round_no, 'participant': reviewer.participant_id}):
                     emit(
                         {
-                            'type': 'review_started',
+                            'type': EventType.REVIEW_STARTED.value,
                             'round': round_no,
                             'participant': reviewer.participant_id,
                             'timeout_seconds': review_timeout_seconds,
@@ -713,7 +713,7 @@ class WorkflowEngine:
                         if runtime_reason:
                             emit(
                                 {
-                                    'type': 'review_error',
+                                    'type': EventType.REVIEW_ERROR.value,
                                     'round': round_no,
                                     'participant': reviewer.participant_id,
                                     'reason': runtime_reason,
@@ -724,7 +724,7 @@ class WorkflowEngine:
                             review_outputs.append(f'[review_error] {runtime_reason}')
                             emit(
                                 {
-                                    'type': 'review',
+                                    'type': EventType.REVIEW.value,
                                     'round': round_no,
                                     'participant': reviewer.participant_id,
                                     'verdict': verdict.value,
@@ -734,10 +734,11 @@ class WorkflowEngine:
                             )
                             continue
                     except Exception as exc:
+                        _log.exception('review_exception round=%s participant=%s', round_no, reviewer.participant_id)
                         reason = str(exc or 'review_failed').strip() or 'review_failed'
                         emit(
                             {
-                                'type': 'review_error',
+                                'type': EventType.REVIEW_ERROR.value,
                                 'round': round_no,
                                 'participant': reviewer.participant_id,
                                 'reason': reason,
@@ -748,7 +749,7 @@ class WorkflowEngine:
                         review_outputs.append(f'[review_error] {reason}')
                         emit(
                             {
-                                'type': 'review',
+                                'type': EventType.REVIEW.value,
                                 'round': round_no,
                                 'participant': reviewer.participant_id,
                                 'verdict': verdict.value,
@@ -762,7 +763,7 @@ class WorkflowEngine:
                 review_outputs.append(str(review.output or ''))
                 emit(
                     {
-                        'type': 'review',
+                        'type': EventType.REVIEW.value,
                         'round': round_no,
                         'participant': reviewer.participant_id,
                         'provider': reviewer.provider,
@@ -773,13 +774,13 @@ class WorkflowEngine:
                 )
 
             if check_cancel():
-                emit({'type': 'canceled', 'round': round_no})
+                emit({'type': EventType.CANCELED.value, 'round': round_no})
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
 
             with self._span(tracer, 'workflow.verify', {'task.id': config.task_id, 'round': round_no}):
                 emit(
                     {
-                        'type': 'verification_started',
+                        'type': EventType.VERIFICATION_STARTED.value,
                         'round': round_no,
                         'test_command': config.test_command,
                         'lint_command': config.lint_command,
@@ -798,12 +799,12 @@ class WorkflowEngine:
                 )
             emit(
                 {
-                    'type': 'verification',
+                    'type': EventType.VERIFICATION.value,
                     'round': round_no,
                     'tests_ok': test_result.ok,
                     'lint_ok': lint_result.ok,
-                    'test_stdout': self._clip_text(test_result.stdout, max_chars=500),
-                    'lint_stdout': self._clip_text(lint_result.stdout, max_chars=500),
+                    'test_stdout': clip_text(test_result.stdout, max_chars=500),
+                    'lint_stdout': clip_text(lint_result.stdout, max_chars=500),
                 }
             )
 
@@ -816,7 +817,7 @@ class WorkflowEngine:
             )
             emit(
                 {
-                    'type': 'precompletion_checklist',
+                    'type': EventType.PRECOMPLETION_CHECKLIST.value,
                     'round': round_no,
                     'passed': checklist.passed,
                     'reason': checklist.reason,
@@ -826,14 +827,14 @@ class WorkflowEngine:
             )
 
             if check_cancel():
-                emit({'type': 'canceled', 'round': round_no})
+                emit({'type': EventType.CANCELED.value, 'round': round_no})
                 return RunResult(status='canceled', rounds=round_no - 1, gate_reason='canceled')
 
             if not checklist.passed:
                 _log.warning('precompletion_failed round=%d reason=%s', round_no, checklist.reason)
                 emit(
                     {
-                        'type': 'gate_failed',
+                        'type': EventType.GATE_FAILED.value,
                         'round': round_no,
                         'reason': checklist.reason,
                         'stage': 'precompletion',
@@ -851,7 +852,7 @@ class WorkflowEngine:
                     strategy_hint = str(progress.get('hint') or '').strip() or strategy_hint
                     emit(
                         {
-                            'type': 'strategy_shifted',
+                            'type': EventType.STRATEGY_SHIFTED.value,
                             'round': round_no,
                             'hint': strategy_hint,
                             'signals': dict(progress.get('signals') or {}),
@@ -868,10 +869,13 @@ class WorkflowEngine:
                     return RunResult(status='failed_gate', rounds=round_no, gate_reason=checklist.reason)
                 continue
 
-            architecture_audit = self._run_architecture_audit(config=config)
+            architecture_audit = run_architecture_audit(
+                cwd=Path(config.cwd),
+                evolution_level=int(config.evolution_level),
+            )
             emit(
                 {
-                    'type': 'architecture_audit',
+                    'type': EventType.ARCHITECTURE_AUDIT.value,
                     'round': round_no,
                     'enabled': architecture_audit.enabled,
                     'passed': architecture_audit.passed,
@@ -887,7 +891,7 @@ class WorkflowEngine:
                 _log.warning('architecture_audit_failed round=%d reason=%s', round_no, architecture_audit.reason)
                 emit(
                     {
-                        'type': 'gate_failed',
+                        'type': EventType.GATE_FAILED.value,
                         'round': round_no,
                         'reason': architecture_audit.reason,
                         'stage': 'architecture_audit',
@@ -905,7 +909,7 @@ class WorkflowEngine:
                     strategy_hint = str(progress.get('hint') or '').strip() or strategy_hint
                     emit(
                         {
-                            'type': 'strategy_shifted',
+                            'type': EventType.STRATEGY_SHIFTED.value,
                             'round': round_no,
                             'hint': strategy_hint,
                             'signals': dict(progress.get('signals') or {}),
@@ -947,7 +951,7 @@ class WorkflowEngine:
                 strategy_hint = str(progress.get('hint') or '').strip() or strategy_hint
                 emit(
                     {
-                        'type': 'strategy_shifted',
+                        'type': EventType.STRATEGY_SHIFTED.value,
                         'round': round_no,
                         'hint': strategy_hint,
                         'signals': dict(progress.get('signals') or {}),
@@ -959,8 +963,6 @@ class WorkflowEngine:
                 return RunResult(status='failed_gate', rounds=round_no, gate_reason=terminal_reason)
             if force_single_round:
                 return RunResult(status='failed_gate', rounds=round_no, gate_reason=gate.reason)
-            # Deadline takes priority over round cap. If a deadline is set,
-            # keep iterating until deadline/cancel/pass.
             if not deadline_mode and round_no >= config.max_rounds:
                 return RunResult(status='failed_gate', rounds=round_no, gate_reason=gate.reason)
 
@@ -1193,7 +1195,6 @@ class WorkflowEngine:
             return True
         if status != 'failed_gate':
             return True
-        # When deadline mode is enabled, deadline (not round cap) controls continuation.
         if deadline is not None:
             return False
         return int(round_no) >= max(1, int(max_rounds))
@@ -1235,6 +1236,8 @@ class WorkflowEngine:
         try:
             from opentelemetry import trace
             return trace.get_tracer('awe_agentcheck.workflow')
+        except ImportError:
+            return None
         except Exception:
             _log.debug('OpenTelemetry tracer unavailable', exc_info=True)
             return None
@@ -1248,8 +1251,8 @@ class WorkflowEngine:
         for key, value in attributes.items():
             try:
                 ctx.set_attribute(key, value)
-            except Exception:
-                pass
+            except (AttributeError, TypeError, ValueError):
+                _log.debug('span_attribute_ignored key=%s', key)
         class _Wrapper:
             def __enter__(self_inner):
                 return ctx
@@ -1257,392 +1260,14 @@ class WorkflowEngine:
                 return span.__exit__(exc_type, exc, tb)
         return _Wrapper()
 
-    @staticmethod
-    def _clip_text(text: str, *, max_chars: int = 3000) -> str:
-        source = text or ''
-        if len(source) <= max_chars:
-            return source
-        dropped = len(source) - max_chars
-        return source[:max_chars] + f'\n...[truncated {dropped} chars]'
-
-    @staticmethod
-    def _environment_context(config: RunConfig) -> str:
-        root = Path(config.cwd).resolve(strict=False)
-        tree_excerpt = WorkflowEngine._workspace_tree_excerpt(root, max_depth=2, max_entries=42)
-        lines = [
-            'Execution context:',
-            f'- Workspace root: {root}',
-            f'- Test command: {config.test_command}',
-            f'- Lint command: {config.lint_command}',
-            '- Constraints: cite repo-relative evidence paths for key findings and edits.',
-            '- Constraints: avoid hidden bypasses/default secrets; keep changes scoped and testable.',
-            '- Workspace excerpt:',
-            tree_excerpt,
-        ]
-        return '\n'.join(lines)
-
-    @staticmethod
-    def _workspace_tree_excerpt(root: Path, *, max_depth: int, max_entries: int) -> str:
-        ignore_dirs = WorkflowEngine._default_ignore_dirs()
-        lines: list[str] = []
-        visited = 0
-        truncated = False
-
-        def walk(path: Path, depth: int) -> None:
-            nonlocal visited, truncated
-            if truncated or depth > max_depth:
-                return
-            try:
-                entries = sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
-            except OSError:
-                return
-
-            for entry in entries:
-                if visited >= max_entries:
-                    truncated = True
-                    return
-                is_dir = entry.is_dir()
-                if is_dir and entry.name in ignore_dirs:
-                    continue
-                try:
-                    rel = entry.relative_to(root).as_posix()
-                except ValueError:
-                    rel = entry.name
-                indent = '  ' * max(0, depth)
-                marker = 'D' if is_dir else 'F'
-                lines.append(f'{indent}- [{marker}] {rel}')
-                visited += 1
-                if is_dir:
-                    walk(entry, depth + 1)
-
-        if root.exists() and root.is_dir():
-            walk(root, 0)
-        if not lines:
-            return '- [n/a] workspace tree unavailable'
-        if truncated:
-            lines.append(f'- [truncated] showing first {max_entries} entries')
-        return '\n'.join(lines)
-
-    @staticmethod
-    def _default_ignore_dirs() -> set[str]:
-        return {
-            '.git',
-            '.agents',
-            '.venv',
-            '__pycache__',
-            '.pytest_cache',
-            '.ruff_cache',
-            'node_modules',
-        }
-
-    @staticmethod
-    def _architecture_thresholds_for_level(level: int) -> dict[str, int]:
-        normalized = max(0, min(3, int(level)))
-        if normalized >= 3:
-            thresholds = {
-                'python_file_lines_max': 800,
-                'frontend_file_lines_max': 1500,
-                'python_responsibility_keywords_max': 6,
-                'service_file_lines_max': 2800,
-                'workflow_file_lines_max': 1800,
-                'dashboard_js_lines_max': 2600,
-                'prompt_builder_count_max': 8,
-                'adapter_runtime_raise_max': 0,
-            }
-        elif normalized >= 2:
-            thresholds = {
-                'python_file_lines_max': 1000,
-                'frontend_file_lines_max': 2000,
-                'python_responsibility_keywords_max': 8,
-                'service_file_lines_max': 3500,
-                'workflow_file_lines_max': 2200,
-                'dashboard_js_lines_max': 3200,
-                'prompt_builder_count_max': 10,
-                'adapter_runtime_raise_max': 0,
-            }
-        else:
-            thresholds = {
-            'python_file_lines_max': 1200,
-            'frontend_file_lines_max': 2500,
-            'python_responsibility_keywords_max': 10,
-            'service_file_lines_max': 4500,
-            'workflow_file_lines_max': 2600,
-            'dashboard_js_lines_max': 3800,
-            'prompt_builder_count_max': 14,
-            'adapter_runtime_raise_max': 0,
-        }
-
-        env_map = {
-            'python_file_lines_max': ('AWE_ARCH_PYTHON_FILE_LINES_MAX', 10),
-            'frontend_file_lines_max': ('AWE_ARCH_FRONTEND_FILE_LINES_MAX', 10),
-            'python_responsibility_keywords_max': ('AWE_ARCH_RESPONSIBILITY_KEYWORDS_MAX', 1),
-            'service_file_lines_max': ('AWE_ARCH_SERVICE_FILE_LINES_MAX', 10),
-            'workflow_file_lines_max': ('AWE_ARCH_WORKFLOW_FILE_LINES_MAX', 10),
-            'dashboard_js_lines_max': ('AWE_ARCH_DASHBOARD_JS_LINES_MAX', 10),
-            'prompt_builder_count_max': ('AWE_ARCH_PROMPT_BUILDER_COUNT_MAX', 1),
-            'adapter_runtime_raise_max': ('AWE_ARCH_ADAPTER_RUNTIME_RAISE_MAX', 0),
-        }
-        for key, (env_name, minimum) in env_map.items():
-            raw = str(os.getenv(env_name, '') or '').strip()
-            if not raw:
-                continue
-            try:
-                parsed = int(raw)
-            except ValueError:
-                continue
-            thresholds[key] = max(minimum, parsed)
-        return thresholds
-
-    @staticmethod
-    def _run_architecture_audit(*, config: RunConfig) -> ArchitectureAuditResult:
-        level = max(0, min(3, int(config.evolution_level)))
-        if level < 1:
-            return ArchitectureAuditResult(
-                enabled=False,
-                passed=True,
-                mode='off',
-                reason='skipped',
-                thresholds={},
-                violations=[],
-                scanned_files=0,
-            )
-
-        root = Path(config.cwd).resolve(strict=False)
-        thresholds = WorkflowEngine._architecture_thresholds_for_level(level)
-        mode = WorkflowEngine._architecture_audit_mode(level)
-        ignore_dirs = WorkflowEngine._default_ignore_dirs()
-        frontend_ext = {'.html', '.css', '.scss', '.js', '.jsx', '.ts', '.tsx', '.vue', '.svelte'}
-        responsibility_keywords = (
-            'sandbox',
-            'policy',
-            'analytics',
-            'evolution',
-            'proposal',
-            'merge',
-            'history',
-            'review',
-            'workflow',
-            'database',
-            'api',
-            'session',
-            'theme',
-            'avatar',
-            'benchmark',
-            'preflight',
-            'runtime',
-        )
-        violations: list[dict[str, object]] = []
-        scanned_files = 0
-
-        if not root.exists() or not root.is_dir():
-            return ArchitectureAuditResult(
-                enabled=True,
-                passed=False,
-                mode=mode,
-                reason='architecture_audit_workspace_missing',
-                thresholds=thresholds,
-                violations=[],
-                scanned_files=0,
-            )
-
-        for dirpath, dirs, files in os.walk(root):
-            base = Path(dirpath)
-            dirs[:] = [d for d in dirs if d not in ignore_dirs]
-            for name in files:
-                path = base / name
-                ext = path.suffix.lower()
-                if ext not in {'.py', *frontend_ext}:
-                    continue
-                scanned_files += 1
-                try:
-                    file_text = path.read_text(encoding='utf-8', errors='ignore')
-                except OSError:
-                    continue
-                line_count = int(file_text.count('\n') + 1) if file_text else 0
-                try:
-                    rel = path.relative_to(root).as_posix()
-                except ValueError:
-                    rel = path.as_posix()
-                if ext == '.py' and line_count > int(thresholds['python_file_lines_max']):
-                    violations.append(
-                        {
-                            'kind': 'python_file_too_large',
-                            'path': rel,
-                            'lines': int(line_count),
-                            'limit': int(thresholds['python_file_lines_max']),
-                            'suggestion': 'Split responsibilities into smaller modules.',
-                        }
-                    )
-                if ext == '.py' and line_count > max(300, int(thresholds['python_file_lines_max']) // 2):
-                    lowered = file_text.lower()
-                    responsibility_hits = sum(1 for k in responsibility_keywords if k in lowered)
-                    responsibility_limit = int(thresholds['python_responsibility_keywords_max'])
-                    if responsibility_hits > responsibility_limit:
-                        violations.append(
-                            {
-                                'kind': 'python_mixed_responsibilities',
-                                'path': rel,
-                                'lines': int(line_count),
-                                'responsibility_hits': int(responsibility_hits),
-                                'limit': int(responsibility_limit),
-                                'suggestion': 'Extract domain concerns into focused modules.',
-                            }
-                        )
-                if rel == 'src/awe_agentcheck/service.py' and line_count > int(thresholds['service_file_lines_max']):
-                    violations.append(
-                        {
-                            'kind': 'service_monolith_too_large',
-                            'path': rel,
-                            'lines': int(line_count),
-                            'limit': int(thresholds['service_file_lines_max']),
-                            'suggestion': 'Split service lifecycle/orchestration concerns into focused modules.',
-                        }
-                    )
-                if rel == 'src/awe_agentcheck/workflow.py' and line_count > int(thresholds['workflow_file_lines_max']):
-                    violations.append(
-                        {
-                            'kind': 'workflow_monolith_too_large',
-                            'path': rel,
-                            'lines': int(line_count),
-                            'limit': int(thresholds['workflow_file_lines_max']),
-                            'suggestion': 'Extract prompt/phase controllers into smaller workflow modules.',
-                        }
-                    )
-                if rel in {'src/awe_agentcheck/workflow.py', 'src/awe_agentcheck/service.py'} and ext == '.py':
-                    prompt_builder_hits = int(file_text.count('_prompt('))
-                    if prompt_builder_hits > int(thresholds['prompt_builder_count_max']):
-                        violations.append(
-                            {
-                                'kind': 'prompt_assembly_hotspot',
-                                'path': rel,
-                                'prompt_builder_hits': prompt_builder_hits,
-                                'limit': int(thresholds['prompt_builder_count_max']),
-                                'suggestion': 'Move prompt templates into dedicated files and compose with data-only bindings.',
-                            }
-                        )
-                if rel == 'src/awe_agentcheck/adapters.py':
-                    runtime_raise_hits = len(re.findall(r'raise\s+RuntimeError\s*\(', file_text))
-                    if runtime_raise_hits > int(thresholds['adapter_runtime_raise_max']):
-                        violations.append(
-                            {
-                                'kind': 'adapter_runtime_raise_detected',
-                                'path': rel,
-                                'runtime_raise_hits': int(runtime_raise_hits),
-                                'limit': int(thresholds['adapter_runtime_raise_max']),
-                                'suggestion': 'Return structured adapter errors and let workflow decide retry/fallback/gate.',
-                            }
-                        )
-                if ext in frontend_ext and line_count > int(thresholds['frontend_file_lines_max']):
-                    violations.append(
-                        {
-                            'kind': 'frontend_file_too_large',
-                            'path': rel,
-                            'lines': int(line_count),
-                            'limit': int(thresholds['frontend_file_lines_max']),
-                            'suggestion': 'Split UI into smaller files/components.',
-                        }
-                    )
-                if rel == 'web/assets/dashboard.js' and line_count > int(thresholds['dashboard_js_lines_max']):
-                    violations.append(
-                        {
-                            'kind': 'dashboard_monolith_too_large',
-                            'path': rel,
-                            'lines': int(line_count),
-                            'limit': int(thresholds['dashboard_js_lines_max']),
-                            'suggestion': 'Split dashboard runtime by panel/feature modules.',
-                        }
-                    )
-
-        scripts_dir = root / 'scripts'
-        if scripts_dir.exists() and scripts_dir.is_dir():
-            ps1_files = {
-                p.stem.lower()
-                for p in scripts_dir.glob('*.ps1')
-                if p.is_file()
-            }
-            sh_files = {
-                p.stem.lower()
-                for p in scripts_dir.glob('*.sh')
-                if p.is_file()
-            }
-            missing_shell = sorted(name for name in ps1_files if name not in sh_files)
-            if missing_shell:
-                violations.append(
-                    {
-                        'kind': 'script_cross_platform_gap',
-                        'path': 'scripts',
-                        'missing_shell_variants': missing_shell,
-                        'suggestion': 'Add matching .sh wrappers for cross-platform usage.',
-                    }
-                )
-
-        if not violations:
-            reason = 'passed'
-        elif mode == 'hard':
-            reason = 'architecture_threshold_exceeded'
-        else:
-            reason = 'architecture_threshold_warning'
-        return ArchitectureAuditResult(
-            enabled=True,
-            passed=not violations,
-            mode=mode,
-            reason=reason,
-            thresholds=thresholds,
-            violations=violations,
-            scanned_files=int(scanned_files),
-        )
-
-    @staticmethod
-    def _architecture_audit_mode(level: int) -> str:
-        raw = str(os.getenv('AWE_ARCH_AUDIT_MODE', '') or '').strip().lower()
-        if raw in {'off', 'warn', 'hard'}:
-            return raw
-        normalized = max(0, min(3, int(level)))
-        return 'hard' if normalized >= 2 else 'warn'
-
-    @staticmethod
-    def _inject_prompt_extras(
-        *,
-        base: str,
-        environment_context: str | None,
-        strategy_hint: str | None,
-    ) -> str:
-        text = str(base or '')
-        env = str(environment_context or '').strip()
-        if env:
-            text = f'{text}\n{env}'
-        hint = str(strategy_hint or '').strip()
-        if hint:
-            text = f'{text}\nStrategy shift hint: {hint}'
-        return text
-
-    @classmethod
-    def _load_prompt_template(cls, template_name: str) -> Template:
-        key = str(template_name or '').strip()
-        if not key:
-            raise ValueError('template_name is required')
-        cached = cls._prompt_template_cache.get(key)
-        if cached is not None:
-            return cached
-        safe_name = Path(key).name
-        if safe_name != key:
-            raise ValueError(f'invalid prompt template name: {template_name}')
-        template_path = (_PROMPT_TEMPLATE_DIR / safe_name).resolve(strict=False)
-        base_dir = _PROMPT_TEMPLATE_DIR.resolve(strict=False)
-        try:
-            template_path.relative_to(base_dir)
-        except ValueError as exc:
-            raise ValueError(f'invalid prompt template path: {template_name}') from exc
-        text = template_path.read_text(encoding='utf-8')
-        template = Template(text)
-        cls._prompt_template_cache[key] = template
-        return template
-
     @classmethod
     def _render_prompt_template(cls, template_name: str, **fields: object) -> str:
-        template = cls._load_prompt_template(template_name)
-        normalized = {str(k): ('' if v is None else str(v)) for k, v in fields.items()}
-        return template.safe_substitute(normalized)
+        return render_prompt_template(
+            template_name=template_name,
+            template_dir=_PROMPT_TEMPLATE_DIR,
+            cache=cls._prompt_template_cache,
+            fields=fields,
+        )
 
     @staticmethod
     def _new_loop_tracker() -> dict:
@@ -1658,15 +1283,6 @@ class WorkflowEngine:
             'strategy_shift_count': 0,
         }
 
-    @staticmethod
-    def _text_signature(text: str, *, max_chars: int = 1000) -> str:
-        payload = re.sub(r'\s+', ' ', str(text or '').strip().lower())
-        if not payload:
-            return ''
-        if len(payload) > max_chars:
-            payload = payload[:max_chars]
-        return hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]
-
     def _participant_runtime_profile(
         self,
         *,
@@ -1680,22 +1296,22 @@ class WorkflowEngine:
         codex_multi_agents_overrides: dict[str, bool],
     ) -> dict[str, object]:
         return {
-            'model': self._resolve_model_for_participant(
+            'model': runtime_resolve_model_for_participant(
                 participant=participant,
                 provider_models=provider_models,
                 participant_models=participant_models,
             ),
-            'model_params': self._resolve_model_params_for_participant(
+            'model_params': runtime_resolve_model_params_for_participant(
                 participant=participant,
                 provider_model_params=provider_model_params,
                 participant_model_params=participant_model_params,
             ),
-            'claude_team_agents': self._resolve_agent_toggle_for_participant(
+            'claude_team_agents': runtime_resolve_agent_toggle_for_participant(
                 participant=participant,
                 global_enabled=bool(config.claude_team_agents),
                 overrides=claude_team_agents_overrides,
             ),
-            'codex_multi_agents': self._resolve_agent_toggle_for_participant(
+            'codex_multi_agents': runtime_resolve_agent_toggle_for_participant(
                 participant=participant,
                 global_enabled=bool(config.codex_multi_agents),
                 overrides=codex_multi_agents_overrides,
@@ -1737,13 +1353,13 @@ class WorkflowEngine:
         if marker_idx < 0:
             marker_idx = prompt_text.find('Context:')
         static_prefix_text = prompt_text[:marker_idx] if marker_idx > 0 else prompt_text[:1800]
-        prefix_sig = WorkflowEngine._text_signature(static_prefix_text, max_chars=1800)
-        prompt_sig = WorkflowEngine._text_signature(prompt_text, max_chars=4000)
-        model_sig = WorkflowEngine._text_signature(
+        prefix_sig = text_signature(static_prefix_text, max_chars=1800)
+        prompt_sig = text_signature(prompt_text, max_chars=4000)
+        model_sig = text_signature(
             f'provider={participant.provider}|model={model_label}|params={model_params_label}',
             max_chars=512,
         )
-        toolset_sig = WorkflowEngine._text_signature(
+        toolset_sig = text_signature(
             f'claude_team_agents={1 if claude_team_agents else 0}|codex_multi_agents={1 if codex_multi_agents else 0}',
             max_chars=128,
         )
@@ -1761,7 +1377,7 @@ class WorkflowEngine:
         prefix_reused = bool(prefix_reuse_eligible and previous_prefix_sig == prefix_sig)
 
         probe_event = {
-            'type': 'prompt_cache_probe',
+            'type': EventType.PROMPT_CACHE_PROBE.value,
             'round': int(round_no),
             'stage': str(stage or '').strip().lower() or 'unknown',
             'participant': participant.participant_id,
@@ -1785,7 +1401,7 @@ class WorkflowEngine:
         if model_reuse_eligible and not model_reused:
             break_events.append(
                 {
-                    'type': 'prompt_cache_break',
+                    'type': EventType.PROMPT_CACHE_BREAK.value,
                     'round': int(round_no),
                     'stage': str(stage or '').strip().lower() or 'unknown',
                     'participant': participant.participant_id,
@@ -1798,7 +1414,7 @@ class WorkflowEngine:
         if toolset_reuse_eligible and not toolset_reused:
             break_events.append(
                 {
-                    'type': 'prompt_cache_break',
+                    'type': EventType.PROMPT_CACHE_BREAK.value,
                     'round': int(round_no),
                     'stage': str(stage or '').strip().lower() or 'unknown',
                     'participant': participant.participant_id,
@@ -1811,7 +1427,7 @@ class WorkflowEngine:
         if prefix_reuse_eligible and not prefix_reused:
             break_events.append(
                 {
-                    'type': 'prompt_cache_break',
+                    'type': EventType.PROMPT_CACHE_BREAK.value,
                     'round': int(round_no),
                     'stage': str(stage or '').strip().lower() or 'unknown',
                     'participant': participant.participant_id,
@@ -1884,9 +1500,9 @@ class WorkflowEngine:
         lint_ok: bool,
     ) -> dict:
         reason = str(gate_reason or '').strip().lower()
-        impl_sig = self._text_signature(implementation_output)
-        review_sig = self._text_signature('\n'.join(str(v or '') for v in review_outputs))
-        verify_sig = self._text_signature(f'tests_ok={bool(tests_ok)} lint_ok={bool(lint_ok)} reason={reason}')
+        impl_sig = text_signature(implementation_output)
+        review_sig = text_signature('\n'.join(str(v or '') for v in review_outputs))
+        verify_sig = text_signature(f'tests_ok={bool(tests_ok)} lint_ok={bool(lint_ok)} reason={reason}')
 
         if reason and reason == str(loop_tracker.get('last_gate_reason') or ''):
             loop_tracker['gate_repeat'] = int(loop_tracker.get('gate_repeat', 0)) + 1
@@ -2040,7 +1656,7 @@ class WorkflowEngine:
                         normalized = rel
                     except ValueError:
                         normalized = resolved.as_posix()
-            except Exception:
+            except (OSError, RuntimeError, ValueError):
                 normalized = candidate.replace('\\', '/')
             if normalized.startswith('./'):
                 normalized = normalized[2:]
@@ -2067,7 +1683,7 @@ class WorkflowEngine:
                 return
             emit(
                 {
-                    'type': 'participant_stream',
+                    'type': EventType.PARTICIPANT_STREAM.value,
                     'round': round_no,
                     'stage': stage,
                     'stream': str(stream_name or 'stdout'),
@@ -2085,7 +1701,7 @@ class WorkflowEngine:
         if not payload:
             return base
         merged = f'{str(base or "").rstrip()}\n\n[{speaker}]\n{payload}'.strip()
-        return WorkflowEngine._clip_text(merged, max_chars=5000)
+        return clip_text(merged, max_chars=5000)
 
     @staticmethod
     def _discussion_prompt(
@@ -2097,7 +1713,7 @@ class WorkflowEngine:
         strategy_hint: str | None = None,
     ) -> str:
         level = max(0, min(3, int(config.evolution_level)))
-        repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
+        repair_mode = runtime_normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
         plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
@@ -2140,7 +1756,7 @@ class WorkflowEngine:
             mode_guidance=mode_guidance,
             previous_gate_context=previous_gate_context,
         )
-        return WorkflowEngine._inject_prompt_extras(
+        return inject_prompt_extras(
             base=base,
             environment_context=environment_context,
             strategy_hint=strategy_hint,
@@ -2156,7 +1772,7 @@ class WorkflowEngine:
         strategy_hint: str | None = None,
     ) -> str:
         level = max(0, min(3, int(config.evolution_level)))
-        repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
+        repair_mode = runtime_normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
         plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
@@ -2173,7 +1789,7 @@ class WorkflowEngine:
         )
         if round_no > 1 and previous_gate_reason:
             base += f"\nPrevious gate failure reason: {previous_gate_reason}"
-        return WorkflowEngine._inject_prompt_extras(
+        return inject_prompt_extras(
             base=base,
             environment_context=environment_context,
             strategy_hint=strategy_hint,
@@ -2188,9 +1804,9 @@ class WorkflowEngine:
         environment_context: str | None = None,
         strategy_hint: str | None = None,
     ) -> str:
-        clipped = WorkflowEngine._clip_text(reviewer_context, max_chars=3200)
+        clipped = clip_text(reviewer_context, max_chars=3200)
         level = max(0, min(3, int(config.evolution_level)))
-        repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
+        repair_mode = runtime_normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
         plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
@@ -2205,7 +1821,7 @@ class WorkflowEngine:
             plain_mode_instruction=plain_mode_instruction,
             reviewer_context=clipped,
         )
-        return WorkflowEngine._inject_prompt_extras(
+        return inject_prompt_extras(
             base=base,
             environment_context=environment_context,
             strategy_hint=strategy_hint,
@@ -2220,9 +1836,9 @@ class WorkflowEngine:
         environment_context: str | None = None,
         strategy_hint: str | None = None,
     ) -> str:
-        clipped = WorkflowEngine._clip_text(discussion_output, max_chars=3000)
+        clipped = clip_text(discussion_output, max_chars=3000)
         level = max(0, min(3, int(config.evolution_level)))
-        repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
+        repair_mode = runtime_normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
         plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
@@ -2253,7 +1869,7 @@ class WorkflowEngine:
             plan=clipped,
             mode_guidance=mode_guidance,
         )
-        return WorkflowEngine._inject_prompt_extras(
+        return inject_prompt_extras(
             base=base,
             environment_context=environment_context,
             strategy_hint=strategy_hint,
@@ -2269,7 +1885,7 @@ class WorkflowEngine:
         environment_context: str | None = None,
         strategy_hint: str | None = None,
     ) -> str:
-        clipped = WorkflowEngine._clip_text(discussion_context, max_chars=3200)
+        clipped = clip_text(discussion_context, max_chars=3200)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
         audit_mode = WorkflowEngine._is_audit_discovery_task(config)
@@ -2290,7 +1906,7 @@ class WorkflowEngine:
             checklist_guidance=checklist_guidance,
             discussion_context=clipped,
         )
-        return WorkflowEngine._inject_prompt_extras(
+        return inject_prompt_extras(
             base=base,
             environment_context=environment_context,
             strategy_hint=strategy_hint,
@@ -2307,8 +1923,8 @@ class WorkflowEngine:
         environment_context: str | None = None,
         strategy_hint: str | None = None,
     ) -> str:
-        clipped_context = WorkflowEngine._clip_text(discussion_context, max_chars=2600)
-        clipped_feedback = WorkflowEngine._clip_text(reviewer_feedback, max_chars=1400)
+        clipped_context = clip_text(discussion_context, max_chars=2600)
+        clipped_feedback = clip_text(reviewer_feedback, max_chars=1400)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
         base = WorkflowEngine._render_prompt_template(
@@ -2321,7 +1937,7 @@ class WorkflowEngine:
             discussion_context=clipped_context,
             reviewer_feedback=clipped_feedback,
         )
-        return WorkflowEngine._inject_prompt_extras(
+        return inject_prompt_extras(
             base=base,
             environment_context=environment_context,
             strategy_hint=strategy_hint,
@@ -2373,7 +1989,7 @@ class WorkflowEngine:
         returncode_raw = getattr(result, 'returncode', 0)
         try:
             returncode = int(returncode_raw)
-        except Exception:
+        except (TypeError, ValueError):
             returncode = 0
         if returncode != 0:
             return 'participant_runtime_error'
@@ -2422,9 +2038,9 @@ class WorkflowEngine:
         environment_context: str | None = None,
         strategy_hint: str | None = None,
     ) -> str:
-        clipped = WorkflowEngine._clip_text(implementation_output, max_chars=3000)
+        clipped = clip_text(implementation_output, max_chars=3000)
         level = max(0, min(3, int(config.evolution_level)))
-        repair_mode = WorkflowEngine._normalize_repair_mode(config.repair_mode)
+        repair_mode = runtime_normalize_repair_mode(config.repair_mode)
         language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
         repair_guidance = WorkflowEngine._repair_mode_guidance(repair_mode)
         plain_mode_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
@@ -2462,7 +2078,7 @@ class WorkflowEngine:
             plain_review_format=plain_review_format,
             implementation_summary=clipped,
         )
-        return WorkflowEngine._inject_prompt_extras(
+        return inject_prompt_extras(
             base=base,
             environment_context=environment_context,
             strategy_hint=strategy_hint,
@@ -2505,127 +2121,8 @@ class WorkflowEngine:
             return None
 
     @staticmethod
-    def _normalize_provider_models(value: dict[str, str] | None) -> dict[str, str]:
-        out: dict[str, str] = {}
-        for key, raw in (value or {}).items():
-            provider = str(key or '').strip().lower()
-            model = str(raw or '').strip()
-            if not provider or not model:
-                continue
-            out[provider] = model
-        return out
-
-    @staticmethod
-    def _normalize_provider_model_params(value: dict[str, str] | None) -> dict[str, str]:
-        out: dict[str, str] = {}
-        for key, raw in (value or {}).items():
-            provider = str(key or '').strip().lower()
-            params = str(raw or '').strip()
-            if not provider or not params:
-                continue
-            out[provider] = params
-        return out
-
-    @staticmethod
-    def _normalize_participant_models(value: dict[str, str] | None) -> dict[str, str]:
-        out: dict[str, str] = {}
-        for key, raw in (value or {}).items():
-            participant = str(key or '').strip()
-            model = str(raw or '').strip()
-            if not participant or not model:
-                continue
-            out[participant] = model
-            out.setdefault(participant.lower(), model)
-        return out
-
-    @staticmethod
-    def _normalize_participant_model_params(value: dict[str, str] | None) -> dict[str, str]:
-        out: dict[str, str] = {}
-        for key, raw in (value or {}).items():
-            participant = str(key or '').strip()
-            params = str(raw or '').strip()
-            if not participant or not params:
-                continue
-            out[participant] = params
-            out.setdefault(participant.lower(), params)
-        return out
-
-    @staticmethod
-    def _normalize_participant_agent_overrides(value: dict[str, bool] | None) -> dict[str, bool]:
-        out: dict[str, bool] = {}
-        for key, raw in (value or {}).items():
-            participant = str(key or '').strip()
-            if not participant:
-                continue
-            if isinstance(raw, bool):
-                enabled = raw
-            else:
-                text = str(raw or '').strip().lower()
-                enabled = text in {'1', 'true', 'yes', 'on'}
-            out[participant] = enabled
-            out[participant.lower()] = enabled
-        return out
-
-    @staticmethod
-    def _resolve_agent_toggle_for_participant(
-        *,
-        participant: Participant,
-        global_enabled: bool,
-        overrides: dict[str, bool],
-    ) -> bool:
-        participant_id = str(participant.participant_id or '').strip()
-        if participant_id:
-            if participant_id in overrides:
-                return bool(overrides[participant_id])
-            lowered = participant_id.lower()
-            if lowered in overrides:
-                return bool(overrides[lowered])
-        return bool(global_enabled)
-
-    @staticmethod
-    def _resolve_model_for_participant(
-        *,
-        participant: Participant,
-        provider_models: dict[str, str],
-        participant_models: dict[str, str],
-    ) -> str | None:
-        participant_id = str(participant.participant_id or '').strip()
-        if participant_id:
-            exact = str(participant_models.get(participant_id) or '').strip()
-            if exact:
-                return exact
-            lowered = str(participant_models.get(participant_id.lower()) or '').strip()
-            if lowered:
-                return lowered
-        return str(provider_models.get(participant.provider) or '').strip() or None
-
-    @staticmethod
-    def _resolve_model_params_for_participant(
-        *,
-        participant: Participant,
-        provider_model_params: dict[str, str],
-        participant_model_params: dict[str, str],
-    ) -> str | None:
-        participant_id = str(participant.participant_id or '').strip()
-        if participant_id:
-            exact = str(participant_model_params.get(participant_id) or '').strip()
-            if exact:
-                return exact
-            lowered = str(participant_model_params.get(participant_id.lower()) or '').strip()
-            if lowered:
-                return lowered
-        return str(provider_model_params.get(participant.provider) or '').strip() or None
-
-    @staticmethod
-    def _normalize_repair_mode(value: str | None) -> str:
-        mode = str(value or '').strip().lower()
-        if mode in {'minimal', 'balanced', 'structural'}:
-            return mode
-        return 'balanced'
-
-    @staticmethod
     def _repair_mode_guidance(mode: str) -> str:
-        normalized = WorkflowEngine._normalize_repair_mode(mode)
+        normalized = runtime_normalize_repair_mode(mode)
         if normalized == 'minimal':
             return (
                 'Repair policy: minimal patch only. Restrict changes to immediate blockers; '

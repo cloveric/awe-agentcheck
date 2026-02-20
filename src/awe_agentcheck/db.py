@@ -148,78 +148,6 @@ class SqlTaskRepository:
         # Small exponential backoff capped to keep API responsive.
         return min(0.2, 0.02 * (2 ** max(0, int(attempt) - 1)))
 
-    def create_task(
-        self,
-        *,
-        title: str,
-        description: str,
-        author_participant: str,
-        reviewer_participants: list[str],
-        evolution_level: int,
-        evolve_until: str | None,
-        conversation_language: str,
-        provider_models: dict[str, str],
-        provider_model_params: dict[str, str],
-        participant_models: dict[str, str] | None = None,
-        participant_model_params: dict[str, str] | None = None,
-        claude_team_agents: bool,
-        codex_multi_agents: bool,
-        claude_team_agents_overrides: dict[str, bool] | None = None,
-        codex_multi_agents_overrides: dict[str, bool] | None = None,
-        repair_mode: str,
-        plain_mode: bool,
-        stream_mode: bool,
-        debate_mode: bool,
-        auto_merge: bool,
-        merge_target_path: str | None,
-        sandbox_mode: bool,
-        sandbox_workspace_path: str | None,
-        sandbox_generated: bool,
-        sandbox_cleanup_on_pass: bool,
-        project_path: str,
-        self_loop_mode: int,
-        workspace_path: str,
-        workspace_fingerprint: dict[str, object] | None = None,
-        max_rounds: int,
-        test_command: str,
-        lint_command: str,
-    ) -> dict:
-        record = TaskCreateRecord(
-            title=title,
-            description=description,
-            author_participant=author_participant,
-            reviewer_participants=reviewer_participants,
-            evolution_level=evolution_level,
-            evolve_until=evolve_until,
-            conversation_language=conversation_language,
-            provider_models=provider_models,
-            provider_model_params=provider_model_params,
-            participant_models=participant_models,
-            participant_model_params=participant_model_params,
-            claude_team_agents=claude_team_agents,
-            codex_multi_agents=codex_multi_agents,
-            claude_team_agents_overrides=claude_team_agents_overrides,
-            codex_multi_agents_overrides=codex_multi_agents_overrides,
-            repair_mode=repair_mode,
-            plain_mode=plain_mode,
-            stream_mode=stream_mode,
-            debate_mode=debate_mode,
-            auto_merge=auto_merge,
-            merge_target_path=merge_target_path,
-            sandbox_mode=sandbox_mode,
-            sandbox_workspace_path=sandbox_workspace_path,
-            sandbox_generated=sandbox_generated,
-            sandbox_cleanup_on_pass=sandbox_cleanup_on_pass,
-            project_path=project_path,
-            self_loop_mode=self_loop_mode,
-            workspace_path=workspace_path,
-            workspace_fingerprint=workspace_fingerprint,
-            max_rounds=max_rounds,
-            test_command=test_command,
-            lint_command=lint_command,
-        )
-        return self.create_task_record(record)
-
     def create_task_record(self, record: TaskCreateRecord) -> dict:
         now = datetime.now(timezone.utc)
         task = TaskEntity(
@@ -531,7 +459,7 @@ class SqlTaskRepository:
         meta = decode_task_meta(row.reviewer_participants_json)
         try:
             self_loop_mode = int(meta.get('self_loop_mode', 1))
-        except Exception:
+        except (TypeError, ValueError):
             self_loop_mode = 1
         self_loop_mode = max(0, min(1, self_loop_mode))
         return {
