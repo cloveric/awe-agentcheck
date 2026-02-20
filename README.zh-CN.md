@@ -50,6 +50,10 @@
 1. Provider 适配层重构为策略/工厂模式：
    - 新增 `ProviderAdapter` 及 `ClaudeAdapter`、`CodexAdapter`、`GeminiAdapter`
    - 新增 `ProviderFactory`，`ParticipantRunner` 改为通过适配器分发，不再依赖大量 provider 分支判断。
+   - 适配器运行时代码已拆分为 `src/awe_agentcheck/adapters/` 包：
+     - `base.py`、`factory.py`、`runner.py`
+     - `claude.py`、`codex.py`、`gemini.py`
+     - `__init__.py` 兼容导出层。
 2. 服务层已完成包级拆分，提升可维护性：
    - 用 `src/awe_agentcheck/service_layers/` 替代单文件 `src/awe_agentcheck/service_layers.py`
    - 拆为 `analytics.py`、`history.py`、`task_management.py`、`__init__.py`
@@ -70,6 +74,9 @@
      - `web/assets/modules/utils.js`
      - `web/assets/modules/ui.js`
      - `web/assets/modules/create_task_help.js`
+     - `web/assets/modules/avatar.js`
+     - `web/assets/modules/tree.js`
+     - `web/assets/modules/history.js`
    - 页面加载改为 ES module（`<script type="module" ...>`）。
    - `initElements()` 已提供按面板分组结构（`project/summary/history/controls/create/providers`），同时保留原平铺字段兼容旧代码。
 7. Provider 模型目录改为后端优先：
@@ -82,6 +89,9 @@
    - `pytest -q tests/unit`
    - `py -m ruff check .`
    - `py scripts/selftest_local_smoke.py --port 8011 --health-timeout-seconds 40 --task-timeout-seconds 120`
+10. 重构后自查修复：
+   - 修复了 `web/assets/dashboard.js` 中缺失的 Create Task Help 处理函数（`setCreateHelpCollapsed`、`setCreateHelpLanguage`、`renderCreateHelp`）。
+   - 已通过浏览器控制台与 API 冒烟检查（`/healthz`、`/api/stats`、静态模块路由）确认页面运行恢复稳定。
 
 ## 上一版更新（2026-02-19）
 

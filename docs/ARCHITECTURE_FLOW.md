@@ -23,6 +23,7 @@ WorkflowEngine
 
 Notes:
 - Task creation/list/get are now implemented in `TaskManagementService` (not callback passthrough), including validation, sandbox bootstrap, and workspace fingerprint write.
+- Provider runtime adapters are package-split under `src/awe_agentcheck/adapters/` (`base/factory/runner` + provider-specific adapters), with compatibility exports through `adapters/__init__.py`.
 ```
 
 ## 2) Execution Flow (per task)
@@ -223,6 +224,10 @@ Dashboard client modules:
 - `web/assets/modules/store.js` (local preference persistence)
 - `web/assets/modules/utils.js` (format/hash/path helpers)
 - `web/assets/modules/ui.js` (shared select renderers)
+- `web/assets/modules/create_task_help.js` (Create Task bilingual help catalog)
+- `web/assets/modules/avatar.js` (pixel avatar generation/render helpers)
+- `web/assets/modules/tree.js` (project-tree load/render/expand-collapse)
+- `web/assets/modules/history.js` (history ledger render + clear workflow)
 ```
 
 ## 8) Persistence Defaults

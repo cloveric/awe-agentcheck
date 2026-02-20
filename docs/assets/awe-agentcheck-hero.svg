@@ -170,13 +170,13 @@
 
     <!-- Subtitle -->
     <text x="800" y="280" text-anchor="middle" fill="#e2e8f0" font-family="'Segoe UI', 'SF Pro Display', Arial, sans-serif" font-size="28" font-weight="500" letter-spacing="0.5">
-      Multi-CLI Orchestration for Author/Reviewer Agent Engineering
+      Reviewer-First Multi-CLI Orchestration for Vibe Engineering
     </text>
 
     <!-- Tag line with separators -->
     <g font-family="'JetBrains Mono', Consolas, monospace" font-size="17" letter-spacing="0.8">
       <text x="800" y="330" text-anchor="middle" fill="#94a3b8">
-        multi-agent collaboration  ·  bug-fix loops  ·  self-evolution  ·  observability
+        multi-agent collaboration  ·  bug-fix loops  ·  self-evolution  ·  architecture audit
       </text>
     </g>
 
@@ -194,9 +194,9 @@
       <rect x="-60" y="0" rx="6" ry="6" width="120" height="28" fill="#1e3a5f" stroke="#8b5cf6" stroke-opacity="0.5" stroke-width="0.8"/>
       <text x="0" y="19" text-anchor="middle" fill="#c4b5fd" font-family="'JetBrains Mono', Consolas, monospace" font-size="13" font-weight="600">OpenTelemetry</text>
 
-      <!-- Claude + Codex badge -->
+      <!-- Claude + Codex + Gemini badge -->
       <rect x="90" y="0" rx="6" ry="6" width="150" height="28" fill="#1e3a5f" stroke="#2dd4bf" stroke-opacity="0.5" stroke-width="0.8"/>
-      <text x="165" y="19" text-anchor="middle" fill="#5eead4" font-family="'JetBrains Mono', Consolas, monospace" font-size="13" font-weight="600">Claude + Codex</text>
+      <text x="165" y="19" text-anchor="middle" fill="#5eead4" font-family="'JetBrains Mono', Consolas, monospace" font-size="12" font-weight="600">Claude + Codex + Gemini</text>
 
       <!-- v0.1.0 badge -->
       <rect x="270" y="0" rx="6" ry="6" width="70" height="28" fill="#1e3a5f" stroke="#f59e0b" stroke-opacity="0.5" stroke-width="0.8"/>

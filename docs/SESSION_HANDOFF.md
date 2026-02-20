@@ -1,5 +1,38 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-20, adapters package split + dashboard module split + post-refactor runtime fix)
+
+1. Adapter runtime layer is now physically package-split:
+   - moved from single-file `src/awe_agentcheck/adapters.py` to:
+     - `src/awe_agentcheck/adapters/base.py`
+     - `src/awe_agentcheck/adapters/factory.py`
+     - `src/awe_agentcheck/adapters/runner.py`
+     - `src/awe_agentcheck/adapters/claude.py`
+     - `src/awe_agentcheck/adapters/codex.py`
+     - `src/awe_agentcheck/adapters/gemini.py`
+     - `src/awe_agentcheck/adapters/__init__.py` (compatibility exports for existing imports/tests).
+2. Dashboard module split expanded beyond the initial core modules:
+   - added:
+     - `web/assets/modules/avatar.js`
+     - `web/assets/modules/tree.js`
+     - `web/assets/modules/history.js`
+   - `web/assets/dashboard.js` now delegates avatar rendering, tree rendering, and history rendering/clear flows to modules.
+3. Post-refactor runtime bug fixed:
+   - restored missing Create Task help handlers in `web/assets/dashboard.js`:
+     - `renderCreateHelp`
+     - `setCreateHelpCollapsed`
+     - `setCreateHelpLanguage`
+   - this resolved browser runtime `ReferenceError` during dashboard initialization.
+4. Verification completed:
+   - `py -m pytest -q tests/unit`
+   - `py scripts/selftest_local_smoke.py --port 8011 --health-timeout-seconds 60 --task-timeout-seconds 240`
+   - browser console check on `http://127.0.0.1:8000/` (runtime error removed; only non-blocking accessibility issues remain).
+5. Docs/assets sync:
+   - `README.md`, `README.zh-CN.md`
+   - `docs/ARCHITECTURE_FLOW.md`
+   - `docs/GITHUB_ABOUT.md`
+   - architecture/dashboard/workflow SVG copy refreshed to match current module layout and flow semantics.
+
 ## Update (2026-02-20, evolution level 3 + frontier template + author openness tuning)
 
 1. End-to-end support for `evolution_level=3` is now enabled:

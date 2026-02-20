@@ -49,7 +49,7 @@
 
   <rect x="18" y="18" width="1564" height="86" fill="#061418" stroke="#20e8a2" stroke-width="1.5"/>
   <text x="38" y="57" class="title">AWE-AGENTCHECK | MULTI-CLI MONITOR</text>
-  <text x="38" y="82" class="sub">THEME: TERMINAL PIXEL  |  Focus: sandbox-first + reviewer cross-check + auto-fusion</text>
+  <text x="38" y="82" class="sub">THEME: TERMINAL PIXEL  |  Focus: reviewer-first + capability matrix + observable loops</text>
   <rect x="1338" y="42" width="110" height="28" fill="#0a1d1f" stroke="#35f0b3"/>
   <text x="1360" y="61" class="btn">Refresh</text>
   <rect x="1458" y="42" width="110" height="28" fill="#0a1d1f" stroke="#35f0b3"/>
@@ -67,25 +67,25 @@
   <g class="tree">
     <text x="48" y="212">[D] src</text>
     <text x="66" y="234">[D] awe_agentcheck</text>
-    <text x="84" y="256">[F] service.py</text>
-    <text x="84" y="278">[F] api.py</text>
-    <text x="84" y="300">[F] workflow.py</text>
-    <text x="84" y="322">[F] fusion.py</text>
+    <text x="84" y="256">[D] adapters</text>
+    <text x="102" y="278">[F] base.py / runner.py</text>
+    <text x="84" y="300">[F] service.py / workflow.py</text>
+    <text x="84" y="322">[D] service_layers</text>
     <text x="48" y="348">[D] web</text>
-    <text x="66" y="370">[F] index.html</text>
-    <text x="48" y="396">[D] docs</text>
-    <text x="66" y="418">[D] assets</text>
-    <text x="84" y="440">[F] dashboard-preview.svg</text>
-    <text x="84" y="462">[F] workflow-flow.svg</text>
-    <text x="66" y="484">[F] RUNBOOK.md</text>
+    <text x="66" y="370">[D] assets/modules</text>
+    <text x="66" y="392">[F] avatar.js / tree.js / history.js</text>
+    <text x="48" y="418">[D] docs</text>
+    <text x="66" y="440">[D] assets</text>
+    <text x="84" y="462">[F] architecture-overview.svg</text>
+    <text x="66" y="484">[F] ARCHITECTURE_FLOW.md</text>
     <text x="48" y="510">[D] tests</text>
     <text x="66" y="532">[F] test_service.py</text>
-    <text x="66" y="554">[F] test_api.py</text>
+    <text x="66" y="554">[F] test_workflow.py</text>
   </g>
 
   <rect x="32" y="596" width="368" height="296" fill="url(#panelSoft)" stroke="#1de2a0" stroke-opacity="0.65"/>
   <text x="44" y="620" class="h2">ROLES / SESSIONS</text>
-  <text x="44" y="640" class="meta">8 active roles | codex + claude + future adapters</text>
+  <text x="44" y="640" class="meta">8 active roles | per-role model/params visible in sessions</text>
 
   <g>
     <rect x="44" y="654" width="344" height="28" fill="#091b1f" stroke="#2ce8ab"/>
@@ -213,18 +213,18 @@
   <rect x="922" y="798" width="642" height="26" fill="#0a1f24" stroke="#2ce8ab"/>
   <text x="930" y="816" class="value">C:/Users/hangw/awe-agentcheck</text>
 
-  <text x="448" y="839" class="field">AUTHOR</text>
+  <text x="448" y="839" class="field">BOT CAPABILITY MATRIX (AUTHOR)</text>
   <rect x="448" y="846" width="300" height="24" fill="#0a1f24" stroke="#2ce8ab"/>
-  <text x="456" y="863" class="value">claude#author-C</text>
+  <text x="456" y="863" class="value">codex#author-A | gpt-5.3-codex | reasoning=xhigh | multi-agent=1</text>
 
-  <text x="760" y="839" class="field">REVIEWERS</text>
+  <text x="760" y="839" class="field">BOT CAPABILITY MATRIX (REVIEWERS)</text>
   <rect x="760" y="846" width="804" height="24" fill="#0a1f24" stroke="#2ce8ab"/>
-  <text x="768" y="863" class="value">codex#review-B,codex#review-D,claude#review-E,gemini#review-F</text>
+  <text x="768" y="863" class="value">claude#review-B(opus-4.6), codex#review-C(xhigh), gemini#review-D(3-pro-preview)</text>
 
   <rect x="448" y="877" width="100" height="24" fill="#124a32" stroke="#42f6bc"/>
   <text x="473" y="893" class="btn">Create</text>
   <rect x="558" y="877" width="136" height="24" fill="#19423b" stroke="#9fd5c7"/>
   <text x="572" y="893" class="btn">Create + Start</text>
 
-  <text x="1530" y="893" text-anchor="end" class="meta">Preview target: Terminal Pixel layout with high-role density</text>
+  <text x="1530" y="893" text-anchor="end" class="meta">Preview target: Terminal Pixel + reviewer-first + capability matrix</text>
 </svg>

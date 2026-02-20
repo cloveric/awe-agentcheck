@@ -172,7 +172,7 @@
   <g filter="url(#shadow)">
     <rect x="100" y="520" width="300" height="160" rx="14" fill="url(#card)" stroke="#818cf8" stroke-opacity="0.45" stroke-width="1.2"/>
     <text x="130" y="556" fill="url(#purple)" font-family="'Segoe UI', Arial, sans-serif" font-size="18" font-weight="700">Provider Adapters</text>
-    <text x="310" y="556" fill="#64748b" font-family="Consolas, monospace" font-size="13">adapters.py</text>
+    <text x="252" y="556" fill="#64748b" font-family="Consolas, monospace" font-size="13">adapters/{base,runner,factory}</text>
 
     <rect x="120" y="574" width="120" height="34" rx="8" fill="#0a1f35" stroke="#818cf8" stroke-opacity="0.35"/>
     <text x="180" y="596" text-anchor="middle" fill="#c4b5fd" font-family="Consolas, monospace" font-size="14">Claude CLI</text>
@@ -181,7 +181,7 @@
     <text x="320" y="596" text-anchor="middle" fill="#c4b5fd" font-family="Consolas, monospace" font-size="14">Codex CLI</text>
 
     <rect x="120" y="624" width="260" height="34" rx="8" fill="#0a1f35" stroke="#818cf8" stroke-opacity="0.25"/>
-    <text x="250" y="646" text-anchor="middle" fill="#94a3b8" font-family="Consolas, monospace" font-size="13">Pluggable (future)</text>
+    <text x="250" y="646" text-anchor="middle" fill="#94a3b8" font-family="Consolas, monospace" font-size="13">Gemini CLI + extra providers</text>
   </g>
 
   <!-- Author Gate + Fusion - center -->

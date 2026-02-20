@@ -66,7 +66,7 @@
   </g>
 
   <text x="800" y="48" text-anchor="middle" class="title">Runtime Flow | Clean-Lane Format</text>
-  <text x="800" y="76" text-anchor="middle" class="subtitle">No crossing arrows through bubbles. Manual gate path and autonomous path are separated then merged.</text>
+  <text x="800" y="76" text-anchor="middle" class="subtitle">Reviewer-first path + autonomous path. Evidence gate and fusion guard are explicit in-lane.</text>
 
   <rect x="38" y="104" width="470" height="980" fill="url(#laneLeft)" stroke="#fb923c" stroke-opacity="0.35" stroke-width="1.2"/>
   <rect x="548" y="104" width="530" height="980" fill="url(#laneCenter)" stroke="#34d399" stroke-opacity="0.35" stroke-width="1.2"/>
@@ -102,12 +102,12 @@
 
   <g filter="url(#shadow)">
     <rect x="98" y="430" width="348" height="58" rx="10" fill="#2b1c10" stroke="#fb923c" stroke-opacity="0.7"/>
-    <text x="118" y="454" class="boxTitle">4a) Proposal Discussion</text>
-    <text x="118" y="474" class="boxMeta">author drafts approach, risk, test plan</text>
+    <text x="118" y="454" class="boxTitle">4a) Reviewer Precheck</text>
+    <text x="118" y="474" class="boxMeta">reviewers interpret request and draft review focus</text>
 
     <rect x="98" y="506" width="348" height="58" rx="10" fill="#2b1c10" stroke="#fb923c" stroke-opacity="0.7"/>
-    <text x="118" y="530" class="boxTitle">4b) Proposal Review</text>
-    <text x="118" y="550" class="boxMeta">reviewers check safety and feasibility</text>
+    <text x="118" y="530" class="boxTitle">4b) Author Proposal + Revise</text>
+    <text x="118" y="550" class="boxMeta">author responds to reviewers and iterates until consensus</text>
 
     <rect x="98" y="582" width="348" height="58" rx="10" fill="#32220f" stroke="#f59e0b" stroke-opacity="0.9"/>
     <text x="118" y="606" class="boxTitle">5) WAITING_MANUAL</text>
@@ -115,7 +115,7 @@
 
     <rect x="98" y="658" width="348" height="66" rx="10" fill="#2b1c10" stroke="#fb923c" stroke-opacity="0.8"/>
     <text x="118" y="684" class="boxTitle">6) Author Decision</text>
-    <text x="118" y="704" class="boxMeta">Approve + Queue / Approve + Start / Reject</text>
+    <text x="118" y="704" class="boxMeta">Approve+Queue / Approve+Start / Reject / Custom Reply+Re-run</text>
   </g>
 
   <line x1="272" y1="488" x2="272" y2="506" stroke="#fb923c" stroke-width="2.3" marker-end="url(#arrManual)"/>
@@ -135,19 +135,19 @@
 
     <rect x="646" y="700" width="332" height="214" rx="14" fill="#0f2a26" stroke="#34d399" stroke-opacity="0.55" stroke-dasharray="6,4"/>
     <text x="666" y="724" class="boxTitle">8) Round Pipeline (1..max_rounds)</text>
-    <text x="666" y="747" class="boxMeta">discussion -> implementation -> review -> verify(test+lint)</text>
+    <text x="666" y="747" class="boxMeta">debate -> discussion -> implementation -> review -> verify -> precompletion</text>
 
     <rect x="666" y="766" width="292" height="36" rx="8" fill="#11332c" stroke="#3fe0b2"/>
     <text x="682" y="789" class="boxMeta">8.1 discussion + implementation</text>
 
     <rect x="666" y="810" width="292" height="36" rx="8" fill="#11332c" stroke="#3fe0b2"/>
-    <text x="682" y="833" class="boxMeta">8.2 reviewer checks + proposal feedback</text>
+    <text x="682" y="833" class="boxMeta">8.2 reviewer checks + actionable feedback</text>
 
     <rect x="666" y="854" width="292" height="36" rx="8" fill="#11332c" stroke="#3fe0b2"/>
-    <text x="682" y="877" class="boxMeta">8.3 verification (pytest + ruff)</text>
+    <text x="682" y="877" class="boxMeta">8.3 verification + evidence bundle + arch audit</text>
 
     <rect x="646" y="936" width="332" height="58" rx="10" fill="#11403a" stroke="#34d399" stroke-opacity="0.9"/>
-    <text x="666" y="960" class="boxTitle">9) Gate Decision</text>
+    <text x="666" y="960" class="boxTitle">9) Gate Decision (with evidence checks)</text>
     <text x="666" y="980" class="boxMeta">pass | failed_gate | failed_system / canceled</text>
   </g>
 

@@ -50,6 +50,10 @@
 1. Provider adapter architecture is now strategy/factory based:
    - added `ProviderAdapter` + provider-specific adapters (`ClaudeAdapter`, `CodexAdapter`, `GeminiAdapter`)
    - added `ProviderFactory` and switched `ParticipantRunner` to use adapter dispatch instead of provider branching.
+   - runtime adapter code is now package-split under `src/awe_agentcheck/adapters/`:
+     - `base.py`, `factory.py`, `runner.py`
+     - `claude.py`, `codex.py`, `gemini.py`
+     - `__init__.py` compatibility exports.
 2. Service layers were fully package-split for maintainability:
    - replaced monolithic `src/awe_agentcheck/service_layers.py` with `src/awe_agentcheck/service_layers/`
    - split into `analytics.py`, `history.py`, `task_management.py`, and package export `__init__.py`.
@@ -70,6 +74,9 @@
      - `web/assets/modules/utils.js`
      - `web/assets/modules/ui.js`
      - `web/assets/modules/create_task_help.js`
+     - `web/assets/modules/avatar.js`
+     - `web/assets/modules/tree.js`
+     - `web/assets/modules/history.js`
    - switched dashboard loader to ES module mode (`<script type="module" ...>`).
    - `initElements()` now exposes grouped panel scopes (`project/summary/history/controls/create/providers`) with backward-compatible flat aliases.
 7. Provider model catalog is now backend-driven first:
@@ -82,6 +89,9 @@
    - `pytest -q tests/unit`
    - `py -m ruff check .`
    - `py scripts/selftest_local_smoke.py --port 8011 --health-timeout-seconds 40 --task-timeout-seconds 120`
+10. Post-refactor self-check fix:
+   - restored missing `Create Task Help` handlers (`setCreateHelpCollapsed`, `setCreateHelpLanguage`, `renderCreateHelp`) in `web/assets/dashboard.js`.
+   - verified runtime page health with browser console + API smoke (`/healthz`, `/api/stats`, static module routes).
 
 ## Previous Update (2026-02-19)
 
