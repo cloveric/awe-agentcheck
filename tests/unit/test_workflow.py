@@ -801,7 +801,8 @@ def test_shell_command_executor_uses_shell_false(monkeypatch, tmp_path: Path):
     result = executor.run(['py', '-m', 'pytest', '-q'], cwd=tmp_path, timeout_seconds=10)
 
     assert result.ok is True
-    assert captured['argv'] == ['py', '-m', 'pytest', '-q']
+    expected_argv = ['py', '-m', 'pytest', '-q'] if os.name == 'nt' else ['python', '-m', 'pytest', '-q']
+    assert captured['argv'] == expected_argv
     assert captured['kwargs']['shell'] is False
 
 
