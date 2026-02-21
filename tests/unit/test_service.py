@@ -3110,6 +3110,87 @@ def test_service_start_task_dedupes_concurrent_starts(tmp_path: Path):
     assert any(str(item.get('type') or '') == 'start_deduped' for item in events)
 
 
+def test_service_start_task_parallel_tasks_respect_running_limit(tmp_path: Path, monkeypatch):
+    engine = SlowWorkflowEngine()
+    svc = build_service(tmp_path, workflow_engine=engine, max_concurrent_running_tasks=1)
+    project = tmp_path / 'repo-running-limit-race'
+    project.mkdir(parents=True, exist_ok=True)
+    (project / 'README.md').write_text('hello\n', encoding='utf-8')
+
+    t1 = svc.create_task(
+        CreateTaskInput(
+            title='Concurrent start 1',
+            description='parallel start test',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+        )
+    )
+    t2 = svc.create_task(
+        CreateTaskInput(
+            title='Concurrent start 2',
+            description='parallel start test',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            self_loop_mode=1,
+            auto_merge=False,
+        )
+    )
+
+    barrier = threading.Barrier(2)
+
+    def sync_preflight(*, row, workspace_root):
+        barrier.wait(timeout=3)
+        return {
+            'passed': True,
+            'reason': 'passed',
+            'risk_tier': 'low',
+            'required_checks': [],
+            'missing_checks': [],
+            'warnings': [],
+        }
+
+    monkeypatch.setattr(svc, '_run_preflight_risk_gate', sync_preflight)
+
+    results: dict[str, object] = {}
+    errors: list[Exception] = []
+
+    def _run_start(key: str, task_id: str) -> None:
+        try:
+            results[key] = svc.start_task(task_id)
+        except Exception as exc:  # pragma: no cover - defensive capture for race regressions
+            errors.append(exc)
+
+    worker1 = threading.Thread(target=_run_start, args=('t1', t1.task_id))
+    worker2 = threading.Thread(target=_run_start, args=('t2', t2.task_id))
+    worker1.start()
+    worker2.start()
+
+    assert engine.entered.wait(timeout=3)
+    engine.release.set()
+    worker1.join(timeout=5)
+    worker2.join(timeout=5)
+
+    assert not errors
+    assert engine.calls == 1
+    assert set(results.keys()) == {'t1', 't2'}
+
+    final_rows = {
+        t1.task_id: svc.get_task(t1.task_id),
+        t2.task_id: svc.get_task(t2.task_id),
+    }
+    statuses = sorted(row.status.value for row in final_rows.values() if row is not None)
+    assert statuses == ['passed', 'queued']
+    deferred_task_id = next(task_id for task_id, row in final_rows.items() if row and row.status.value == 'queued')
+    deferred_events = svc.list_events(deferred_task_id)
+    assert any(str(item.get('type') or '') == 'start_deferred' for item in deferred_events)
+
+
 def test_service_start_task_writes_evidence_manifest_for_workflow_engine(tmp_path: Path):
     engine = FakeWorkflowEngineAsWorkflow()
     svc = build_service(tmp_path, workflow_engine=engine)

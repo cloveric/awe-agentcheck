@@ -322,7 +322,9 @@ class OrchestratorService:
             command_executor=ShellCommandExecutor(),
         )
         self._start_slot_guard = threading.Lock()
+        self._running_state_guard = threading.Lock()
         self._start_slots: set[str] = set()
+        self._active_run_slots: set[str] = set()
         self.analytics_service = AnalyticsService(
             repository=self.repository,
             stats_factory=StatsView,
@@ -382,6 +384,79 @@ class OrchestratorService:
             return
         with self._start_slot_guard:
             self._start_slots.discard(key)
+
+    def _try_claim_running_capacity(self, task_id: str) -> tuple[bool, int]:
+        key = str(task_id or '').strip()
+        if not key:
+            return False, 0
+        with self._running_state_guard:
+            if key in self._active_run_slots:
+                return True, 0
+            running_ids = self._running_task_ids(exclude_task_id=key)
+            inflight_ids = {item for item in self._active_run_slots if item != key}
+            occupied = running_ids | inflight_ids
+            if self.max_concurrent_running_tasks > 0 and len(occupied) >= self.max_concurrent_running_tasks:
+                return False, len(occupied)
+            self._active_run_slots.add(key)
+            return True, len(occupied)
+
+    def _release_running_capacity(self, task_id: str) -> None:
+        key = str(task_id or '').strip()
+        if not key:
+            return
+        with self._running_state_guard:
+            self._active_run_slots.discard(key)
+
+    def _enter_running_state_or_defer(self, *, task_id: str, row: dict) -> dict:
+        claimed, running_now = self._try_claim_running_capacity(task_id)
+        if not claimed:
+            deferred = self.repository.update_task_status(
+                task_id,
+                status=TaskStatus.QUEUED.value,
+                reason='concurrency_limit',
+                rounds_completed=row.get('rounds_completed', 0),
+            )
+            self.repository.append_event(
+                task_id,
+                event_type='start_deferred',
+                payload={
+                    'reason': 'concurrency_limit',
+                    'running_now': running_now,
+                    'limit': self.max_concurrent_running_tasks,
+                },
+                round_number=None,
+            )
+            self.artifact_store.update_state(
+                task_id,
+                {
+                    'status': TaskStatus.QUEUED.value,
+                    'last_gate_reason': 'concurrency_limit',
+                },
+            )
+            return deferred
+
+        expected_status = str(row.get('status') or '').strip()
+        running_row = self.repository.update_task_status_if(
+            task_id,
+            expected_status=expected_status,
+            status=TaskStatus.RUNNING.value,
+            reason=None,
+            rounds_completed=row.get('rounds_completed', 0),
+        )
+        if running_row is None:
+            latest = self.repository.get_task(task_id)
+            if latest is None:
+                raise KeyError(task_id)
+            return latest
+
+        self.repository.append_event(
+            task_id,
+            event_type='task_running',
+            payload={'status': TaskStatus.RUNNING.value},
+            round_number=None,
+        )
+        self.artifact_store.update_state(task_id, {'status': TaskStatus.RUNNING.value})
+        return running_row
 
     def create_task(self, payload: CreateTaskInput) -> TaskView:
         row = self.task_management_service.create_task(payload)
@@ -1036,6 +1111,7 @@ class OrchestratorService:
         try:
             return self._start_task_impl(task_id)
         finally:
+            self._release_running_capacity(task_id)
             self._release_start_slot(task_id)
 
     def _start_task_impl(self, task_id: str) -> TaskView:
@@ -1087,34 +1163,6 @@ class OrchestratorService:
                 },
             )
             return self._to_view(updated)
-
-        if self.max_concurrent_running_tasks > 0:
-            running_now = self._count_running_tasks(exclude_task_id=task_id)
-            if running_now >= self.max_concurrent_running_tasks:
-                deferred = self.repository.update_task_status(
-                    task_id,
-                    status=TaskStatus.QUEUED.value,
-                    reason='concurrency_limit',
-                    rounds_completed=row.get('rounds_completed', 0),
-                )
-                self.repository.append_event(
-                    task_id,
-                    event_type='start_deferred',
-                    payload={
-                        'reason': 'concurrency_limit',
-                        'running_now': running_now,
-                        'limit': self.max_concurrent_running_tasks,
-                    },
-                    round_number=None,
-                )
-                self.artifact_store.update_state(
-                    task_id,
-                    {
-                        'status': TaskStatus.QUEUED.value,
-                        'last_gate_reason': 'concurrency_limit',
-                    },
-                )
-                return self._to_view(deferred)
 
         workspace_root = Path(str(row.get('workspace_path') or Path.cwd()))
         preflight_guard = self._run_preflight_risk_gate(row=row, workspace_root=workspace_root)
@@ -1282,14 +1330,9 @@ class OrchestratorService:
         # All modes require proposal consensus before implementation.
         needs_consensus = str(row.get('last_gate_reason') or '') != 'author_approved'
         if needs_consensus:
-            row = self.repository.update_task_status(
-                task_id,
-                status=TaskStatus.RUNNING.value,
-                reason=None,
-                rounds_completed=row.get('rounds_completed', 0),
-            )
-            self.repository.append_event(task_id, event_type='task_running', payload={'status': 'running'}, round_number=None)
-            self.artifact_store.update_state(task_id, {'status': 'running'})
+            row = self._enter_running_state_or_defer(task_id=task_id, row=row)
+            if str(row.get('status') or '') != TaskStatus.RUNNING.value:
+                return self._to_view(row)
             auto_approve = int(row.get('self_loop_mode', 0)) == 1
             prepared = self._prepare_author_confirmation(
                 task_id,
@@ -1306,14 +1349,9 @@ class OrchestratorService:
             if row is None:
                 raise KeyError(task_id)
         else:
-            row = self.repository.update_task_status(
-                task_id,
-                status=TaskStatus.RUNNING.value,
-                reason=None,
-                rounds_completed=row.get('rounds_completed', 0),
-            )
-            self.repository.append_event(task_id, event_type='task_running', payload={'status': 'running'}, round_number=None)
-            self.artifact_store.update_state(task_id, {'status': 'running'})
+            row = self._enter_running_state_or_defer(task_id=task_id, row=row)
+            if str(row.get('status') or '') != TaskStatus.RUNNING.value:
+                return self._to_view(row)
 
         set_task_context(task_id=task_id)
         _log.info('task_started task_id=%s', task_id)
@@ -2844,15 +2882,18 @@ class OrchestratorService:
         return TaskStatus.FAILED_GATE
 
     def _count_running_tasks(self, *, exclude_task_id: str | None = None) -> int:
+        return len(self._running_task_ids(exclude_task_id=exclude_task_id))
+
+    def _running_task_ids(self, *, exclude_task_id: str | None = None) -> set[str]:
         rows = self.repository.list_tasks(limit=10_000)
-        count = 0
+        running_ids: set[str] = set()
         for row in rows:
             task_id = str(row.get('task_id', ''))
             if exclude_task_id and task_id == exclude_task_id:
                 continue
             if str(row.get('status', '')) == TaskStatus.RUNNING.value:
-                count += 1
-        return count
+                running_ids.add(task_id)
+        return running_ids
 
     @staticmethod
     def _parse_iso_datetime(value) -> datetime | None:

@@ -94,17 +94,47 @@ class ShellCommandExecutor:
                 stderr=str(exc),
             )
         started = time.monotonic()
-        completed = subprocess.run(
-            argv,
-            shell=False,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            timeout=timeout_seconds,
-            env=self._build_subprocess_env(cwd),
-        )
+        try:
+            completed = subprocess.run(
+                argv,
+                shell=False,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=timeout_seconds,
+                env=self._build_subprocess_env(cwd),
+            )
+        except subprocess.TimeoutExpired as exc:
+            elapsed = time.monotonic() - started
+            timeout_used = int(getattr(exc, 'timeout', timeout_seconds) or timeout_seconds)
+            stderr_tail = str(getattr(exc, 'stderr', '') or getattr(exc, 'output', '') or '').strip()
+            stderr = (
+                f'command_timeout provider=shell command={display_command} timeout_seconds={timeout_used}'
+                + (f'\n{stderr_tail}' if stderr_tail else '')
+            )
+            _log.warning('shell_command_timeout command=%s duration=%.2fs', display_command, elapsed)
+            return CommandResult(
+                ok=False,
+                command=display_command,
+                returncode=124,
+                stdout=str(getattr(exc, 'output', '') or ''),
+                stderr=stderr,
+            )
+        except FileNotFoundError as exc:
+            elapsed = time.monotonic() - started
+            missing = str(getattr(exc, 'filename', '') or '').strip()
+            command_hint = missing or display_command
+            stderr = f'command_not_found provider=shell command={command_hint}'
+            _log.warning('shell_command_not_found command=%s duration=%.2fs', command_hint, elapsed)
+            return CommandResult(
+                ok=False,
+                command=display_command,
+                returncode=127,
+                stdout='',
+                stderr=stderr,
+            )
         elapsed = time.monotonic() - started
         _log.debug('shell_command command=%s ok=%s duration=%.2fs',
                    display_command, completed.returncode == 0, elapsed)
@@ -1659,6 +1689,12 @@ class WorkflowEngine:
         verification_executed = True
         tests_ok = bool(test_result.ok)
         lint_ok = bool(lint_result.ok)
+        test_runtime_reason = self._runtime_error_reason_from_text(
+            '\n'.join([str(test_result.stdout or ''), str(test_result.stderr or '')])
+        )
+        lint_runtime_reason = self._runtime_error_reason_from_text(
+            '\n'.join([str(lint_result.stdout or ''), str(lint_result.stderr or '')])
+        )
 
         evidence_source = '\n'.join(
             [
@@ -1691,6 +1727,10 @@ class WorkflowEngine:
             reason = 'precompletion_commands_missing'
         elif not verification_executed:
             reason = 'precompletion_verification_missing'
+        elif test_runtime_reason in {'command_timeout', 'command_not_found', 'command_not_configured', 'command_failed'}:
+            reason = test_runtime_reason
+        elif lint_runtime_reason in {'command_timeout', 'command_not_found', 'command_not_configured', 'command_failed'}:
+            reason = lint_runtime_reason
         elif not tests_ok:
             reason = 'tests_failed'
         elif not lint_ok:

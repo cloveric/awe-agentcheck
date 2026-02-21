@@ -848,6 +848,35 @@ def test_shell_command_executor_treats_shell_metachar_as_literal(monkeypatch, tm
     assert captured['kwargs']['shell'] is False
 
 
+def test_shell_command_executor_maps_timeout_exception_to_result(monkeypatch, tmp_path: Path):
+    def fake_run(argv, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=11, output='partial out', stderr='partial err')
+
+    monkeypatch.setattr('awe_agentcheck.workflow.subprocess.run', fake_run)
+    executor = ShellCommandExecutor()
+
+    result = executor.run(['py', '-m', 'pytest', '-q'], cwd=tmp_path, timeout_seconds=11)
+
+    assert result.ok is False
+    assert result.returncode == 124
+    assert 'command_timeout provider=shell' in result.stderr
+    assert 'timeout_seconds=11' in result.stderr
+
+
+def test_shell_command_executor_maps_missing_binary_exception_to_result(monkeypatch, tmp_path: Path):
+    def fake_run(argv, **kwargs):
+        raise FileNotFoundError(2, 'No such file or directory', argv[0])
+
+    monkeypatch.setattr('awe_agentcheck.workflow.subprocess.run', fake_run)
+    executor = ShellCommandExecutor()
+
+    result = executor.run(['py', '-m', 'pytest', '-q'], cwd=tmp_path, timeout_seconds=11)
+
+    assert result.ok is False
+    assert result.returncode == 127
+    assert 'command_not_found provider=shell' in result.stderr
+
+
 def test_shell_command_executor_preserves_windows_drive_path(monkeypatch):
     import awe_agentcheck.workflow as workflow_module
 

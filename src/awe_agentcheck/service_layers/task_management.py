@@ -142,6 +142,13 @@ class TaskManagementService:
                         'sandbox_workspace_path must be a directory',
                         field='sandbox_workspace_path',
                     )
+                project_root_resolved = project_root.resolve(strict=False)
+                sandbox_root_resolved = sandbox_root.resolve(strict=False)
+                if sandbox_root_resolved == project_root_resolved:
+                    raise self._validation_error_cls(
+                        'sandbox_workspace_path cannot equal workspace_path',
+                        field='sandbox_workspace_path',
+                    )
                 sandbox_root.mkdir(parents=True, exist_ok=True)
                 self._bootstrap_sandbox_workspace(project_root, sandbox_root)
                 workspace_root = sandbox_root
@@ -558,10 +565,29 @@ class TaskManagementService:
         if entries:
             return
 
+        sandbox_subtree_prefix = ''
+        project_root_resolved = project_root.resolve(strict=False)
+        sandbox_root_resolved = sandbox_root.resolve(strict=False)
+        try:
+            sandbox_relative = sandbox_root_resolved.relative_to(project_root_resolved)
+            sandbox_subtree_prefix = (
+                ''
+                if str(sandbox_relative) == '.'
+                else sandbox_relative.as_posix().strip('/')
+            )
+        except ValueError:
+            sandbox_subtree_prefix = ''
+
         for root, dirs, files in os.walk(project_root):
             root_path = Path(root)
             rel_root = root_path.relative_to(project_root)
             rel_root_text = '' if str(rel_root) == '.' else rel_root.as_posix()
+            if sandbox_subtree_prefix and (
+                rel_root_text == sandbox_subtree_prefix
+                or rel_root_text.startswith(f'{sandbox_subtree_prefix}/')
+            ):
+                dirs[:] = []
+                continue
             if rel_root_text and TaskManagementService._is_sandbox_ignored(rel_root_text):
                 dirs[:] = []
                 continue
@@ -569,12 +595,16 @@ class TaskManagementService:
             keep_dirs: list[str] = []
             for name in dirs:
                 rel = f'{rel_root_text}/{name}' if rel_root_text else name
+                if sandbox_subtree_prefix and (rel == sandbox_subtree_prefix or rel.startswith(f'{sandbox_subtree_prefix}/')):
+                    continue
                 if not TaskManagementService._is_sandbox_ignored(rel):
                     keep_dirs.append(name)
             dirs[:] = keep_dirs
 
             for filename in files:
                 rel = f'{rel_root_text}/{filename}' if rel_root_text else filename
+                if sandbox_subtree_prefix and (rel == sandbox_subtree_prefix or rel.startswith(f'{sandbox_subtree_prefix}/')):
+                    continue
                 if TaskManagementService._is_sandbox_ignored(rel):
                     continue
                 src = root_path / filename

@@ -304,3 +304,18 @@ def test_task_management_bootstrap_sandbox_workspace(tmp_path: Path, monkeypatch
     sandbox2.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(Path, 'iterdir', lambda self: (_ for _ in ()).throw(OSError('boom')))
     TaskManagementService._bootstrap_sandbox_workspace(project, sandbox2)
+
+
+def test_task_management_bootstrap_sandbox_workspace_skips_nested_sandbox_root(tmp_path: Path):
+    project = tmp_path / 'project-nested'
+    project.mkdir(parents=True, exist_ok=True)
+    (project / 'src').mkdir(parents=True, exist_ok=True)
+    (project / 'src' / 'keep.py').write_text('x=1', encoding='utf-8')
+
+    sandbox = project / 'zzz_sandbox'
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    TaskManagementService._bootstrap_sandbox_workspace(project, sandbox)
+
+    assert (sandbox / 'src' / 'keep.py').exists()
+    assert not (sandbox / 'zzz_sandbox').exists()
