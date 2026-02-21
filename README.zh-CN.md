@@ -47,7 +47,34 @@
 
 <br/>
 
-## 最新更新（2026-02-20）
+## 最新更新（2026-02-21）
+
+1. `service.py` 单体已完成大幅瘦身并保持行为稳定：
+   - proposal 阶段逻辑抽离到 `src/awe_agentcheck/proposal_helpers.py`
+   - 风险策略与 preflight 逻辑抽离到 `src/awe_agentcheck/risk_assessment.py`
+   - Git / promotion guard 抽离到 `src/awe_agentcheck/git_operations.py`
+   - 事件与历史分析逻辑抽离到 `src/awe_agentcheck/event_analysis.py`
+   - `src/awe_agentcheck/service.py` 从约 `3868` 行降到约 `1328` 行
+2. 修复了前端对话面板运行时崩溃：
+   - `web/assets/dashboard.js` 改为显式传递 `avatarHtml: avatarRenderer.avatarHtml`
+   - 消除 `avatarHtml is not defined` 导致的面板渲染中断
+3. 消除了 runtime 归一化双实现漂移：
+   - `src/awe_agentcheck/workflow_runtime.py` 统一委托 `src/awe_agentcheck/task_options.py` 的共享实现
+   - 通过共享参数保留“创建期严格 / 运行期宽松”的语义
+4. 容器运行时依赖修正：
+   - `Dockerfile` 改为 `pip install -e .`，运行镜像不再安装 dev 依赖包
+5. 新增回归测试并补充覆盖：
+   - 新增：
+     - `tests/unit/test_dashboard_static.py`
+     - `tests/unit/test_dockerfile_static.py`
+   - 扩展 `tests/unit/test_task_options.py` 的归一化分支覆盖
+6. 已完成验证：
+   - `py -m ruff check .`
+   - `py -m mypy src`
+   - `py -m pytest -q`
+   - `py -m pytest --cov=src --cov-report=term --cov-fail-under=80 -q`（覆盖率：`90.28%`）
+
+## 上一版更新（2026-02-20）
 
 1. Provider 适配层重构为策略/工厂模式：
    - 新增 `ProviderAdapter` 及 `ClaudeAdapter`、`CodexAdapter`、`GeminiAdapter`

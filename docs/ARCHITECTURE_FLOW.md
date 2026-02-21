@@ -1,6 +1,6 @@
 # Architecture Flow
 
-Date: 2026-02-20
+Date: 2026-02-21
 
 ## 1) Control Plane
 
@@ -24,6 +24,12 @@ WorkflowEngine
 Notes:
 - Task creation/list/get are now implemented in `TaskManagementService` (not callback passthrough), including validation, sandbox bootstrap, and workspace fingerprint write.
 - Provider runtime adapters are package-split under `src/awe_agentcheck/adapters/` (`base/factory/runner` + provider-specific adapters), with compatibility exports through `adapters/__init__.py`.
+- Service orchestration helpers were split into focused modules:
+  - `src/awe_agentcheck/proposal_helpers.py` (proposal prompts/consensus helpers)
+  - `src/awe_agentcheck/risk_assessment.py` (workspace risk profiling + preflight policy gate)
+  - `src/awe_agentcheck/git_operations.py` (git state/head + promotion guard helpers)
+  - `src/awe_agentcheck/event_analysis.py` (history/event normalization and summary extraction)
+- `OrchestratorService` is now the coordinator shell around these modules instead of a single-file utility container.
 ```
 
 ## 2) Execution Flow (per task)

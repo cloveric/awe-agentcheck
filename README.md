@@ -47,7 +47,34 @@
 
 <br/>
 
-## Latest Update (2026-02-20)
+## Latest Update (2026-02-21)
+
+1. Service monolith was split aggressively and safely:
+   - extracted proposal-stage orchestration helpers to `src/awe_agentcheck/proposal_helpers.py`.
+   - extracted risk-policy/preflight logic to `src/awe_agentcheck/risk_assessment.py`.
+   - extracted Git/promotion guard operations to `src/awe_agentcheck/git_operations.py`.
+   - extracted event/history analysis utilities to `src/awe_agentcheck/event_analysis.py`.
+   - `src/awe_agentcheck/service.py` was reduced from ~3868 lines to ~1328 lines while preserving runtime behavior.
+2. Fixed a frontend runtime crash in dialogue rendering:
+   - `web/assets/dashboard.js` now passes `avatarHtml: avatarRenderer.avatarHtml` explicitly.
+   - this removes the `avatarHtml is not defined` failure path during conversation panel rendering.
+3. Removed duplicated runtime normalization implementations:
+   - `src/awe_agentcheck/workflow_runtime.py` now delegates normalization/resolution logic to shared functions in `src/awe_agentcheck/task_options.py`.
+   - strict vs runtime-lenient behavior remains explicit through shared function parameters.
+4. Production container baseline corrected:
+   - `Dockerfile` now installs runtime dependencies with `pip install -e .` (no dev bundle in runtime image).
+5. Regression checks added/updated:
+   - added static regression tests:
+     - `tests/unit/test_dashboard_static.py`
+     - `tests/unit/test_dockerfile_static.py`
+   - extended normalization coverage in `tests/unit/test_task_options.py`.
+6. Verification completed:
+   - `py -m ruff check .`
+   - `py -m mypy src`
+   - `py -m pytest -q`
+   - `py -m pytest --cov=src --cov-report=term --cov-fail-under=80 -q` (coverage: `90.28%`)
+
+## Previous Update (2026-02-20)
 
 1. Provider adapter architecture is now strategy/factory based:
    - added `ProviderAdapter` + provider-specific adapters (`ClaudeAdapter`, `CodexAdapter`, `GeminiAdapter`)

@@ -3,27 +3,73 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import difflib
-import hashlib
-import json
 import os
 from pathlib import Path
 import re
 import shutil
 import stat
-import subprocess
 import threading
 
 from awe_agentcheck.adapters import ParticipantRunner
 from awe_agentcheck.domain.events import EventType
 from awe_agentcheck.domain.gate import evaluate_medium_gate
 from awe_agentcheck.domain.models import ReviewVerdict, TaskStatus
+from awe_agentcheck.event_analysis import (
+    clip_snippet as event_clip_snippet,
+    coerce_revision_count as event_coerce_revision_count,
+    derive_next_steps as event_derive_next_steps,
+    extract_core_findings as event_extract_core_findings,
+    extract_disputes as event_extract_disputes,
+    extract_revisions as event_extract_revisions,
+    guess_task_created_at as event_guess_task_created_at,
+    guess_task_updated_at as event_guess_task_updated_at,
+    is_path_within as event_is_path_within,
+    load_history_events as event_load_history_events,
+    merged_event_payload as event_merged_event_payload,
+    normalize_history_events as event_normalize_history_events,
+    read_json_file as event_read_json_file,
+    read_markdown_highlights as event_read_markdown_highlights,
+    validate_artifact_task_id as event_validate_artifact_task_id,
+)
 from awe_agentcheck.fusion import AutoFusionManager
+from awe_agentcheck.git_operations import (
+    evaluate_promotion_guard,
+    promotion_guard_config,
+    read_git_head_sha,
+    read_git_state,
+    run_git_command,
+)
 from awe_agentcheck.observability import get_logger, set_task_context
 from awe_agentcheck.participants import parse_participant_id
 from awe_agentcheck.policy_templates import (
-    DEFAULT_POLICY_TEMPLATE,
-    DEFAULT_RISK_POLICY_CONTRACT,
     POLICY_TEMPLATE_CATALOG,
+)
+from awe_agentcheck.proposal_helpers import (
+    PROPOSAL_REPEAT_ROUNDS_LIMIT,
+    PROPOSAL_STALL_RETRY_LIMIT,
+    append_proposal_feedback_context,
+    is_audit_intent,
+    is_actionable_proposal_review_text,
+    looks_like_hard_risk,
+    looks_like_scope_ambiguity,
+    normalize_proposal_reviewer_result,
+    proposal_author_prompt,
+    proposal_consensus_reached,
+    proposal_review_prompt,
+    proposal_review_usable_count,
+    proposal_round_signature,
+    proposal_verdict_counts,
+    review_timeout_seconds,
+)
+from awe_agentcheck.risk_assessment import (
+    analyze_workspace_profile,
+    load_risk_policy_contract,
+    normalize_required_checks,
+    recommend_policy_template,
+    risk_contract_file_candidates,
+    requires_browser_evidence,
+    resolve_risk_tier_from_profile,
+    run_preflight_risk_gate,
 )
 from awe_agentcheck.repository import TaskRepository
 from awe_agentcheck.service_layers import (
@@ -36,19 +82,12 @@ from awe_agentcheck.service_layers import (
 )
 from awe_agentcheck.storage.artifacts import ArtifactStore
 from awe_agentcheck.task_options import (
-    coerce_bool_override_value,
     extract_model_from_command,
     normalize_bool_flag,
     normalize_conversation_language,
-    normalize_evolve_until,
     normalize_merge_target_path,
-    normalize_participant_agent_overrides,
     normalize_participant_agent_overrides_runtime,
-    normalize_participant_model_params,
-    normalize_participant_models,
     normalize_plain_mode,
-    normalize_provider_model_params,
-    normalize_provider_models,
     normalize_repair_mode,
     resolve_agent_toggle_for_participant,
     resolve_model_for_participant,
@@ -57,7 +96,6 @@ from awe_agentcheck.task_options import (
 )
 from awe_agentcheck.workflow import RunConfig, ShellCommandExecutor, WorkflowEngine
 from awe_agentcheck.workflow_architecture import build_environment_context
-from awe_agentcheck.workflow_prompting import inject_prompt_extras
 from awe_agentcheck.workflow_text import clip_text
 
 _log = get_logger('awe_agentcheck.service')
@@ -205,8 +243,6 @@ _DEFAULT_PROVIDER_MODELS = {
 }
 
 _ARTIFACT_TASK_ID_RE = re.compile(r'^[A-Za-z0-9._-]+$')
-_PROPOSAL_STALL_RETRY_LIMIT = 10
-_PROPOSAL_REPEAT_ROUNDS_LIMIT = 4
 
 
 def _supported_providers() -> set[str]:
@@ -528,82 +564,18 @@ class OrchestratorService:
 
     @staticmethod
     def _is_path_within(base: Path, target: Path) -> bool:
-        try:
-            target.relative_to(base)
-            return True
-        except ValueError:
-            return False
+        return event_is_path_within(base, target)
 
     @staticmethod
     def _validate_artifact_task_id(task_id: str) -> str:
-        key = str(task_id or '').strip()
-        if not key:
-            raise InputValidationError('task_id is required', field='task_id')
-        if '..' in key or '/' in key or '\\' in key:
-            raise InputValidationError('invalid task_id', field='task_id')
-        if not _ARTIFACT_TASK_ID_RE.fullmatch(key):
-            raise InputValidationError('invalid task_id', field='task_id')
-        return key
+        try:
+            return event_validate_artifact_task_id(task_id, pattern=_ARTIFACT_TASK_ID_RE)
+        except ValueError as exc:
+            raise InputValidationError(str(exc), field='task_id') from exc
 
     @staticmethod
     def _normalize_history_events(*, task_id: str, events: list[dict]) -> list[dict]:
-        normalized: list[dict] = []
-        next_seq = 1
-        for raw in events:
-            if not isinstance(raw, dict):
-                continue
-
-            seq_raw = raw.get('seq')
-            try:
-                seq_value = int(seq_raw)
-            except (TypeError, ValueError):
-                seq_value = next_seq
-            if seq_value < 1:
-                seq_value = next_seq
-
-            payload_raw = raw.get('payload') if isinstance(raw.get('payload'), dict) else {}
-            payload = dict(payload_raw) if isinstance(payload_raw, dict) else {}
-            for key in (
-                'output',
-                'reason',
-                'verdict',
-                'participant',
-                'provider',
-                'stage',
-                'mode',
-                'changed_files',
-                'copied_files',
-                'deleted_files',
-                'snapshot_path',
-                'changelog_path',
-                'merged_at',
-            ):
-                if key not in payload and key in raw:
-                    payload[key] = raw.get(key)
-
-            round_raw = raw.get('round')
-            try:
-                round_number = int(round_raw) if round_raw is not None else None
-            except (TypeError, ValueError):
-                round_number = None
-
-            created_at = str(raw.get('created_at') or '').strip() or datetime.now().isoformat()
-            event_type = str(raw.get('type') or '').strip() or 'history_event'
-
-            normalized.append(
-                {
-                    'seq': seq_value,
-                    'task_id': str(raw.get('task_id') or task_id),
-                    'type': event_type,
-                    'round': round_number,
-                    'payload': payload,
-                    'created_at': created_at,
-                }
-            )
-            next_seq = max(next_seq + 1, seq_value + 1)
-
-        normalized.sort(key=lambda item: int(item.get('seq', 0)))
-        return normalized
+        return event_normalize_history_events(task_id=task_id, events=events)
 
     def _build_project_history_item(self, *, task_id: str, row: dict | None, task_dir: Path | None) -> dict | None:
         state = self._read_json_file(task_dir / 'state.json') if task_dir is not None else {}
@@ -649,236 +621,46 @@ class OrchestratorService:
         }
 
     def _load_history_events(self, *, task_id: str, row: dict, task_dir: Path | None) -> list[dict]:
-        if row:
-            try:
-                events = self.repository.list_events(task_id)
-                if events:
-                    return events
-            except Exception:
-                _log.exception('list_events_failed task_id=%s', task_id)
-
-        if task_dir is None:
-            return []
-        path = task_dir / 'events.jsonl'
-        if not path.exists():
-            return []
-        out: list[dict] = []
-        try:
-            for raw in path.read_text(encoding='utf-8', errors='replace').splitlines():
-                text = str(raw or '').strip()
-                if not text:
-                    continue
-                try:
-                    obj = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(obj, dict):
-                    out.append(obj)
-        except OSError:
-            return []
-        return out
+        return event_load_history_events(
+            repository=self.repository,
+            task_id=task_id,
+            row=row,
+            task_dir=task_dir,
+            logger=_log,
+        )
 
     def _extract_core_findings(self, *, task_dir: Path | None, events: list[dict], fallback_reason: str | None) -> list[str]:
-        findings: list[str] = []
-        for line in self._read_markdown_highlights(task_dir / 'summary.md' if task_dir else None):
-            if line not in findings:
-                findings.append(line)
-            if len(findings) >= 3:
-                return findings
-
-        for line in self._read_markdown_highlights(task_dir / 'final_report.md' if task_dir else None):
-            if line not in findings:
-                findings.append(line)
-            if len(findings) >= 3:
-                return findings
-
-        interesting = {
-            'gate_failed',
-            'gate_passed',
-            'manual_gate',
-            'review',
-            'proposal_review',
-            'discussion',
-            'debate_review',
-            'debate_reply',
-        }
-        for event in events:
-            etype = str(event.get('type') or '').strip().lower()
-            if etype not in interesting:
-                continue
-            payload = self._merged_event_payload(event)
-            snippet = (
-                self._clip_snippet(payload.get('output'))
-                or self._clip_snippet(payload.get('reason'))
-                or self._clip_snippet(event.get('type'))
-            )
-            if not snippet:
-                continue
-            if snippet not in findings:
-                findings.append(snippet)
-            if len(findings) >= 3:
-                return findings
-
-        if fallback_reason and not findings:
-            findings.append(f'Final reason: {fallback_reason}')
-
-        return findings
+        return event_extract_core_findings(
+            task_dir=task_dir,
+            events=events,
+            fallback_reason=fallback_reason,
+        )
 
     @staticmethod
     def _read_markdown_highlights(path: Path | None) -> list[str]:
-        if path is None or not path.exists():
-            return []
-        try:
-            raw = path.read_text(encoding='utf-8', errors='replace')
-        except OSError:
-            return []
-        lines: list[str] = []
-        for item in raw.splitlines():
-            text = str(item or '').strip()
-            if not text:
-                continue
-            if text.startswith('#'):
-                continue
-            lines.append(text)
-            if len(lines) >= 5:
-                break
-        return [OrchestratorService._clip_snippet(v) for v in lines if OrchestratorService._clip_snippet(v)]
+        return event_read_markdown_highlights(path)
 
     def _extract_revisions(self, *, task_dir: Path | None, events: list[dict]) -> dict:
-        summary_path = (task_dir / 'artifacts' / 'auto_merge_summary.json') if task_dir is not None else None
-        summary = self._read_json_file(summary_path) if summary_path else {}
-        if not summary:
-            for event in reversed(events):
-                if str(event.get('type') or '').strip().lower() != EventType.AUTO_MERGE_COMPLETED.value:
-                    continue
-                payload = self._merged_event_payload(event)
-                if isinstance(payload, dict):
-                    summary = payload
-                    break
-
-        if not summary:
-            return {'auto_merge': False}
-
-        return {
-            'auto_merge': True,
-            'mode': str(summary.get('mode') or '').strip() or None,
-            'changed_files': self._coerce_revision_count(summary.get('changed_files')),
-            'copied_files': self._coerce_revision_count(summary.get('copied_files')),
-            'deleted_files': self._coerce_revision_count(summary.get('deleted_files')),
-            'snapshot_path': str(summary.get('snapshot_path') or '').strip() or None,
-            'changelog_path': str(summary.get('changelog_path') or '').strip() or None,
-            'merged_at': str(summary.get('merged_at') or '').strip() or None,
-        }
+        return event_extract_revisions(task_dir=task_dir, events=events)
 
     @staticmethod
     def _coerce_revision_count(value) -> int:
-        if value is None:
-            return 0
-        if isinstance(value, (list, tuple, set, dict)):
-            return len(value)
-        if isinstance(value, bool):
-            return int(value)
-        try:
-            return max(0, int(value))
-        except (TypeError, ValueError):
-            pass
-        text = str(value or '').strip()
-        if not text:
-            return 0
-        try:
-            return max(0, int(float(text)))
-        except (TypeError, ValueError):
-            return 0
+        return event_coerce_revision_count(value)
 
     def _extract_disputes(self, events: list[dict]) -> list[dict]:
-        disputes: list[dict] = []
-        for event in events:
-            etype = str(event.get('type') or '').strip().lower()
-            payload = self._merged_event_payload(event)
-
-            if etype in {EventType.REVIEW.value, EventType.PROPOSAL_REVIEW.value}:
-                verdict = str(payload.get('verdict') or '').strip().lower()
-                if verdict not in {ReviewVerdict.BLOCKER.value, ReviewVerdict.UNKNOWN.value}:
-                    continue
-                disputes.append(
-                    {
-                        'participant': str(payload.get('participant') or 'reviewer'),
-                        'verdict': verdict,
-                        'note': self._clip_snippet(payload.get('output')) or 'review raised concerns',
-                    }
-                )
-            elif etype == EventType.GATE_FAILED.value:
-                reason = str(payload.get('reason') or '').strip()
-                if not reason:
-                    continue
-                disputes.append(
-                    {
-                        'participant': 'system',
-                        'verdict': 'gate_failed',
-                        'note': self._clip_snippet(reason) or reason,
-                    }
-                )
-
-            if len(disputes) >= 5:
-                break
-
-        return disputes
+        return event_extract_disputes(events)
 
     @staticmethod
     def _merged_event_payload(event: dict) -> dict:
-        payload = event.get('payload') if isinstance(event.get('payload'), dict) else {}
-        out = dict(payload) if isinstance(payload, dict) else {}
-        for key in (
-            'output',
-            'reason',
-            'verdict',
-            'participant',
-            'provider',
-            'mode',
-            'changed_files',
-            'copied_files',
-            'deleted_files',
-            'snapshot_path',
-            'changelog_path',
-            'merged_at',
-        ):
-            if key not in out and key in event:
-                out[key] = event.get(key)
-        return out
+        return event_merged_event_payload(event)
 
     @staticmethod
     def _derive_next_steps(*, status: str, reason: str | None, disputes: list[dict]) -> list[str]:
-        s = str(status or '').strip().lower()
-        r = str(reason or '').strip()
-        if s == TaskStatus.WAITING_MANUAL.value:
-            if r.startswith('proposal_consensus_stalled'):
-                return ['Proposal discussion stalled. Use Custom Reply + Re-run to provide specific direction, then continue.']
-            return ['Approve + Start to continue, or Reject to cancel this proposal.']
-        if s == TaskStatus.RUNNING.value:
-            return ['Task is still executing. Watch latest stage events or worker logs for progress.']
-        if s == TaskStatus.QUEUED.value:
-            return ['Start the task when ready, or keep it queued for scheduling.']
-        if s == TaskStatus.PASSED.value:
-            return ['Task passed. Optionally launch a follow-up evolution task for additional improvements.']
-        if s == TaskStatus.FAILED_GATE.value:
-            if disputes:
-                return ['Address blocker/unknown review points, then rerun the task.']
-            return [f'Address gate failure reason: {r}' if r else 'Address gate failures, then rerun.']
-        if s == TaskStatus.FAILED_SYSTEM.value:
-            return [f'Fix system issue: {r}' if r else 'Fix system/runtime issue, then rerun.']
-        if s == TaskStatus.CANCELED.value:
-            return ['Task was canceled. Recreate or restart only if requirements still apply.']
-        return ['Inspect events and logs, then decide whether to rerun or revise scope.']
+        return event_derive_next_steps(status=status, reason=reason, disputes=disputes)
 
     @staticmethod
     def _clip_snippet(value, *, max_chars: int = 220) -> str:
-        text = str(value or '').strip()
-        if not text:
-            return ''
-        one_line = text.replace('\r', ' ').replace('\n', ' ')
-        if len(one_line) <= max_chars:
-            return one_line
-        return one_line[:max_chars].rstrip() + '...'
+        return event_clip_snippet(value, max_chars=max_chars)
 
     @staticmethod
     def _normalize_project_path_key(value) -> str:
@@ -895,259 +677,49 @@ class OrchestratorService:
         return parsed.date().isoformat()
 
     def _analyze_workspace_profile(self, workspace_path: str | None) -> dict:
-        resolved = str(workspace_path or '').strip()
-        if not resolved:
-            return {
-                'workspace_path': '',
-                'exists': False,
-                'repo_size': 'unknown',
-                'risk_level': 'unknown',
-                'file_count': 0,
-                'risk_markers': 0,
-            }
-
-        root = Path(resolved)
-        if not root.exists() or not root.is_dir():
-            return {
-                'workspace_path': str(root),
-                'exists': False,
-                'repo_size': 'unknown',
-                'risk_level': 'unknown',
-                'file_count': 0,
-                'risk_markers': 0,
-            }
-
-        ignore_dirs = {
-            '.git',
-            '.agents',
-            '.venv',
-            '__pycache__',
-            '.pytest_cache',
-            '.ruff_cache',
-            'node_modules',
-        }
-        risk_tokens = {
-            'prod',
-            'deploy',
-            'k8s',
-            'terraform',
-            'helm',
-            'security',
-            'auth',
-            'payment',
-            'migrations',
-            'migration',
-            'database',
-            'db',
-        }
-        risk_extensions = {'.sql', '.tf', '.yaml', '.yml'}
-
-        file_count = 0
-        risk_markers = 0
-        max_scan = 5000
-        for path in root.rglob('*'):
-            if file_count >= max_scan:
-                break
-            if not path.is_file():
-                continue
-            rel_parts = path.relative_to(root).parts
-            if any(part in ignore_dirs for part in rel_parts):
-                continue
-            file_count += 1
-            rel_text = '/'.join(str(v).lower() for v in rel_parts)
-            stem = path.stem.lower()
-            ext = path.suffix.lower()
-            if any(token in rel_text for token in risk_tokens):
-                risk_markers += 1
-                continue
-            if ext in risk_extensions and stem in {'prod', 'deploy', 'migration', 'schema', 'security'}:
-                risk_markers += 1
-
-        if file_count <= 120:
-            repo_size = 'small'
-        elif file_count <= 1200:
-            repo_size = 'medium'
-        else:
-            repo_size = 'large'
-
-        if risk_markers >= 20 or (repo_size == 'large' and risk_markers >= 8):
-            risk_level = 'high'
-        elif risk_markers >= 6 or repo_size == 'large':
-            risk_level = 'medium'
-        else:
-            risk_level = 'low'
-
-        return {
-            'workspace_path': str(root.resolve()),
-            'exists': True,
-            'repo_size': repo_size,
-            'risk_level': risk_level,
-            'file_count': file_count,
-            'risk_markers': risk_markers,
-            'scan_truncated': file_count >= max_scan,
-        }
+        return analyze_workspace_profile(workspace_path)
 
     @staticmethod
     def _recommend_policy_template(*, profile: dict) -> str:
-        return DEFAULT_POLICY_TEMPLATE
+        return recommend_policy_template(profile=profile)
 
     @staticmethod
     def _risk_contract_file_candidates(project_root: Path) -> list[Path]:
-        root = Path(project_root)
-        return [
-            root / 'ops' / 'risk_policy_contract.json',
-            root / '.agents' / 'risk_policy_contract.json',
-        ]
+        return risk_contract_file_candidates(project_root)
 
     @staticmethod
     def _normalize_required_checks(value: object) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        out: list[str] = []
-        seen: set[str] = set()
-        for raw in value:
-            item = str(raw or '').strip()
-            if not item:
-                continue
-            lowered = item.lower()
-            if lowered in seen:
-                continue
-            seen.add(lowered)
-            out.append(item)
-        return out
+        return normalize_required_checks(value)
 
     def _load_risk_policy_contract(self, *, project_root: Path) -> dict[str, object]:
-        contract: dict[str, object] = dict(DEFAULT_RISK_POLICY_CONTRACT)
-        merge_policy = dict(contract.get('mergePolicy', {})) if isinstance(contract.get('mergePolicy'), dict) else {}
-        contract['mergePolicy'] = merge_policy
-        for candidate in self._risk_contract_file_candidates(project_root):
-            if not candidate.exists() or not candidate.is_file():
-                continue
-            try:
-                parsed = json.loads(candidate.read_text(encoding='utf-8'))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            candidate_merge = parsed.get('mergePolicy')
-            if isinstance(candidate_merge, dict):
-                normalized_merge: dict[str, dict[str, object]] = {}
-                for tier_key, tier_payload in candidate_merge.items():
-                    tier = str(tier_key or '').strip().lower()
-                    payload = tier_payload if isinstance(tier_payload, dict) else {}
-                    normalized_merge[tier] = {
-                        **payload,
-                        'requiredChecks': self._normalize_required_checks(payload.get('requiredChecks')),
-                    }
-                merge_policy = normalized_merge
-            contract = {
-                'version': str(parsed.get('version') or contract.get('version') or '1'),
-                'riskTierRules': parsed.get('riskTierRules', contract.get('riskTierRules', {})),
-                'mergePolicy': merge_policy,
-                'source_path': str(candidate),
-            }
-            return contract
-
-        contract['source_path'] = 'builtin'
-        if isinstance(merge_policy, dict):
-            normalized_merge: dict[str, dict[str, object]] = {}
-            for tier_key, tier_payload in merge_policy.items():
-                tier = str(tier_key or '').strip().lower()
-                payload = tier_payload if isinstance(tier_payload, dict) else {}
-                normalized_merge[tier] = {
-                    **payload,
-                    'requiredChecks': self._normalize_required_checks(payload.get('requiredChecks')),
-                }
-            contract['mergePolicy'] = normalized_merge
-        return contract
+        return load_risk_policy_contract(project_root=project_root)
 
     @staticmethod
     def _resolve_risk_tier_from_profile(profile: dict) -> str:
-        risk_level = str(profile.get('risk_level') or '').strip().lower()
-        if risk_level == 'high':
-            return 'high'
-        return 'low'
+        return resolve_risk_tier_from_profile(profile)
 
     @staticmethod
     def _requires_browser_evidence(*, title: str, description: str) -> bool:
-        haystack = f'{title}\n{description}'.lower()
-        return bool(re.search(r'\b(ui|frontend|browser|page|screen|dashboard|web)\b', haystack))
+        return requires_browser_evidence(title=title, description=description)
 
     def _run_preflight_risk_gate(self, *, row: dict, workspace_root: Path) -> dict[str, object]:
-        project_root = Path(str(row.get('project_path') or row.get('workspace_path') or workspace_root))
-        profile = self._analyze_workspace_profile(str(project_root))
-        tier = self._resolve_risk_tier_from_profile(profile)
-        contract = self._load_risk_policy_contract(project_root=project_root)
-        merge_policy = contract.get('mergePolicy')
-        merge_policy_map = merge_policy if isinstance(merge_policy, dict) else {}
-        tier_policy = merge_policy_map.get(tier)
-        tier_policy_map = tier_policy if isinstance(tier_policy, dict) else {}
-        required_checks = self._normalize_required_checks(tier_policy_map.get('requiredChecks'))
-
-        test_command = str(row.get('test_command') or '').strip()
-        lint_command = str(row.get('lint_command') or '').strip()
-        reviewers = list(row.get('reviewer_participants') or [])
-        title = str(row.get('title') or '').strip()
-        description = str(row.get('description') or '').strip()
-        project_has_git = bool((project_root / '.git').exists())
-        head_probe_root = project_root if project_has_git else workspace_root
-        head_sha = self._read_git_head_sha(head_probe_root)
-        head_gate_ok = (not project_has_git) or bool(head_sha)
-
-        check_values = {
-            'risk-policy-gate': True,
-            'harness-smoke': bool(test_command) and bool(lint_command),
-            'ci-pipeline': bool(test_command) and bool(lint_command),
-            'head-sha-gate': head_gate_ok,
-            'review-head-sha-gate': head_gate_ok,
-            'evidence-manifest': True,
-            'browser evidence': (
-                (not self._requires_browser_evidence(title=title, description=description))
-                or ('playwright' in test_command.lower())
-                or ('browser' in test_command.lower())
-            ),
-        }
-
-        failed_required: list[str] = []
-        for check_name in required_checks:
-            lookup = str(check_name or '').strip().lower()
-            if not lookup:
-                continue
-            ok = bool(check_values.get(lookup, False))
-            if not ok:
-                failed_required.append(check_name)
-
-        if not reviewers:
-            failed_required.append('reviewers_present')
-
-        if not test_command:
-            failed_required.append('test_command_present')
-        if not lint_command:
-            failed_required.append('lint_command_present')
-
-        seen_failed: set[str] = set()
-        unique_failed: list[str] = []
-        for item in failed_required:
-            key = str(item or '').strip().lower()
-            if not key or key in seen_failed:
-                continue
-            seen_failed.add(key)
-            unique_failed.append(str(item))
-
-        passed = len(unique_failed) == 0
-        reason = 'passed' if passed else 'preflight_risk_gate_failed'
+        payload = run_preflight_risk_gate(
+            row=row,
+            workspace_root=workspace_root,
+            read_git_head_sha_fn=self._read_git_head_sha,
+        )
         return {
-            'passed': passed,
-            'reason': reason,
-            'tier': tier,
-            'required_checks': required_checks,
-            'failed_checks': unique_failed,
-            'profile': profile,
-            'contract_version': str(contract.get('version') or '1'),
-            'contract_source': str(contract.get('source_path') or 'builtin'),
+            'passed': bool(payload.get('passed', False)),
+            'reason': str(payload.get('reason') or 'preflight_risk_gate_failed'),
+            'tier': str(payload.get('risk_tier') or 'low'),
+            'required_checks': list(payload.get('required_checks') or []),
+            'failed_checks': list(payload.get('failed_checks') or []),
+            'profile': dict(payload.get('profile') or {}),
+            'contract_version': str(payload.get('contract_version') or '1'),
+            'contract_source': str(payload.get('contract_source') or 'builtin'),
             'workspace_path': str(workspace_root),
-            'project_has_git': project_has_git,
-            'head_sha': head_sha,
+            'project_has_git': bool((Path(str(row.get('project_path') or row.get('workspace_path') or workspace_root)) / '.git').exists()),
+            'head_sha': payload.get('head_sha'),
         }
 
     def _collect_task_artifacts(self, *, task_id: str) -> list[dict]:
@@ -1195,191 +767,32 @@ class OrchestratorService:
 
     @staticmethod
     def _run_git_command(*, root: Path, args: list[str]) -> tuple[bool, str]:
-        try:
-            completed = subprocess.run(
-                ['git', *args],
-                cwd=str(root),
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                timeout=5,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return False, ''
-        if completed.returncode != 0:
-            return False, (completed.stderr or completed.stdout or '').strip()
-        return True, (completed.stdout or '').strip()
+        return run_git_command(root=root, args=args)
 
     def _read_git_head_sha(self, root: Path | None) -> str | None:
-        if root is None:
-            return None
-        target = Path(root)
-        if not target.exists() or not target.is_dir():
-            return None
-        ok, payload = self._run_git_command(root=target, args=['rev-parse', 'HEAD'])
-        if not ok:
-            return None
-        sha = str(payload or '').strip()
-        if re.fullmatch(r'[0-9a-fA-F]{40}', sha):
-            return sha.lower()
-        return None
+        return read_git_head_sha(root)
 
     def _read_git_state(self, root: Path | None) -> dict:
-        if root is None:
-            return {
-                'is_git_repo': False,
-                'branch': None,
-                'worktree_clean': None,
-                'remote_origin': None,
-                'guard_allowed': True,
-                'guard_reason': 'no_target',
-            }
-        if not root.exists() or not root.is_dir():
-            return {
-                'is_git_repo': False,
-                'branch': None,
-                'worktree_clean': None,
-                'remote_origin': None,
-                'guard_allowed': True,
-                'guard_reason': 'missing_path',
-            }
-
-        ok_git, git_flag = self._run_git_command(root=root, args=['rev-parse', '--is-inside-work-tree'])
-        if not ok_git or git_flag.strip().lower() != 'true':
-            return {
-                'is_git_repo': False,
-                'branch': None,
-                'worktree_clean': None,
-                'remote_origin': None,
-                'guard_allowed': True,
-                'guard_reason': 'non_git_repo',
-            }
-
-        ok_branch, branch = self._run_git_command(root=root, args=['branch', '--show-current'])
-        ok_status, status_out = self._run_git_command(root=root, args=['status', '--porcelain'])
-        ok_remote, remote = self._run_git_command(root=root, args=['remote', 'get-url', 'origin'])
-        return {
-            'is_git_repo': True,
-            'branch': branch if ok_branch else None,
-            'worktree_clean': (len(str(status_out or '').strip()) == 0) if ok_status else None,
-            'remote_origin': remote if ok_remote else None,
-            'guard_allowed': True,
-            'guard_reason': 'unvalidated',
-        }
+        return read_git_state(root)
 
     @staticmethod
     def _promotion_guard_config() -> dict:
-        enabled = str(os.getenv('AWE_PROMOTION_GUARD_ENABLED', '1') or '1').strip().lower() in {'1', 'true', 'yes', 'on'}
-        # Default is non-blocking for local development; enforce via env when needed.
-        require_clean = str(os.getenv('AWE_PROMOTION_REQUIRE_CLEAN', '0') or '0').strip().lower() in {'1', 'true', 'yes', 'on'}
-        raw_branches = str(os.getenv('AWE_PROMOTION_ALLOWED_BRANCHES', '') or '').strip()
-        allowed_branches = [
-            item.strip()
-            for item in raw_branches.split(',')
-            if item.strip()
-        ]
-        return {
-            'enabled': enabled,
-            'require_clean': require_clean,
-            'allowed_branches': allowed_branches,
-        }
+        return promotion_guard_config()
 
     def _evaluate_promotion_guard(self, *, target_root: Path) -> dict:
-        cfg = self._promotion_guard_config()
-        git = self._read_git_state(target_root)
-        payload = {
-            'enabled': bool(cfg.get('enabled', True)),
-            'target_path': str(target_root),
-            'allowed_branches': list(cfg.get('allowed_branches', [])),
-            'require_clean': bool(cfg.get('require_clean', True)),
-            **git,
-        }
-        if not payload['enabled']:
-            payload['guard_allowed'] = True
-            payload['guard_reason'] = 'guard_disabled'
-            return payload
-        if not bool(payload.get('is_git_repo')):
-            payload['guard_allowed'] = True
-            payload['guard_reason'] = 'non_git_repo'
-            return payload
-        branch = str(payload.get('branch') or '').strip()
-        allowed_branches = payload.get('allowed_branches') or []
-        if allowed_branches and branch and branch not in allowed_branches:
-            payload['guard_allowed'] = False
-            payload['guard_reason'] = f'branch_not_allowed:{branch}'
-            return payload
-        if bool(payload.get('require_clean')) and payload.get('worktree_clean') is False:
-            payload['guard_allowed'] = False
-            payload['guard_reason'] = 'dirty_worktree'
-            return payload
-        payload['guard_allowed'] = True
-        payload['guard_reason'] = 'ok'
-        return payload
+        return evaluate_promotion_guard(target_root=target_root)
 
     @staticmethod
     def _read_json_file(path: Path | None) -> dict:
-        if path is None or not path.exists():
-            return {}
-        try:
-            raw = path.read_text(encoding='utf-8', errors='replace')
-        except OSError:
-            return {}
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
-        return data if isinstance(data, dict) else {}
+        return event_read_json_file(path)
 
     @staticmethod
     def _guess_task_created_at(task_dir: Path | None, state: dict) -> str:
-        if task_dir is None:
-            return ''
-        events_path = task_dir / 'events.jsonl'
-        if events_path.exists():
-            try:
-                for raw in events_path.read_text(encoding='utf-8', errors='replace').splitlines():
-                    text = str(raw or '').strip()
-                    if not text:
-                        continue
-                    try:
-                        obj = json.loads(text)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(obj, dict):
-                        created_at = str(obj.get('created_at') or '').strip()
-                        if created_at:
-                            return created_at
-            except OSError:
-                pass
-        updated = str(state.get('updated_at') or '').strip()
-        if updated:
-            return updated
-        return ''
+        return event_guess_task_created_at(task_dir, state)
 
     @staticmethod
     def _guess_task_updated_at(task_dir: Path | None) -> str:
-        if task_dir is None:
-            return ''
-        events_path = task_dir / 'events.jsonl'
-        if events_path.exists():
-            try:
-                lines = [line.strip() for line in events_path.read_text(encoding='utf-8', errors='replace').splitlines() if line.strip()]
-            except OSError:
-                lines = []
-            for raw in reversed(lines):
-                try:
-                    obj = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(obj, dict):
-                    created_at = str(obj.get('created_at') or '').strip()
-                    if created_at:
-                        return created_at
-        try:
-            return datetime.fromtimestamp(task_dir.stat().st_mtime).isoformat()
-        except OSError:
-            return ''
+        return event_guess_task_updated_at(task_dir)
 
     def request_cancel(self, task_id: str) -> TaskView:
         row = self.repository.set_cancel_requested(task_id, requested=True)
@@ -1831,7 +1244,7 @@ class OrchestratorService:
                     reviewers=reviewers,
                     evolution_level=max(0, min(3, int(row.get('evolution_level', 0)))),
                     evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
-                    conversation_language=self._normalize_conversation_language(row.get('conversation_language')),
+                    conversation_language=normalize_conversation_language(row.get('conversation_language')),
                     provider_models=dict(row.get('provider_models', {})),
                     provider_model_params=dict(row.get('provider_model_params', {})),
                     participant_models=dict(row.get('participant_models', {})),
@@ -1840,10 +1253,10 @@ class OrchestratorService:
                     codex_multi_agents=bool(row.get('codex_multi_agents', False)),
                     claude_team_agents_overrides=dict(row.get('claude_team_agents_overrides', {})),
                     codex_multi_agents_overrides=dict(row.get('codex_multi_agents_overrides', {})),
-                    repair_mode=self._normalize_repair_mode(row.get('repair_mode')),
-                    plain_mode=self._normalize_plain_mode(row.get('plain_mode')),
-                    stream_mode=self._normalize_bool_flag(row.get('stream_mode', True), default=True),
-                    debate_mode=self._normalize_bool_flag(row.get('debate_mode', True), default=True),
+                    repair_mode=normalize_repair_mode(row.get('repair_mode')),
+                    plain_mode=normalize_plain_mode(row.get('plain_mode')),
+                    stream_mode=normalize_bool_flag(row.get('stream_mode', True), default=True),
+                    debate_mode=normalize_bool_flag(row.get('debate_mode', True), default=True),
                     cwd=Path(str(row.get('workspace_path') or Path.cwd())),
                     max_rounds=int(row['max_rounds']),
                     test_command=row['test_command'],
@@ -2347,8 +1760,8 @@ class OrchestratorService:
             )
 
         target_text = (
-            self._normalize_merge_target_path(merge_target_path)
-            or self._normalize_merge_target_path(row.get('merge_target_path'))
+            normalize_merge_target_path(merge_target_path)
+            or normalize_merge_target_path(row.get('merge_target_path'))
             or str(row.get('project_path') or row.get('workspace_path') or '').strip()
         )
         target_root = Path(str(target_text)).resolve()
@@ -2440,7 +1853,7 @@ class OrchestratorService:
                 reviewers=reviewers,
                 evolution_level=max(0, min(3, int(row.get('evolution_level', 0)))),
                 evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
-                conversation_language=self._normalize_conversation_language(row.get('conversation_language')),
+                conversation_language=normalize_conversation_language(row.get('conversation_language')),
                 provider_models=dict(row.get('provider_models', {})),
                 provider_model_params=dict(row.get('provider_model_params', {})),
                 participant_models=dict(row.get('participant_models', {})),
@@ -2449,10 +1862,10 @@ class OrchestratorService:
                 codex_multi_agents=bool(row.get('codex_multi_agents', False)),
                 claude_team_agents_overrides=dict(row.get('claude_team_agents_overrides', {})),
                 codex_multi_agents_overrides=dict(row.get('codex_multi_agents_overrides', {})),
-                repair_mode=self._normalize_repair_mode(row.get('repair_mode')),
-                plain_mode=self._normalize_plain_mode(row.get('plain_mode')),
-                stream_mode=self._normalize_bool_flag(row.get('stream_mode', True), default=True),
-                debate_mode=self._normalize_bool_flag(row.get('debate_mode', True), default=True),
+                repair_mode=normalize_repair_mode(row.get('repair_mode')),
+                plain_mode=normalize_plain_mode(row.get('plain_mode')),
+                stream_mode=normalize_bool_flag(row.get('stream_mode', True), default=True),
+                debate_mode=normalize_bool_flag(row.get('debate_mode', True), default=True),
                 cwd=Path(str(row.get('workspace_path') or Path.cwd())),
                 max_rounds=int(row.get('max_rounds', 3)),
                 test_command=str(row.get('test_command', 'py -m pytest -q')),
@@ -2463,10 +1876,10 @@ class OrchestratorService:
                 test_command=config.test_command,
                 lint_command=config.lint_command,
             )
-            claude_team_agents_overrides = self._normalize_participant_agent_overrides_runtime(
+            claude_team_agents_overrides = normalize_participant_agent_overrides_runtime(
                 config.claude_team_agents_overrides
             )
-            codex_multi_agents_overrides = self._normalize_participant_agent_overrides_runtime(
+            codex_multi_agents_overrides = normalize_participant_agent_overrides_runtime(
                 config.codex_multi_agents_overrides
             )
 
@@ -2522,24 +1935,24 @@ class OrchestratorService:
                                 ),
                                 cwd=config.cwd,
                                 timeout_seconds=review_timeout,
-                                model=self._resolve_model_for_participant(
+                                model=resolve_model_for_participant(
                                     participant_id=reviewer.participant_id,
                                     provider=reviewer.provider,
                                     provider_models=config.provider_models,
                                     participant_models=config.participant_models,
                                 ),
-                                model_params=self._resolve_model_params_for_participant(
+                                model_params=resolve_model_params_for_participant(
                                     participant_id=reviewer.participant_id,
                                     provider=reviewer.provider,
                                     provider_model_params=config.provider_model_params,
                                     participant_model_params=config.participant_model_params,
                                 ),
-                                claude_team_agents=self._resolve_agent_toggle_for_participant(
+                                claude_team_agents=resolve_agent_toggle_for_participant(
                                     participant_id=reviewer.participant_id,
                                     global_enabled=bool(config.claude_team_agents),
                                     overrides=claude_team_agents_overrides,
                                 ),
-                                codex_multi_agents=self._resolve_agent_toggle_for_participant(
+                                codex_multi_agents=resolve_agent_toggle_for_participant(
                                     participant_id=reviewer.participant_id,
                                     global_enabled=bool(config.codex_multi_agents),
                                     overrides=codex_multi_agents_overrides,
@@ -2854,24 +2267,24 @@ class OrchestratorService:
                                 prompt=discussion_prompt,
                                 cwd=config.cwd,
                                 timeout_seconds=timeout,
-                                model=self._resolve_model_for_participant(
+                                model=resolve_model_for_participant(
                                     participant_id=author.participant_id,
                                     provider=author.provider,
                                     provider_models=config.provider_models,
                                     participant_models=config.participant_models,
                                 ),
-                                model_params=self._resolve_model_params_for_participant(
+                                model_params=resolve_model_params_for_participant(
                                     participant_id=author.participant_id,
                                     provider=author.provider,
                                     provider_model_params=config.provider_model_params,
                                     participant_model_params=config.participant_model_params,
                                 ),
-                                claude_team_agents=self._resolve_agent_toggle_for_participant(
+                                claude_team_agents=resolve_agent_toggle_for_participant(
                                     participant_id=author.participant_id,
                                     global_enabled=bool(config.claude_team_agents),
                                     overrides=claude_team_agents_overrides,
                                 ),
-                                codex_multi_agents=self._resolve_agent_toggle_for_participant(
+                                codex_multi_agents=resolve_agent_toggle_for_participant(
                                     participant_id=author.participant_id,
                                     global_enabled=bool(config.codex_multi_agents),
                                     overrides=codex_multi_agents_overrides,
@@ -3225,202 +2638,6 @@ class OrchestratorService:
         except ValueError:
             return None
 
-    @staticmethod
-    def _normalize_evolve_until(value: str | None) -> str | None:
-        try:
-            return normalize_evolve_until(value)
-        except ValueError as exc:
-            raise InputValidationError(
-                'evolve_until must be ISO/local datetime',
-                field='evolve_until',
-            ) from exc
-
-    @staticmethod
-    def _normalize_merge_target_path(value: str | None) -> str | None:
-        return normalize_merge_target_path(value)
-
-    @staticmethod
-    def _normalize_conversation_language(value: str | None, *, strict: bool = False) -> str:
-        try:
-            return normalize_conversation_language(value, strict=strict)
-        except ValueError as exc:
-            raise InputValidationError(
-                str(exc),
-                field='conversation_language',
-            ) from exc
-
-    @staticmethod
-    def _normalize_repair_mode(value, *, strict: bool = False) -> str:
-        try:
-            return normalize_repair_mode(value, strict=strict)
-        except ValueError as exc:
-            raise InputValidationError(
-                str(exc),
-                field='repair_mode',
-            ) from exc
-
-    @staticmethod
-    def _normalize_plain_mode(value) -> bool:
-        return normalize_plain_mode(value)
-
-    @staticmethod
-    def _normalize_bool_flag(value, *, default: bool) -> bool:
-        return normalize_bool_flag(value, default=default)
-
-    @staticmethod
-    def _normalize_provider_models(value: dict[str, str] | None) -> dict[str, str]:
-        try:
-            return normalize_provider_models(value)
-        except ValueError as exc:
-            field = 'provider_models'
-            if '[' in str(exc):
-                field = str(exc).split(']', 1)[0] + ']'
-            raise InputValidationError(str(exc), field=field) from exc
-
-    @staticmethod
-    def _normalize_provider_model_params(value: dict[str, str] | None) -> dict[str, str]:
-        try:
-            return normalize_provider_model_params(value)
-        except ValueError as exc:
-            field = 'provider_model_params'
-            if '[' in str(exc):
-                field = str(exc).split(']', 1)[0] + ']'
-            raise InputValidationError(str(exc), field=field) from exc
-
-    @staticmethod
-    def _normalize_participant_models(
-        value: dict[str, str] | None,
-        *,
-        known_participants: set[str],
-    ) -> dict[str, str]:
-        try:
-            return normalize_participant_models(
-                value,
-                known_participants=known_participants,
-            )
-        except ValueError as exc:
-            field = 'participant_models'
-            if '[' in str(exc):
-                field = str(exc).split(']', 1)[0] + ']'
-            raise InputValidationError(str(exc), field=field) from exc
-
-    @staticmethod
-    def _normalize_participant_model_params(
-        value: dict[str, str] | None,
-        *,
-        known_participants: set[str],
-    ) -> dict[str, str]:
-        try:
-            return normalize_participant_model_params(
-                value,
-                known_participants=known_participants,
-            )
-        except ValueError as exc:
-            field = 'participant_model_params'
-            if '[' in str(exc):
-                field = str(exc).split(']', 1)[0] + ']'
-            raise InputValidationError(str(exc), field=field) from exc
-
-    @staticmethod
-    def _normalize_participant_agent_overrides(
-        value: dict[str, bool] | None,
-        *,
-        known_participants: set[str],
-        required_provider: str,
-        field: str,
-    ) -> dict[str, bool]:
-        try:
-            return normalize_participant_agent_overrides(
-                value,
-                known_participants=known_participants,
-                required_provider=required_provider,
-                field=field,
-            )
-        except ValueError as exc:
-            mapped_field = field
-            if '[' in str(exc):
-                mapped_field = str(exc).split(']', 1)[0] + ']'
-            raise InputValidationError(str(exc), field=mapped_field) from exc
-
-    @staticmethod
-    def _coerce_bool_override_value(value, *, field: str) -> bool:
-        try:
-            return coerce_bool_override_value(value, field=field)
-        except ValueError as exc:
-            raise InputValidationError(str(exc), field=field) from exc
-
-    @staticmethod
-    def _normalize_participant_agent_overrides_runtime(value: dict[str, bool] | None) -> dict[str, bool]:
-        return normalize_participant_agent_overrides_runtime(value)
-
-    @staticmethod
-    def _resolve_agent_toggle_for_participant(
-        *,
-        participant_id: str,
-        global_enabled: bool,
-        overrides: dict[str, bool],
-    ) -> bool:
-        return resolve_agent_toggle_for_participant(
-            participant_id=participant_id,
-            global_enabled=global_enabled,
-            overrides=overrides,
-        )
-
-    @staticmethod
-    def _resolve_model_for_participant(
-        *,
-        participant_id: str,
-        provider: str,
-        provider_models: dict[str, str] | None,
-        participant_models: dict[str, str] | None,
-    ) -> str | None:
-        return resolve_model_for_participant(
-            participant_id=participant_id,
-            provider=provider,
-            provider_models=provider_models,
-            participant_models=participant_models,
-        )
-
-    @staticmethod
-    def _resolve_model_params_for_participant(
-        *,
-        participant_id: str,
-        provider: str,
-        provider_model_params: dict[str, str] | None,
-        participant_model_params: dict[str, str] | None,
-    ) -> str | None:
-        return resolve_model_params_for_participant(
-            participant_id=participant_id,
-            provider=provider,
-            provider_model_params=provider_model_params,
-            participant_model_params=participant_model_params,
-        )
-
-    @staticmethod
-    def _normalize_fingerprint_path(path_text: str | None) -> str:
-        return TaskManagementService._normalize_fingerprint_path(path_text)
-
-    @staticmethod
-    def _workspace_head_signature(root: Path, *, max_entries: int = 128) -> str:
-        return TaskManagementService._workspace_head_signature(root, max_entries=max_entries)
-
-    def _build_workspace_fingerprint(
-        self,
-        *,
-        project_root: Path,
-        workspace_root: Path,
-        sandbox_mode: bool,
-        sandbox_workspace_path: str | None,
-        merge_target_path: str | None,
-    ) -> dict[str, object]:
-        return TaskManagementService._build_workspace_fingerprint(
-            project_root=project_root,
-            workspace_root=workspace_root,
-            sandbox_mode=sandbox_mode,
-            sandbox_workspace_path=sandbox_workspace_path,
-            merge_target_path=merge_target_path,
-        )
-
     def _evaluate_workspace_resume_guard(self, row: dict) -> dict[str, object]:
         expected_raw = row.get('workspace_fingerprint')
         expected = dict(expected_raw) if isinstance(expected_raw, dict) else {}
@@ -3432,7 +2649,7 @@ class OrchestratorService:
 
         project_root = Path(str(row.get('project_path') or row.get('workspace_path') or Path.cwd()))
         workspace_root = Path(str(row.get('workspace_path') or Path.cwd()))
-        actual = self._build_workspace_fingerprint(
+        actual = TaskManagementService._build_workspace_fingerprint(
             project_root=project_root,
             workspace_root=workspace_root,
             sandbox_mode=bool(row.get('sandbox_mode', False)),
@@ -3777,55 +2994,16 @@ class OrchestratorService:
         stage: str = 'proposal_review',
         environment_context: str | None = None,
     ) -> str:
-        clipped = clip_text(discussion_output, max_chars=2500)
-        language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
-        plain_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
-        plain_review_format = WorkflowEngine._plain_review_format_instruction(
-            enabled=bool(config.plain_mode),
-            language=config.conversation_language,
-        )
-        control_schema_instruction = WorkflowEngine._control_output_schema_instruction()
-        checklist_guidance = WorkflowEngine._review_checklist_guidance(config.evolution_level)
-        stage_text = str(stage or 'proposal_review').strip().lower()
-        audit_intent = OrchestratorService._is_audit_intent(config)
-        stage_guidance = (
-            "Stage: precheck. Build a concrete review scope."
-            " For audit/discovery tasks, run repository checks as needed and cite concrete evidence."
-            " Then summarize findings for author discussion."
-            if stage_text == 'proposal_precheck_review'
-            else "Stage: proposal review. Evaluate the updated proposal and unresolved risks."
-        )
-        scope_guidance = (
-            "If user request is broad, do not block only for broad wording."
-            " Convert it into concrete review scope, checks, and priorities, then continue."
-        )
-        depth_guidance = (
-            "Task mode is audit/discovery: run repository checks as needed and cite evidence."
-            if audit_intent
-            else "Keep checks focused on current feature scope and known risk paths."
-        )
-        base = WorkflowEngine._render_prompt_template(
-            'proposal_review_prompt.txt',
-            task_title=config.title,
-            language_instruction=language_instruction,
-            plain_instruction=plain_instruction,
-            stage_guidance=stage_guidance,
-            scope_guidance=scope_guidance,
-            depth_guidance=depth_guidance,
-            checklist_guidance=checklist_guidance,
-            control_schema_instruction=control_schema_instruction,
-            plain_review_format=plain_review_format,
-            plan_text=clipped,
-        )
-        return inject_prompt_extras(
-            base=base,
+        return proposal_review_prompt(
+            config,
+            discussion_output,
+            stage=stage,
             environment_context=environment_context,
-            strategy_hint=None,
         )
 
     @staticmethod
     def _review_timeout_seconds(participant_timeout_seconds: int) -> int:
-        return max(1, int(participant_timeout_seconds))
+        return review_timeout_seconds(participant_timeout_seconds)
 
     @staticmethod
     def _proposal_author_prompt(
@@ -3835,129 +3013,24 @@ class OrchestratorService:
         *,
         environment_context: str | None = None,
     ) -> str:
-        clipped = clip_text(merged_context, max_chars=3200)
-        language_instruction = WorkflowEngine._conversation_language_instruction(config.conversation_language)
-        plain_instruction = WorkflowEngine._plain_mode_instruction(bool(config.plain_mode))
-        level = max(0, min(3, int(config.evolution_level)))
-        no_blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value)
-        blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.BLOCKER.value)
-        unknown = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.UNKNOWN.value)
-        if level >= 3:
-            author_scope_guidance = (
-                "Primary plan must still map to reviewer findings and user intent. "
-                "You may append 1-3 optional proactive evolution candidates if they are low-risk and testable."
-            )
-            evolution_author_guidance = (
-                "For each optional candidate, include impact/risk/effort and a concrete verification path."
-            )
-        else:
-            author_scope_guidance = (
-                "Do not invent unrelated changes. "
-                "Only propose changes that map to reviewer findings and user intent."
-            )
-            evolution_author_guidance = ""
-        audit_author_guidance = (
-            "This is audit/discovery intent. Convert reviewer findings into a concrete execution plan: "
-            "scope(files/modules), checks/tests, expected outputs, and stop conditions."
-            if OrchestratorService._is_audit_intent(config)
-            else "Keep proposal concrete and implementation-ready."
-        )
-        base = WorkflowEngine._render_prompt_template(
-            'proposal_author_prompt.txt',
-            task_title=config.title,
-            language_instruction=language_instruction,
-            plain_instruction=plain_instruction,
-            no_blocker=no_blocker,
-            blocker=blocker,
-            unknown=unknown,
-            author_scope_guidance=author_scope_guidance,
-            evolution_author_guidance=evolution_author_guidance,
-            audit_author_guidance=audit_author_guidance,
-            context_text=clipped,
-        )
-        return inject_prompt_extras(
-            base=base,
+        return proposal_author_prompt(
+            config,
+            merged_context,
+            review_payload,
             environment_context=environment_context,
-            strategy_hint=None,
         )
 
     @staticmethod
     def _is_audit_intent(config: RunConfig) -> bool:
-        text = f"{str(config.title or '')}\n{str(config.description or '')}".lower()
-        if not text.strip():
-            return False
-        keywords = (
-            'audit',
-            'review',
-            'inspect',
-            'scan',
-            'check',
-            'bug',
-            'bugs',
-            'vulnerability',
-            'vulnerabilities',
-            'security',
-            'hardening',
-            'improve',
-            'improvement',
-            'quality',
-            'refine',
-            '漏洞',
-            '缺陷',
-            '错误',
-            '检查',
-            '审查',
-            '评审',
-            '改进',
-            '优化',
-            '完善',
-            '风险',
-        )
-        return any(k in text for k in keywords)
+        return is_audit_intent(config)
 
     @staticmethod
     def _looks_like_scope_ambiguity(review_text: str) -> bool:
-        text = str(review_text or '').lower()
-        if not text:
-            return False
-        hints = (
-            'too vague',
-            'vague',
-            'unclear scope',
-            'not specific',
-            'no specific bug',
-            '缺少具体',
-            '太模糊',
-            '不明确',
-            '没有具体',
-            '先说明具体',
-            '无法判断改动',
-        )
-        return any(h in text for h in hints)
+        return looks_like_scope_ambiguity(review_text)
 
     @staticmethod
     def _looks_like_hard_risk(review_text: str) -> bool:
-        text = str(review_text or '').lower()
-        if not text:
-            return False
-        hints = (
-            'data loss',
-            'destructive',
-            'unsafe',
-            'critical',
-            'high risk',
-            'regression',
-            'security risk',
-            'sql injection',
-            'rce',
-            '权限',
-            '数据丢失',
-            '高风险',
-            '严重',
-            '回归',
-            '安全风险',
-        )
-        return any(h in text for h in hints)
+        return looks_like_hard_risk(review_text)
 
     @staticmethod
     def _normalize_proposal_reviewer_result(
@@ -3967,106 +3040,44 @@ class OrchestratorService:
         verdict: ReviewVerdict,
         review_text: str,
     ) -> tuple[ReviewVerdict, str]:
-        stage_text = str(stage or '').strip().lower()
-        if stage_text not in {'proposal_precheck_review', 'proposal_review'}:
-            return verdict, review_text
-        if verdict not in {ReviewVerdict.UNKNOWN, ReviewVerdict.BLOCKER}:
-            return verdict, review_text
-        if not OrchestratorService._looks_like_scope_ambiguity(review_text):
-            return verdict, review_text
-        if OrchestratorService._looks_like_hard_risk(review_text):
-            return verdict, review_text
-
-        guidance = (
-            "[system_note] Scope ambiguity is non-blocking: reviewer must convert broad user intent into "
-            "concrete scope (files/modules), checks, and priorities, then continue."
+        return normalize_proposal_reviewer_result(
+            config=config,
+            stage=stage,
+            verdict=verdict,
+            review_text=review_text,
         )
-        merged = str(review_text or '').strip()
-        if guidance not in merged:
-            merged = f"{merged}\n\n{guidance}".strip()
-        return ReviewVerdict.NO_BLOCKER, merged
 
     @staticmethod
     def _append_proposal_feedback_context(base_text: str, *, reviewer_id: str, review_text: str) -> str:
-        seed = str(base_text or '').strip()
-        note = str(review_text or '').strip()
-        if not note:
-            return seed
-        merged = f"{seed}\n\n[reviewer:{reviewer_id}]\n{note}".strip()
-        return clip_text(merged, max_chars=4500)
+        return append_proposal_feedback_context(base_text, reviewer_id=reviewer_id, review_text=review_text)
 
     @staticmethod
     def _proposal_verdict_counts(review_payload: list[dict]) -> tuple[int, int, int]:
-        no_blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value)
-        blocker = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.BLOCKER.value)
-        unknown = sum(1 for item in review_payload if str(item.get('verdict')) == ReviewVerdict.UNKNOWN.value)
-        return no_blocker, blocker, unknown
+        return proposal_verdict_counts(review_payload)
 
     @staticmethod
     def _proposal_consensus_reached(review_payload: list[dict], *, expected_reviewers: int) -> bool:
-        if expected_reviewers <= 0:
-            return True
-        if len(review_payload) < expected_reviewers:
-            return False
-        return all(str(item.get('verdict')) == ReviewVerdict.NO_BLOCKER.value for item in review_payload[:expected_reviewers])
+        return proposal_consensus_reached(review_payload, expected_reviewers=expected_reviewers)
 
     @staticmethod
     def _proposal_review_usable_count(review_payload: list[dict]) -> int:
-        usable = 0
-        for item in review_payload:
-            if OrchestratorService._is_actionable_proposal_review_text(str(item.get('output') or '')):
-                usable += 1
-        return usable
+        return proposal_review_usable_count(review_payload)
 
     @staticmethod
     def _proposal_stall_retry_limit() -> int:
-        return _PROPOSAL_STALL_RETRY_LIMIT
+        return PROPOSAL_STALL_RETRY_LIMIT
 
     @staticmethod
     def _proposal_repeat_rounds_limit() -> int:
-        return _PROPOSAL_REPEAT_ROUNDS_LIMIT
+        return PROPOSAL_REPEAT_ROUNDS_LIMIT
 
     @staticmethod
     def _proposal_round_signature(review_payload: list[dict], *, proposal_text: str) -> str:
-        parts: list[str] = []
-        for item in review_payload:
-            participant = str(item.get('participant') or '').strip().lower()
-            verdict = str(item.get('verdict') or '').strip().lower()
-            text = str(item.get('output') or '').strip().lower()
-            text = re.sub(r'\s+', ' ', text)
-            if len(text) > 300:
-                text = text[:300]
-            parts.append(f'{participant}|{verdict}|{text}')
-
-        proposal = re.sub(r'\s+', ' ', str(proposal_text or '').strip().lower())
-        if len(proposal) > 200:
-            proposal = proposal[:200]
-        payload = '\n'.join(sorted(parts) + [f'proposal|{proposal}'])
-        if not payload.strip():
-            return ''
-        return hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]
+        return proposal_round_signature(review_payload, proposal_text=proposal_text)
 
     @staticmethod
     def _is_actionable_proposal_review_text(text: str) -> bool:
-        payload = str(text or '').strip()
-        if not payload:
-            return False
-        lowered = payload.lower()
-        if lowered.startswith('[proposal_precheck_review_error]'):
-            return False
-        if lowered.startswith('[proposal_review_error]'):
-            return False
-        if 'command_timeout provider=' in lowered:
-            return False
-        if 'provider_limit provider=' in lowered:
-            return False
-        if 'command_not_found provider=' in lowered:
-            return False
-        if 'command_failed provider=' in lowered:
-            return False
-        if 'command_not_configured provider=' in lowered:
-            return False
-        return True
+        return is_actionable_proposal_review_text(text)
 
     @staticmethod
     def _resolve_merge_target(row: dict) -> Path:
@@ -4085,7 +3096,7 @@ class OrchestratorService:
             reviewer_participants=[str(v) for v in row.get('reviewer_participants', [])],
             evolution_level=max(0, min(3, int(row.get('evolution_level', 0)))),
             evolve_until=(str(row.get('evolve_until')).strip() if row.get('evolve_until') else None),
-            conversation_language=OrchestratorService._normalize_conversation_language(row.get('conversation_language')),
+            conversation_language=normalize_conversation_language(row.get('conversation_language')),
             provider_models={str(k): str(v) for k, v in dict(row.get('provider_models', {})).items()},
             provider_model_params={str(k): str(v) for k, v in dict(row.get('provider_model_params', {})).items()},
             participant_models={str(k): str(v) for k, v in dict(row.get('participant_models', {})).items()},
@@ -4094,10 +3105,10 @@ class OrchestratorService:
             codex_multi_agents=bool(row.get('codex_multi_agents', False)),
             claude_team_agents_overrides={str(k): bool(v) for k, v in dict(row.get('claude_team_agents_overrides', {})).items()},
             codex_multi_agents_overrides={str(k): bool(v) for k, v in dict(row.get('codex_multi_agents_overrides', {})).items()},
-            repair_mode=OrchestratorService._normalize_repair_mode(row.get('repair_mode')),
-            plain_mode=OrchestratorService._normalize_plain_mode(row.get('plain_mode', True)),
-            stream_mode=OrchestratorService._normalize_bool_flag(row.get('stream_mode', True), default=True),
-            debate_mode=OrchestratorService._normalize_bool_flag(row.get('debate_mode', True), default=True),
+            repair_mode=normalize_repair_mode(row.get('repair_mode')),
+            plain_mode=normalize_plain_mode(row.get('plain_mode', True)),
+            stream_mode=normalize_bool_flag(row.get('stream_mode', True), default=True),
+            debate_mode=normalize_bool_flag(row.get('debate_mode', True), default=True),
             sandbox_mode=bool(row.get('sandbox_mode', False)),
             sandbox_workspace_path=(str(row.get('sandbox_workspace_path')).strip() if row.get('sandbox_workspace_path') else None),
             sandbox_generated=bool(row.get('sandbox_generated', False)),
