@@ -1,8 +1,8 @@
-# GitHub About / Description (2026-02-21, full-closeout sync)
+# GitHub About / Description (2026-02-21, refreshed copy)
 
 ## English About (short, paste into repository About)
 
-Reviewer-first multi-CLI control tower for vibe coding. Run Codex, Claude, Gemini in auditable loops for bug finding, repair, and continuous codebase evolution.
+Reviewer-first multi-CLI control tower for vibe coding. Orchestrate Codex, Claude, and Gemini in evidence-gated, memory-aware loops for bug discovery, safer repair, and continuous evolution.
 
 ## English Description (long, for project page)
 
@@ -36,7 +36,7 @@ Built for teams and solo vibe coders who do not trust single-agent confidence.
 
 ## 中文 About（简短，可粘贴到仓库 About）
 
-面向 vibe coding 的 reviewer-first 多 CLI 控制塔：让 Codex、Claude、Gemini 在可观测、可追踪的循环中互审、修复并持续进化代码库。
+面向 vibe coding 的 reviewer-first 多 CLI 控制塔：把 Codex、Claude、Gemini 编排到“证据门禁 + 记忆增强”的可观测闭环中，持续发现问题、修复并进化代码库。
 
 ## 中文描述（长版）
 

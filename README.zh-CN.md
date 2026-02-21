@@ -23,8 +23,8 @@
 <br/>
 
 <p align="center">
-  <b>reviewer-first 的 vibe coder 控制塔：多智能体审阅、修复与进化一体化。</b><br/>
-  <sub>让 Claude、Codex、Gemini 等 CLI 智能体在可审计的共识闭环中找 bug、做修复、再进化代码库。</sub>
+  <b>reviewer-first 的 vibe coder 控制塔：把 Codex、Claude、Gemini 等统一编排到一个“证据门禁”闭环里。</b><br/>
+  <sub>通过具备记忆能力、可观测、可追踪的多智能体共识流程，发现真实 bug、完成更稳妥修复，并持续进化代码库。</sub>
 </p>
 <p align="center">
   <sub><b>低风险改名模式：</b>展示名使用 <code>AWE-AgentForge</code>，运行/包标识仍保持 <code>awe-agentcheck</code> / <code>awe_agentcheck</code> 以兼容现有脚本。</sub>
