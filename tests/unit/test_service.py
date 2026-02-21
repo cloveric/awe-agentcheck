@@ -2234,6 +2234,41 @@ def test_service_manual_mode_uses_single_proposal_consensus_round_even_when_max_
     assert int(payload.get('target_rounds') or 0) == 1
 
 
+def test_service_self_loop_mode_uses_single_proposal_consensus_round_at_evolution_level_2(tmp_path: Path):
+    engine = AutoConsensusWorkflowEngine()
+    svc = OrchestratorService(
+        repository=InMemoryTaskRepository(),
+        artifact_store=ArtifactStore(tmp_path / '.agents'),
+        workflow_engine=engine,
+    )
+    created = svc.create_task(
+        CreateTaskInput(
+            sandbox_mode=False,
+            self_loop_mode=1,
+            evolution_level=2,
+            title='Self-loop single proposal round at E2',
+            description='self-loop should auto-approve after one proposal consensus round',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            max_rounds=5,
+        )
+    )
+
+    started = svc.start_task(created.task_id)
+    assert started.status.value == 'passed'
+
+    events = svc.list_events(created.task_id)
+    reached = [e for e in events if e['type'] == 'proposal_consensus_reached']
+    assert len(reached) == 1
+    payload = reached[0].get('payload', {})
+    assert int(payload.get('target_rounds') or 0) == 1
+    assert int(payload.get('consensus_rounds') or 0) == 1
+
+    decisions = [e for e in events if e['type'] == 'author_decision']
+    assert decisions
+    assert str(decisions[-1].get('payload', {}).get('note') or '') == 'auto_approved_by_self_loop_mode'
+
+
 def test_service_manual_mode_proposal_reviewer_timeout_follows_participant_timeout(tmp_path: Path):
     engine = ProposalOrderWorkflowEngine()
     engine.participant_timeout_seconds = 240

@@ -872,6 +872,7 @@ POST /api/tasks
    - 仅当所有必需审阅者都给出通过级结论时，才计为一轮共识完成
    - 同一轮内会持续重试直到对齐，但现在有 10 次重试停滞保护（`proposal_consensus_stalled_in_round`）
    - 若跨轮反复围绕同一问题，则有 4 轮重复停滞保护（`proposal_consensus_stalled_across_rounds`）
+   - 停滞细节会显示在 **Project History** 的 `Disputes` 与 `Next Steps` 中，不会只留在后端日志里
 4. **等待人工** → 达到目标共识轮后，状态变为 `waiting_manual`
 5. **作者决定**：
    - **批准** → 状态变为 `queued`（原因为 `author_approved`），然后立即重新启动进入完整工作流

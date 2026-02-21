@@ -235,6 +235,38 @@ def merged_event_payload(event: dict) -> dict:
     return out
 
 
+def consensus_stall_note(payload: dict) -> str:
+    source = payload
+    nested = payload.get('stall') if isinstance(payload.get('stall'), dict) else None
+    if nested:
+        source = nested
+
+    stall_kind = str(source.get('stall_kind') or payload.get('stall_kind') or 'unknown').strip()
+    round_no = source.get('round')
+    attempt = source.get('attempt')
+    retry_limit = source.get('retry_limit')
+    repeated_rounds = source.get('repeated_rounds')
+    verdicts = source.get('verdicts') if isinstance(source.get('verdicts'), dict) else payload.get('verdicts')
+
+    parts: list[str] = [f'consensus stalled ({stall_kind})']
+    if round_no is not None:
+        parts.append(f'round={round_no}')
+    if attempt is not None and retry_limit is not None:
+        parts.append(f'attempt={attempt}/{retry_limit}')
+    elif attempt is not None:
+        parts.append(f'attempt={attempt}')
+    if repeated_rounds is not None:
+        parts.append(f'repeated_rounds={repeated_rounds}')
+    if isinstance(verdicts, dict):
+        parts.append(
+            'verdicts '
+            f"no_blocker={int(verdicts.get('no_blocker', 0) or 0)} "
+            f"blocker={int(verdicts.get('blocker', 0) or 0)} "
+            f"unknown={int(verdicts.get('unknown', 0) or 0)}"
+        )
+    return clip_snippet(' | '.join(parts), max_chars=280) or 'consensus stalled'
+
+
 def extract_core_findings(*, task_dir: Path | None, events: list[dict], fallback_reason: str | None) -> list[str]:
     findings: list[str] = []
     for line in read_markdown_highlights(task_dir / 'summary.md' if task_dir else None):
@@ -255,6 +287,7 @@ def extract_core_findings(*, task_dir: Path | None, events: list[dict], fallback
         'manual_gate',
         'review',
         'proposal_review',
+        'proposal_consensus_stalled',
         'discussion',
         'debate_review',
         'debate_reply',
@@ -264,11 +297,14 @@ def extract_core_findings(*, task_dir: Path | None, events: list[dict], fallback
         if etype not in interesting:
             continue
         payload = merged_event_payload(event)
-        snippet = (
-            clip_snippet(payload.get('output'))
-            or clip_snippet(payload.get('reason'))
-            or clip_snippet(event.get('type'))
-        )
+        if etype == EventType.PROPOSAL_CONSENSUS_STALLED.value:
+            snippet = consensus_stall_note(payload)
+        else:
+            snippet = (
+                clip_snippet(payload.get('output'))
+                or clip_snippet(payload.get('reason'))
+                or clip_snippet(event.get('type'))
+            )
         if not snippet:
             continue
         if snippet not in findings:
@@ -355,6 +391,14 @@ def extract_disputes(events: list[dict]) -> list[dict]:
                     'participant': 'system',
                     'verdict': 'gate_failed',
                     'note': clip_snippet(reason) or reason,
+                }
+            )
+        elif etype == EventType.PROPOSAL_CONSENSUS_STALLED.value:
+            disputes.append(
+                {
+                    'participant': 'system',
+                    'verdict': 'consensus_stalled',
+                    'note': consensus_stall_note(payload),
                 }
             )
 

@@ -1386,7 +1386,7 @@ def test_prompt_cache_probe_emits_break_event_when_model_changes():
     assert breaks1 == []
 
 
-def test_workflow_evolution_level_1_emits_architecture_warnings_without_hard_fail(tmp_path: Path, monkeypatch):
+def test_workflow_evolution_level_1_defaults_to_architecture_hard_fail(tmp_path: Path, monkeypatch):
     monkeypatch.delenv('AWE_ARCH_AUDIT_MODE', raising=False)
     huge = tmp_path / 'oversized.py'
     huge.write_text('\n'.join(['x = 1'] * 1305), encoding='utf-8')
@@ -1416,16 +1416,17 @@ def test_workflow_evolution_level_1_emits_architecture_warnings_without_hard_fai
         on_event=sink,
     )
 
-    assert result.status == 'passed'
+    assert result.status == 'failed_gate'
+    assert result.gate_reason == 'architecture_threshold_exceeded'
     audits = [e for e in sink.events if e.get('type') == 'architecture_audit']
     assert audits
     last = audits[-1]
-    assert last.get('mode') == 'warn'
+    assert last.get('mode') == 'hard'
     assert last.get('passed') is False
-    assert str(last.get('reason') or '') == 'architecture_threshold_warning'
+    assert str(last.get('reason') or '') == 'architecture_threshold_exceeded'
 
 
-def test_workflow_evolution_level_2_emits_architecture_warnings_without_hard_fail(tmp_path: Path, monkeypatch):
+def test_workflow_evolution_level_2_defaults_to_architecture_hard_fail(tmp_path: Path, monkeypatch):
     monkeypatch.delenv('AWE_ARCH_AUDIT_MODE', raising=False)
     huge = tmp_path / 'oversized.py'
     huge.write_text('\n'.join(['x = 1'] * 1305), encoding='utf-8')
@@ -1455,13 +1456,14 @@ def test_workflow_evolution_level_2_emits_architecture_warnings_without_hard_fai
         on_event=sink,
     )
 
-    assert result.status == 'passed'
+    assert result.status == 'failed_gate'
+    assert result.gate_reason == 'architecture_threshold_exceeded'
     audits = [e for e in sink.events if e.get('type') == 'architecture_audit']
     assert audits
     last = audits[-1]
-    assert last.get('mode') == 'warn'
+    assert last.get('mode') == 'hard'
     assert last.get('passed') is False
-    assert str(last.get('reason') or '') == 'architecture_threshold_warning'
+    assert str(last.get('reason') or '') == 'architecture_threshold_exceeded'
 
 
 def test_workflow_architecture_thresholds_support_env_override(tmp_path: Path, monkeypatch):

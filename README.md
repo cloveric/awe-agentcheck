@@ -872,6 +872,7 @@ This is the recommended mode for most use cases:
    - one round is counted only when all required reviewers return pass-level consensus
    - same-round retries continue until alignment, but now have a 10-retry stall guard (`proposal_consensus_stalled_in_round`)
    - repeated same-issue consensus across rounds has a 4-round stall guard (`proposal_consensus_stalled_across_rounds`)
+   - stall details are surfaced in **Project History** under `Disputes` and `Next Steps` (not hidden in backend-only logs)
 4. **Wait for human** → after required consensus rounds are complete, status becomes `waiting_manual`
 5. **Author decides**:
    - **Approve** → status becomes `queued` (with `author_approved` reason), then immediately re-starts into the full workflow
