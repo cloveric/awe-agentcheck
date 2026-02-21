@@ -897,6 +897,16 @@ def test_shell_command_executor_preserves_windows_relative_path(monkeypatch):
     assert argv[3] == r'.\tests'
 
 
+def test_shell_command_executor_remaps_py_launcher_on_non_windows(monkeypatch):
+    import awe_agentcheck.workflow as workflow_module
+
+    fake_os = type('FakeOS', (), {'name': 'posix'})()
+    monkeypatch.setattr(workflow_module, 'os', fake_os, raising=False)
+
+    argv = ShellCommandExecutor._normalize_command('py -m pytest -q')
+    assert argv[0] == 'python'
+
+
 def test_workflow_cancels_mid_phase_after_discussion(tmp_path: Path):
     """Cancel fires after discussion completes, before implementation starts."""
     runner = FakeRunner([_ok_result(), _ok_result(), _ok_result()])

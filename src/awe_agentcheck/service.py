@@ -144,8 +144,8 @@ class CreateTaskInput:
     merge_target_path: str | None = None
     workspace_path: str = str(Path.cwd())
     max_rounds: int = 3
-    test_command: str = 'py -m pytest -q'
-    lint_command: str = 'py -m ruff check .'
+    test_command: str = 'python -m pytest -q'
+    lint_command: str = 'python -m ruff check .'
 
 
 @dataclass(frozen=True)
@@ -2119,8 +2119,8 @@ class OrchestratorService:
                 debate_mode=normalize_bool_flag(row.get('debate_mode', True), default=True),
                 cwd=Path(str(row.get('workspace_path') or Path.cwd())),
                 max_rounds=int(row.get('max_rounds', 3)),
-                test_command=str(row.get('test_command', 'py -m pytest -q')),
-                lint_command=str(row.get('lint_command', 'py -m ruff check .')),
+                test_command=str(row.get('test_command', 'python -m pytest -q')),
+                lint_command=str(row.get('lint_command', 'python -m ruff check .')),
             )
             review_timeout = self._resolve_phase_timeout_seconds(
                 phase_timeout_seconds=config.phase_timeout_seconds,
@@ -3409,8 +3409,10 @@ class OrchestratorService:
             status=TaskStatus(str(row['status'])),
             last_gate_reason=row.get('last_gate_reason'),
             max_rounds=int(row.get('max_rounds', 3)),
-            test_command=str(row.get('test_command', 'py -m pytest -q')),
-            lint_command=str(row.get('lint_command', 'py -m ruff check .')),
+            test_command=str(row.get('test_command', 'python -m pytest -q')),
+            lint_command=str(row.get('lint_command', 'python -m ruff check .')),
             rounds_completed=int(row.get('rounds_completed', 0)),
             cancel_requested=bool(row.get('cancel_requested', False)),
         )
+
+

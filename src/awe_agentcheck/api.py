@@ -53,8 +53,8 @@ class CreateTaskRequest(BaseModel):
     merge_target_path: str | None = Field(default=None, max_length=400)
     workspace_path: str = Field(default='.', min_length=1)
     max_rounds: int = Field(default=3, ge=1, le=20)
-    test_command: str = Field(default='py -m pytest -q', min_length=1)
-    lint_command: str = Field(default='py -m ruff check .', min_length=1)
+    test_command: str = Field(default='python -m pytest -q', min_length=1)
+    lint_command: str = Field(default='python -m ruff check .', min_length=1)
     auto_start: bool = Field(default=False)
 
 
@@ -1054,3 +1054,5 @@ def create_app(
         return _to_task_response(task)
 
     return app
+
+

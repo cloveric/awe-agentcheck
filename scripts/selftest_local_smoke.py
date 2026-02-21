@@ -50,8 +50,8 @@ def run_smoke(*, api_base: str, workspace_path: str, task_timeout_seconds: int) 
         "workspace_path": workspace_path,
         "max_rounds": 2,
         "self_loop_mode": 0,
-        "test_command": "py -m pytest -q",
-        "lint_command": "py -m ruff check .",
+        "test_command": "python -m pytest -q",
+        "lint_command": "python -m ruff check .",
         "auto_start": True,
     }
 
@@ -185,3 +185,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

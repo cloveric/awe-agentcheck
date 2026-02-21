@@ -96,8 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--adaptive-interval', type=int, default=1)
     parser.add_argument('--analytics-limit', type=int, default=300)
     parser.add_argument('--policy-template', default=DEFAULT_POLICY_TEMPLATE)
-    parser.add_argument('--test-command', default='py -m pytest -q')
-    parser.add_argument('--lint-command', default='py -m ruff check .')
+    parser.add_argument('--test-command', default='python -m pytest -q')
+    parser.add_argument('--lint-command', default='python -m ruff check .')
     parser.add_argument('--topic-file', default='')
     parser.add_argument('--log-dir', default='C:/Users/hangw/awe-agentcheck/.agents/overnight')
     parser.add_argument('--lock-file', default='C:/Users/hangw/awe-agentcheck/.agents/overnight/overnight.lock')
@@ -695,3 +695,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
+

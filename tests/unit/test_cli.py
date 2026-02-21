@@ -125,6 +125,23 @@ def test_cli_parser_run_supports_disabling_stream_and_debate_modes():
     assert args.debate_mode is False
 
 
+def test_cli_parser_run_uses_cross_platform_default_commands():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            'run',
+            '--task',
+            'Task',
+            '--author',
+            'claude#author-A',
+            '--reviewer',
+            'codex#review-B',
+        ]
+    )
+    assert args.test_command == 'python -m pytest -q'
+    assert args.lint_command == 'python -m ruff check .'
+
+
 def test_cli_parser_supports_start_command():
     parser = build_parser()
     args = parser.parse_args(['start', 'task-1', '--background'])

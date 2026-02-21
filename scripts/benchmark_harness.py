@@ -40,8 +40,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--reviewer', action='append', default=None)
     parser.add_argument('--poll-seconds', type=int, default=5)
     parser.add_argument('--task-timeout-seconds', type=int, default=3600)
-    parser.add_argument('--test-command', default='py -m pytest -q')
-    parser.add_argument('--lint-command', default='py -m ruff check .')
+    parser.add_argument('--test-command', default='python -m pytest -q')
+    parser.add_argument('--lint-command', default='python -m ruff check .')
     return parser
 
 
@@ -336,3 +336,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
+

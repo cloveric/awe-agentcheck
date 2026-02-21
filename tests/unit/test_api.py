@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 import pytest
 
-from awe_agentcheck.api import create_app
+from awe_agentcheck.api import CreateTaskRequest, create_app
 from awe_agentcheck.repository import InMemoryTaskRepository
 from awe_agentcheck.service import OrchestratorService
 from awe_agentcheck.storage.artifacts import ArtifactStore
@@ -120,6 +120,17 @@ def test_api_create_start_and_get_task_roundtrip(tmp_path: Path):
     fetched_body = fetched.json()
     assert fetched_body['task_id'] == body['task_id']
     assert fetched_body['status'] == 'passed'
+
+
+def test_api_create_task_request_uses_cross_platform_default_commands():
+    req = CreateTaskRequest(
+        title='Task',
+        description='desc',
+        author_participant='claude#author-A',
+        reviewer_participants=['codex#review-B'],
+    )
+    assert req.test_command == 'python -m pytest -q'
+    assert req.lint_command == 'python -m ruff check .'
 
 
 def test_api_rate_limit_returns_429_when_quota_exceeded(tmp_path: Path):

@@ -75,8 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument('--merge-target-path', default='', help='Optional path to receive auto-merged changes')
     run.add_argument('--workspace-path', default='.', help='Target repository/workspace path')
     run.add_argument('--max-rounds', type=int, default=3)
-    run.add_argument('--test-command', default='py -m pytest -q')
-    run.add_argument('--lint-command', default='py -m ruff check .')
+    run.add_argument('--test-command', default='python -m pytest -q')
+    run.add_argument('--lint-command', default='python -m ruff check .')
     run.add_argument('--auto-start', action='store_true')
 
     status = sub.add_parser('status', help='Get task status')
@@ -109,8 +109,8 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument('--reviewer', action='append', default=[], help='Reviewer participant id (repeatable)')
     benchmark.add_argument('--poll-seconds', type=int, default=5)
     benchmark.add_argument('--task-timeout-seconds', type=int, default=3600)
-    benchmark.add_argument('--test-command', default='py -m pytest -q')
-    benchmark.add_argument('--lint-command', default='py -m ruff check .')
+    benchmark.add_argument('--test-command', default='python -m pytest -q')
+    benchmark.add_argument('--lint-command', default='python -m ruff check .')
 
     start = sub.add_parser('start', help='Start an existing task')
     start.add_argument('task_id', help='Task id')
@@ -442,3 +442,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
+

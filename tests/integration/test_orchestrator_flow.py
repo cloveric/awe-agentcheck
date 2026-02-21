@@ -55,8 +55,8 @@ def test_integration_create_start_roundtrip_pass(tmp_path: Path):
             self_loop_mode=1,
             max_rounds=1,
             workspace_path=str(workspace),
-            test_command='py -m pytest -q',
-            lint_command='py -m ruff check .',
+            test_command='python -m pytest -q',
+            lint_command='python -m ruff check .',
         )
     )
 
@@ -90,8 +90,8 @@ def test_integration_architecture_audit_can_fail_gate(tmp_path: Path):
             evolution_level=2,
             max_rounds=1,
             workspace_path=str(workspace),
-            test_command='py -m pytest -q',
-            lint_command='py -m ruff check .',
+            test_command='python -m pytest -q',
+            lint_command='python -m ruff check .',
         )
     )
 
@@ -100,3 +100,5 @@ def test_integration_architecture_audit_can_fail_gate(tmp_path: Path):
     assert started.last_gate_reason == 'architecture_threshold_exceeded'
     events = service.list_events(created.task_id)
     assert any(str(item.get('type')) == 'architecture_audit' for item in events)
+
+

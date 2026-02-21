@@ -74,6 +74,9 @@ class ShellCommandExecutor:
             argv = shlex.split(str(command or '').strip(), posix=(os.name != 'nt'))
         if not argv:
             raise ValueError('command is empty')
+        # Cross-platform compatibility: "py" launcher is typically Windows-only.
+        if os.name != 'nt' and str(argv[0]).strip().lower() == 'py':
+            argv[0] = 'python'
         lowered = [part.lower() for part in argv]
         allowed = any(lowered[:len(prefix)] == list(prefix) for prefix in cls._ALLOWED_COMMAND_PREFIXES)
         if not allowed:
