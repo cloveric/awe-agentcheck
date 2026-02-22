@@ -51,6 +51,7 @@
 
 | 日期 | 当日总结 |
 |---|---|
+| 2026-02-22 | 增加自循环“防跑偏”硬化：auto-merge 新增范围守卫，发现模式下会阻止仅改策略/文档来绕过修复；`repair_mode=structural` 若未触达架构违规范围则阻止融合；同时提示词明确禁止“改门禁代替修代码”。 |
 | 2026-02-21 | 在 Memory + Runtime 控制落地后，进一步完成 proposal-review 契约硬化：reviewer issue_id、author 结构化 issue 响应、review 阶段 issue 闭环门禁，并补齐事件/工件可观测性与完整校验（ruff/mypy/pytest/bandit/pytest-cov）。 |
 | 2026-02-20 | 完成 adapter 策略/工厂化、service layer 包化拆分、prompt 模板化与 LangGraph 按轮推进、Dashboard 模块化，以及 CI/治理/安全基线加固。 |
 | 2026-02-19 | 完成 reviewer-first 与手动共识流程稳定化、preflight/precompletion/resume 护栏、benchmark + analytics 闭环，以及项目历史/PR 摘要集成。 |

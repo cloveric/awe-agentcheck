@@ -322,6 +322,8 @@ class WorkflowEngine:
             }
         )
         strategy_hint: str | None = str(initial_strategy_hint or '').strip() or None
+        if not strategy_hint:
+            strategy_hint = str(self._initial_architecture_strategy_hint(config) or '').strip() or None
         stream_mode = bool(config.stream_mode)
         debate_mode = bool(config.debate_mode) and bool(config.reviewers)
         memory_mode = normalize_memory_mode_task(config.memory_mode, strict=False)
@@ -1695,6 +1697,34 @@ class WorkflowEngine:
             'Narrow scope, change approach, and provide concrete evidence paths.'
         )
 
+    @staticmethod
+    def _initial_architecture_strategy_hint(config: RunConfig) -> str:
+        level = max(0, min(3, int(config.evolution_level)))
+        if level < 2:
+            return ''
+        if runtime_normalize_repair_mode(config.repair_mode) not in {'balanced', 'structural'}:
+            return ''
+        try:
+            audit = run_architecture_audit(cwd=Path(config.cwd), evolution_level=level)
+        except Exception:
+            return ''
+        if not bool(audit.enabled) or not isinstance(audit.violations, list) or not audit.violations:
+            return ''
+        lines = ['Structural priority: fix at least one architecture violation path in this round before optional evolution.']
+        for item in audit.violations[:4]:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get('path') or '').replace('\\', '/').strip()
+            kind = str(item.get('kind') or 'violation').strip()
+            if not path:
+                continue
+            lines.append(f'- {path} ({kind})')
+        lines.append(
+            'Do not bypass unresolved structural debt by only changing gate/policy defaults or docs '
+            'unless task explicitly requests policy/config edits.'
+        )
+        return '\n'.join(lines)
+
     def _assess_loop_progress(
         self,
         *,
@@ -2073,12 +2103,16 @@ class WorkflowEngine:
         elif level == 2:
             mode_guidance = (
                 "Resolve blockers first, then proactively implement one incremental evolution direction "
-                "from discussion if tests/lint can remain green."
+                "from discussion if tests/lint can remain green. "
+                "Do not relax gate/policy defaults or rewrite docs-only policy text as a substitute for code fixes, "
+                "unless the task explicitly requests policy/config updates."
             )
         elif level >= 3:
             mode_guidance = (
                 "Resolve blockers first, then implement one high-impact evolution slice from discussion "
-                "(feature/framework/UI/idea). Keep migration risk explicit and maintain green tests/lint."
+                "(feature/framework/UI/idea). Keep migration risk explicit and maintain green tests/lint. "
+                "Do not use gate-threshold/policy relaxation as a shortcut for unresolved code issues "
+                "unless policy/config change is explicitly requested."
             )
         base = WorkflowEngine._render_prompt_template(
             'implementation_prompt.txt',
@@ -2294,6 +2328,11 @@ class WorkflowEngine:
             mode_guidance = (
                 "For evolution proposals, block only if there is correctness/regression/security/data-loss risk.\n"
                 "Do not block solely because an optional enhancement exists.\n"
+            )
+        if level >= 2:
+            mode_guidance += (
+                "If implementation mainly changes policy/docs/gate defaults without corresponding runtime code fixes, "
+                "treat it as BLOCKER because it can hide unresolved issues.\n"
             )
         base = WorkflowEngine._render_prompt_template(
             'review_prompt.txt',

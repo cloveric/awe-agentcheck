@@ -51,6 +51,7 @@
 
 | Date | Daily Summary |
 |---|---|
+| 2026-02-22 | Added anti-drift hardening for autonomous loops: auto-merge scope guard now blocks meta-only policy/doc gate relaxations in discovery mode, structural mode now requires touching architecture-violation scope, and prompt guidance now explicitly forbids “policy bypass instead of code fix.” |
 | 2026-02-21 | Landed integrated memory/runtime controls and then hardened proposal-review contracts end-to-end: reviewer issue IDs, author structured issue responses, reviewer issue-check closure gate, new observability events/artifacts, and full verification pass (ruff/mypy/pytest/bandit/pytest-cov). |
 | 2026-02-20 | Adapter strategy/factory split, service-layer package split, prompt/template + LangGraph round-flow upgrades, dashboard modularization, and CI/governance/security baseline hardening. |
 | 2026-02-19 | Reviewer-first/manual-consensus stabilization, preflight/precompletion/resume guardrails, benchmark + analytics loops, and project history/PR summary integrations. |

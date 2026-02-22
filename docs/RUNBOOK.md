@@ -181,6 +181,9 @@ Default policy:
 31. Task start/resume validates a stored workspace fingerprint; mismatches are blocked as `workspace_resume_guard_mismatch`.
 32. Repeated no-progress rounds trigger `strategy_shifted` with remediation hints.
 33. Multiple strategy shifts without progress end as `failed_gate` with `loop_no_progress`.
+34. Auto-merge now runs an additional scope guard (`auto_merge_scope_guard_checked`):
+   - blocks meta-only gate/policy/docs edits in discovery self-loop runs unless task intent explicitly requests policy/docs/config changes.
+   - for `repair_mode=structural`, if architecture violations exist but changed files do not touch violation scope, merge is blocked as `auto_merge_scope_blocked`.
 34. Task start now runs a preflight risk-policy gate before consensus/execution.
 35. Preflight hard-fail reason: `preflight_risk_gate_failed` (prevents expensive empty runs).
 36. Auto-merge path enforces merge-target head SHA stability; drift during run fails with `head_sha_mismatch`.

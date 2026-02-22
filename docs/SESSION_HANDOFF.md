@@ -1,5 +1,30 @@
 # Session Handoff (2026-02-12)
 
+## Update (2026-02-22, self-loop anti-drift scope guard + structural-priority hardening)
+
+1. Added auto-merge scope guard in `OrchestratorService.start_task`:
+   - new pre-merge check computes manifest delta before fusion and emits:
+     - `auto_merge_scope_guard_checked`
+     - `auto_merge_scope_blocked` (on block)
+   - blocks “meta-only policy/docs/gate-default edits” in discovery self-loop mode unless task intent explicitly asks policy/docs/config updates.
+2. Added structural-focus enforcement for discovery loops:
+   - when `repair_mode=structural` and architecture violations exist, merge is blocked if changed files do not touch violation scope.
+   - prevents bypass patterns where agents tweak gate defaults/docs without real structural remediation.
+3. Prompt behavior tightened:
+   - implementation/review guidance now explicitly rejects “policy bypass instead of code fix” for `evolution_level>=2` unless task explicitly requests policy changes.
+4. Event model expanded:
+   - `EventType.AUTO_MERGE_SCOPE_GUARD_CHECKED`
+   - `EventType.AUTO_MERGE_SCOPE_BLOCKED`
+5. Added unit tests:
+   - blocks meta-only policy changes in discovery structural runs.
+   - allows policy-only changes when task intent explicitly targets policy/docs.
+6. Verification:
+   - `py -m ruff check src/awe_agentcheck/service.py src/awe_agentcheck/workflow.py src/awe_agentcheck/domain/events.py tests/unit/test_service.py`
+   - `py -m pytest -q tests/unit/test_service.py -k "auto_merge_scope_guard or auto_merge_fails_when_promotion_guard_blocks"`
+   - `py -m pytest -q tests/unit/test_workflow.py tests/unit/test_workflow_architecture_extra.py`
+   - `py -m mypy src`
+   - `py -m pytest -q`
+
 ## Update (2026-02-21, proposal/review issue-contract hardening 1-6)
 
 1. Landed strict proposal contract parsing module:

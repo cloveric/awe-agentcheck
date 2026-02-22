@@ -312,6 +312,72 @@ def _reason_bucket(reason: str | None) -> str | None:
 
 
 class OrchestratorService:
+    _AUTO_MERGE_META_POLICY_PATHS = frozenset(
+        {
+            '.env',
+            '.env.example',
+            'readme.md',
+            'readme.zh-cn.md',
+            'changelog.auto.md',
+            'scripts/start_api.ps1',
+            'scripts/start_api.sh',
+            'src/awe_agentcheck/workflow_architecture.py',
+            'src/awe_agentcheck/policy_templates.py',
+            'src/awe_agentcheck/workflow_prompting.py',
+        }
+    )
+    _AUTO_MERGE_META_POLICY_PREFIXES = (
+        'docs/',
+    )
+    _AUTO_MERGE_META_POLICY_KEYWORDS = (
+        'policy',
+        'template',
+        'runbook',
+        'readme',
+        'docs',
+        'documentation',
+        'changelog',
+        'audit mode',
+        'arch audit',
+        'awe_arch_audit_mode',
+        'gate policy',
+        'config',
+        'startup script',
+        '启动脚本',
+        '策略',
+        '模板',
+        '文档',
+        '配置',
+        '审计模式',
+    )
+    _DISCOVERY_INTENT_KEYWORDS = (
+        'audit',
+        'review',
+        'inspect',
+        'scan',
+        'check',
+        'bug',
+        'bugs',
+        'vulnerability',
+        'vulnerabilities',
+        'security',
+        'hardening',
+        'improve',
+        'improvement',
+        'quality',
+        'refine',
+        '漏洞',
+        '缺陷',
+        '错误',
+        '检查',
+        '审查',
+        '评审',
+        '改进',
+        '优化',
+        '完善',
+        '风险',
+    )
+
     def __init__(
         self,
         *,
@@ -995,6 +1061,156 @@ class OrchestratorService:
         return evaluate_promotion_guard(target_root=target_root)
 
     @staticmethod
+    def _manifest_delta(*, before_manifest: dict[str, str], after_manifest: dict[str, str]) -> tuple[list[str], list[str]]:
+        changed_files = sorted(
+            [
+                rel
+                for rel in set(before_manifest) | set(after_manifest)
+                if before_manifest.get(rel) != after_manifest.get(rel)
+            ]
+        )
+        deleted_files = sorted([rel for rel in before_manifest if rel not in after_manifest])
+        return changed_files, deleted_files
+
+    @staticmethod
+    def _task_scope_text(row: dict) -> str:
+        return f"{str(row.get('title') or '')}\n{str(row.get('description') or '')}".lower()
+
+    def _task_allows_meta_policy_changes(self, row: dict) -> bool:
+        text = self._task_scope_text(row)
+        if not text.strip():
+            return False
+        return any(keyword in text for keyword in self._AUTO_MERGE_META_POLICY_KEYWORDS)
+
+    def _is_discovery_intent_row(self, row: dict) -> bool:
+        text = self._task_scope_text(row)
+        if not text.strip():
+            return False
+        return any(keyword in text for keyword in self._DISCOVERY_INTENT_KEYWORDS)
+
+    def _is_meta_policy_path(self, rel_path: str) -> bool:
+        normalized = str(rel_path or '').replace('\\', '/').strip().lower()
+        if not normalized:
+            return False
+        if normalized in self._AUTO_MERGE_META_POLICY_PATHS:
+            return True
+        return any(normalized.startswith(prefix) for prefix in self._AUTO_MERGE_META_POLICY_PREFIXES)
+
+    @staticmethod
+    def _is_runtime_code_path(rel_path: str) -> bool:
+        normalized = str(rel_path or '').replace('\\', '/').strip().lower()
+        if not normalized:
+            return False
+        return normalized.startswith('src/') or normalized.startswith('web/')
+
+    @staticmethod
+    def _extract_architecture_violation_paths(architecture_audit: dict | None) -> list[str]:
+        if not isinstance(architecture_audit, dict):
+            return []
+        violations = architecture_audit.get('violations')
+        if not isinstance(violations, list):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in violations:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get('path') or '').replace('\\', '/').strip()
+            if not text:
+                continue
+            if text in seen:
+                continue
+            seen.add(text)
+            out.append(text)
+        return out
+
+    def _evaluate_auto_merge_scope_guard(
+        self,
+        *,
+        row: dict,
+        changed_files: list[str],
+        deleted_files: list[str],
+        architecture_audit: dict | None,
+    ) -> dict:
+        normalized_changed = sorted(
+            {
+                str(item or '').replace('\\', '/').strip()
+                for item in list(changed_files or [])
+                if str(item or '').strip()
+            }
+        )
+        normalized_deleted = sorted(
+            {
+                str(item or '').replace('\\', '/').strip()
+                for item in list(deleted_files or [])
+                if str(item or '').strip()
+            }
+        )
+        changed_lower = [item.lower() for item in normalized_changed]
+        meta_policy_paths = [path for path in changed_lower if self._is_meta_policy_path(path)]
+        runtime_code_paths = [
+            path
+            for path in changed_lower
+            if self._is_runtime_code_path(path) and not self._is_meta_policy_path(path)
+        ]
+        architecture_violation_paths = self._extract_architecture_violation_paths(architecture_audit)
+        architecture_violation_paths_lower = {path.lower() for path in architecture_violation_paths}
+        architecture_violation_dirs = sorted(
+            {
+                str(Path(path).parent).replace('\\', '/')
+                for path in architecture_violation_paths
+                if str(path).strip()
+            }
+        )
+        touched_violation_scope = [
+            path
+            for path in runtime_code_paths
+            if path in architecture_violation_paths_lower
+            or any(path.startswith(f'{prefix.lower()}/') for prefix in architecture_violation_dirs if prefix)
+        ]
+
+        evolution_level = max(0, min(3, int(row.get('evolution_level', 0))))
+        self_loop_mode = int(max(0, min(1, int(row.get('self_loop_mode', 0)))))
+        repair_mode = normalize_repair_mode(row.get('repair_mode'))
+        meta_change_allowed_by_intent = self._task_allows_meta_policy_changes(row)
+        discovery_intent = self._is_discovery_intent_row(row)
+        strict_discovery_mode = self_loop_mode == 1 and evolution_level >= 2 and discovery_intent
+
+        guard_reason = 'ok'
+        if (
+            strict_discovery_mode
+            and meta_policy_paths
+            and not runtime_code_paths
+            and not meta_change_allowed_by_intent
+        ):
+            guard_reason = 'meta_only_policy_change'
+        elif (
+            strict_discovery_mode
+            and repair_mode == 'structural'
+            and architecture_violation_paths
+            and not touched_violation_scope
+            and not meta_change_allowed_by_intent
+        ):
+            guard_reason = 'structural_focus_missed'
+
+        return {
+            'guard_allowed': guard_reason == 'ok',
+            'guard_reason': guard_reason,
+            'strict_discovery_mode': strict_discovery_mode,
+            'discovery_intent': discovery_intent,
+            'meta_change_allowed_by_intent': meta_change_allowed_by_intent,
+            'repair_mode': repair_mode,
+            'evolution_level': evolution_level,
+            'self_loop_mode': self_loop_mode,
+            'changed_files': normalized_changed,
+            'deleted_files': normalized_deleted,
+            'meta_policy_paths': sorted(meta_policy_paths),
+            'runtime_code_paths': sorted(runtime_code_paths),
+            'architecture_violation_paths': architecture_violation_paths,
+            'touched_violation_scope': sorted(set(touched_violation_scope)),
+        }
+
+    @staticmethod
     def _read_json_file(path: Path | None) -> dict:
         return event_read_json_file(path)
 
@@ -1383,6 +1599,7 @@ class OrchestratorService:
         round_artifacts_enabled = int(row.get('max_rounds', 1)) > 1 and not bool(row.get('auto_merge', True))
         round_snapshot_holder: list[Path | None] = [None]
         latest_evidence_bundle: list[dict | None] = [None]
+        latest_architecture_audit: list[dict | None] = [None]
         if round_artifacts_enabled:
             round_snapshot_holder[0] = self._initialize_round_artifact_baseline(
                 task_id=task_id,
@@ -1401,6 +1618,8 @@ class OrchestratorService:
             event_type = str(event.get('type', ''))
             content = str(event.get('output', '')).strip()
             round_no = int(event.get('round', 0) or 0)
+            if event_type == EventType.ARCHITECTURE_AUDIT.value:
+                latest_architecture_audit[0] = dict(event)
             if event_type in {'discussion', 'implementation', 'review', 'debate_review', 'debate_reply'} and content:
                 role = event_type
                 participant = event.get('participant') or event.get('provider') or role
@@ -1736,6 +1955,63 @@ class OrchestratorService:
                     self.artifact_store.append_event(
                         task_id,
                         {'type': EventType.PROMOTION_GUARD_BLOCKED.value, 'reason': blocked_reason, **guard},
+                    )
+                    updated = self.repository.update_task_status(
+                        task_id,
+                        status=TaskStatus.FAILED_GATE.value,
+                        reason=blocked_reason,
+                        rounds_completed=result.rounds,
+                    )
+                    self.artifact_store.update_state(
+                        task_id,
+                        {
+                            'status': TaskStatus.FAILED_GATE.value,
+                            'last_gate_reason': blocked_reason,
+                            'rounds_completed': result.rounds,
+                        },
+                    )
+                    self.artifact_store.write_final_report(task_id, f'status=failed_gate\nreason={blocked_reason}')
+                    self._emit_regression_case(
+                        task_id=task_id,
+                        row=updated,
+                        status=TaskStatus.FAILED_GATE,
+                        reason=blocked_reason,
+                    )
+                    return self._to_view(updated)
+                after_manifest_preview = self.fusion_manager.build_manifest(workspace_root)
+                changed_preview, deleted_preview = self._manifest_delta(
+                    before_manifest=baseline_manifest,
+                    after_manifest=after_manifest_preview,
+                )
+                scope_guard = self._evaluate_auto_merge_scope_guard(
+                    row=row,
+                    changed_files=changed_preview,
+                    deleted_files=deleted_preview,
+                    architecture_audit=latest_architecture_audit[0],
+                )
+                self.repository.append_event(
+                    task_id,
+                    event_type='auto_merge_scope_guard_checked',
+                    payload=scope_guard,
+                    round_number=None,
+                )
+                self.artifact_store.append_event(
+                    task_id,
+                    {'type': EventType.AUTO_MERGE_SCOPE_GUARD_CHECKED.value, **scope_guard},
+                )
+                self.artifact_store.update_state(task_id, {'auto_merge_scope_guard_last': scope_guard})
+                if not bool(scope_guard.get('guard_allowed', True)):
+                    blocked_reason = f'auto_merge_scope_blocked: {scope_guard.get("guard_reason") or "blocked"}'
+                    blocked_payload = {'reason': blocked_reason, **scope_guard}
+                    self.repository.append_event(
+                        task_id,
+                        event_type='auto_merge_scope_blocked',
+                        payload=blocked_payload,
+                        round_number=None,
+                    )
+                    self.artifact_store.append_event(
+                        task_id,
+                        {'type': EventType.AUTO_MERGE_SCOPE_BLOCKED.value, **blocked_payload},
                     )
                     updated = self.repository.update_task_status(
                         task_id,

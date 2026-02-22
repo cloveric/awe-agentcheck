@@ -6,6 +6,8 @@ from enum import Enum
 class EventType(str, Enum):
     ARCHITECTURE_AUDIT = 'architecture_audit'
     AUTO_MERGE_COMPLETED = 'auto_merge_completed'
+    AUTO_MERGE_SCOPE_BLOCKED = 'auto_merge_scope_blocked'
+    AUTO_MERGE_SCOPE_GUARD_CHECKED = 'auto_merge_scope_guard_checked'
     AUTHOR_CONFIRMATION_REQUIRED = 'author_confirmation_required'
     AUTHOR_DECISION = 'author_decision'
     AUTHOR_FEEDBACK_REQUESTED = 'author_feedback_requested'

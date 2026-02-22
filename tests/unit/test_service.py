@@ -61,6 +61,34 @@ class FakeWorkflowEngineWithFileChange:
         return RunResult(status='passed', rounds=1, gate_reason='passed')
 
 
+class FakeWorkflowEngineWithMetaPolicyOnlyChange:
+    def run(self, config, *, on_event, should_cancel):
+        target = config.cwd / 'src' / 'awe_agentcheck' / 'workflow_architecture.py'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('def architecture_audit_mode(level):\n    return "warn"\n', encoding='utf-8')
+        on_event({'type': 'discussion', 'round': 1, 'provider': config.author.provider, 'output': 'policy-only update'})
+        on_event({'type': 'implementation', 'round': 1, 'provider': config.author.provider, 'output': 'changed workflow_architecture.py'})
+        on_event(
+            {
+                'type': 'architecture_audit',
+                'round': 1,
+                'enabled': True,
+                'passed': False,
+                'mode': 'warn',
+                'reason': 'architecture_threshold_warning',
+                'violations': [
+                    {
+                        'kind': 'service_monolith_too_large',
+                        'path': 'src/awe_agentcheck/service.py',
+                        'lines': 4200,
+                    }
+                ],
+            }
+        )
+        on_event({'type': 'gate_passed', 'round': 1, 'reason': 'passed'})
+        return RunResult(status='passed', rounds=1, gate_reason='passed')
+
+
 class FakeWorkflowEngineWithEvidenceBundle:
     def run(self, config, *, on_event, should_cancel):
         on_event({'type': 'discussion', 'round': 1, 'provider': config.author.provider, 'output': 'plan in src/awe_agentcheck/service.py'})
@@ -3129,6 +3157,76 @@ def test_service_auto_merge_fails_when_promotion_guard_blocks(tmp_path: Path, mo
     finished = svc.start_task(created.task_id)
     assert finished.status.value == 'failed_gate'
     assert 'promotion_guard_blocked' in str(finished.last_gate_reason or '')
+
+
+def test_service_auto_merge_scope_guard_blocks_meta_policy_only_changes_in_discovery_mode(tmp_path: Path):
+    project = tmp_path / 'repo-auto-merge-scope'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+    svc = build_service(tmp_path, workflow_engine=FakeWorkflowEngineWithMetaPolicyOnlyChange())
+
+    created = svc.create_task(
+        CreateTaskInput(
+            title='检查项目结构问题并修复',
+            description='对项目做审查并修复结构问题',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            auto_merge=True,
+            self_loop_mode=1,
+            evolution_level=2,
+            repair_mode='structural',
+            max_rounds=1,
+        )
+    )
+
+    finished = svc.start_task(created.task_id)
+    assert finished.status.value == 'failed_gate'
+    assert str(finished.last_gate_reason or '').startswith('auto_merge_scope_blocked:')
+
+    events = svc.list_events(created.task_id)
+    checked = [e for e in events if e['type'] == 'auto_merge_scope_guard_checked']
+    blocked = [e for e in events if e['type'] == 'auto_merge_scope_blocked']
+    assert checked
+    assert blocked
+    assert str(checked[-1].get('payload', {}).get('guard_reason') or '') in {
+        'meta_only_policy_change',
+        'structural_focus_missed',
+    }
+    assert not any(e['type'] == 'auto_merge_completed' for e in events)
+
+
+def test_service_auto_merge_scope_guard_allows_explicit_policy_task(tmp_path: Path):
+    project = tmp_path / 'repo-auto-merge-policy'
+    project.mkdir()
+    (project / 'README.md').write_text('base\n', encoding='utf-8')
+    svc = build_service(tmp_path, workflow_engine=FakeWorkflowEngineWithMetaPolicyOnlyChange())
+
+    created = svc.create_task(
+        CreateTaskInput(
+            title='Update policy template and runbook',
+            description='Adjust policy config defaults and related docs',
+            author_participant='codex#author-A',
+            reviewer_participants=['claude#review-B'],
+            workspace_path=str(project),
+            sandbox_mode=False,
+            auto_merge=True,
+            self_loop_mode=1,
+            evolution_level=2,
+            repair_mode='structural',
+            max_rounds=1,
+        )
+    )
+
+    finished = svc.start_task(created.task_id)
+    assert finished.status.value == 'passed'
+
+    events = svc.list_events(created.task_id)
+    checked = [e for e in events if e['type'] == 'auto_merge_scope_guard_checked']
+    assert checked
+    assert bool(checked[-1].get('payload', {}).get('guard_allowed', False)) is True
+    assert any(e['type'] == 'auto_merge_completed' for e in events)
 
 
 def test_service_create_task_writes_workspace_fingerprint_to_state(tmp_path: Path):
