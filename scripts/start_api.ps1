@@ -65,6 +65,10 @@ if (-not $pythonExe) {
 
 $env:PYTHONPATH = (Join-Path $repo 'src')
 $env:AWE_ARTIFACT_ROOT = (Join-Path $repo '.agents')
+if ([string]::IsNullOrWhiteSpace($env:AWE_ARCH_AUDIT_MODE)) {
+  # Keep architecture gate strict unless operator explicitly overrides it.
+  $env:AWE_ARCH_AUDIT_MODE = 'hard'
+}
 if ([string]::IsNullOrWhiteSpace($env:AWE_DATABASE_URL)) {
   # Persist history across restarts when PostgreSQL is absent.
   $sqlitePath = ($dbPath -replace '\\', '/')

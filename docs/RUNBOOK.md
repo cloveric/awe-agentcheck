@@ -50,8 +50,9 @@ $env:AWE_COMMAND_TIMEOUT_SECONDS="300"
 $env:AWE_PARTICIPANT_TIMEOUT_RETRIES="1"
 $env:AWE_MAX_CONCURRENT_RUNNING_TASKS="1"
 $env:AWE_WORKFLOW_BACKEND="langgraph"
-# Optional: architecture audit enforcement (off|warn|hard). Default follows evolution level.
-$env:AWE_ARCH_AUDIT_MODE=""
+# Optional override: architecture audit enforcement (off|warn|hard).
+# If unset, service startup defaults to hard for strict safety.
+$env:AWE_ARCH_AUDIT_MODE="hard"
 # Optional: architecture audit threshold overrides
 $env:AWE_ARCH_PYTHON_FILE_LINES_MAX="1200"
 $env:AWE_ARCH_FRONTEND_FILE_LINES_MAX="2500"

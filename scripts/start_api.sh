@@ -90,6 +90,10 @@ fi
 
 export PYTHONPATH="$REPO/src"
 export AWE_ARTIFACT_ROOT="$REPO/.agents"
+if [[ -z "${AWE_ARCH_AUDIT_MODE:-}" ]]; then
+  # Keep architecture gate strict unless operator explicitly overrides it.
+  export AWE_ARCH_AUDIT_MODE="hard"
+fi
 if [[ -z "${AWE_DATABASE_URL:-}" ]]; then
   export AWE_DATABASE_URL="sqlite+pysqlite:///${DB_PATH//\\//}"
 fi
